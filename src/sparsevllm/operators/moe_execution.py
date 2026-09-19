@@ -107,8 +107,14 @@ def prepare_model_moe_execution(model, device):
     """
     plans = [m.moe_execution for m in model.modules()
              if isinstance(getattr(m, "moe_execution", None), MoeExecutionPlan)]
+    # An unconditional fused decode never executes the independent shared
+    # branch. Keep its providers on their original workspace lane and avoid
+    # allocating unused events. A bounded fusion route still needs fork/join
+    # resources for batches above its token limit, even on a single GPU.
+    parallel_plans = {plan for plan in plans
+                      if not plan.fuse_decode or plan.fusion_token_limit is not None}
     stream = (device_runtime.new_stream(device)
-              if plans and device_runtime.supports_streams(device) else None)
+              if parallel_plans and device_runtime.supports_streams(device) else None)
     for plan in plans:
-        plan.prepare(stream)
+        plan.prepare(stream if plan in parallel_plans else None)
     return stream

@@ -122,3 +122,50 @@ def test_finish_receives_chunked_routing_metadata_and_local_shared_branch():
     torch.testing.assert_close(plan(x, is_prefill=False), x * 2 + x * 3 * x[:, :1])
     communication.combine_local_branches.assert_not_called()
     assert finish.call_count == 1
+
+
+@pytest.mark.parametrize("has_independent_decode", [False, True])
+def test_model_prepares_only_reachable_parallel_branches(monkeypatch, has_independent_decode):
+    from sparsevllm.operators import moe_execution
+
+    runtime = moe_execution.device_runtime
+    new_stream, new_event, bind_lane = Mock(), Mock(), Mock()
+    monkeypatch.setattr(runtime, "supports_streams", lambda device: True)
+    monkeypatch.setattr(runtime, "new_stream", new_stream)
+    monkeypatch.setattr(runtime, "new_event", new_event)
+    monkeypatch.setattr(moe_execution, "bind_module_workspace_lane", bind_lane)
+    model = nn.Module()
+    # Prefill is independent but serial, so it does not need an auxiliary lane.
+    for name, fused, limit in [("fused", True, None)] + (
+        [("bounded", True, 2), ("independent", False, None)]
+        if has_independent_decode else []
+    ):
+        layer = nn.Module()
+        layer.shared = nn.Identity()
+        layer.moe_execution = MoeExecutionPlan(
+            routed=lambda x: x, shared=layer.shared,
+            fused=lambda x: x * 2, fuse_decode=fused, fusion_token_limit=limit,
+            communication=AllReduceMoeCommunication(lambda x: x),
+            chunk_size=None, shared_modules=(layer.shared,),
+        )
+        model.add_module(name, layer)
+    stream = prepare_model_moe_execution(model, "cuda")
+    assert model.fused.moe_execution.stream is None
+    assert model.fused.moe_execution.input_ready is None
+    assert model.fused.moe_execution.shared_ready is None
+    x = torch.ones(3, 4)
+    torch.testing.assert_close(model.fused.moe_execution(x, is_prefill=False), x * 2)
+    torch.testing.assert_close(model.fused.moe_execution(x, is_prefill=True), x * 2)
+    if has_independent_decode:
+        new_stream.assert_called_once_with("cuda")
+        assert model.bounded.moe_execution.stream is stream
+        assert model.independent.moe_execution.stream is stream
+        assert new_event.call_count == 4
+        assert [call.args[0] for call in bind_lane.call_args_list] == [
+            model.bounded.shared, model.independent.shared,
+        ]
+    else:
+        assert stream is None
+        new_stream.assert_not_called()
+        new_event.assert_not_called()
+        bind_lane.assert_not_called()
