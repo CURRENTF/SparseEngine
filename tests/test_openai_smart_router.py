@@ -13,7 +13,7 @@ from unittest.mock import patch
 )
 class OpenAISmartRouterTest(unittest.TestCase):
     def test_empty_chain_id_creates_on_chain_capable_worker(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://chain-worker", "http://radix-worker"],
@@ -79,7 +79,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
     def test_chain_affinity_requires_one_idle_owner(self):
         from fastapi import HTTPException
 
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a", "http://worker-b"],
@@ -135,7 +135,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
     def test_chain_affinity_distinguishes_unknown_and_gone(self):
         from fastapi import HTTPException
 
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -169,7 +169,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
     def test_chain_affinity_fails_closed_on_probe_error_or_disabled_workers(self):
         from fastapi import HTTPException
 
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a", "http://worker-b"],
@@ -212,13 +212,13 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual(disabled.exception.status_code, 400)
 
     def test_router_preserves_upstream_chain_header(self):
-        from sparsevllm.entrypoints.openai.smart_router import _content_headers
+        from sparseengine.entrypoints.openai.smart_router import _content_headers
 
         self.assertEqual(
             _content_headers(
                 {
                     "content-type": "text/event-stream",
-                    "x-sparsevllm-chain-id": "chain-1",
+                    "x-sparseengine-chain-id": "chain-1",
                 }
             ),
             {
@@ -230,7 +230,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
     def test_route_headers_preserve_recreated_upstream_chain_id(self):
         from starlette.responses import Response
 
-        from sparsevllm.entrypoints.openai.smart_router import (
+        from sparseengine.entrypoints.openai.smart_router import (
             _route_response_headers,
             _with_route_headers,
         )
@@ -243,7 +243,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         }
         upstream = {
             "content-type": "application/json",
-            "x-sparsevllm-chain-id": "new-chain",
+            "x-sparseengine-chain-id": "new-chain",
         }
 
         self.assertEqual(
@@ -264,7 +264,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         )
 
     def test_worker_readiness_failure_is_removed_and_recovery_is_detected(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -297,7 +297,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual(timeouts, [5.0, 5.0])
 
     def test_router_health_returns_503_without_ready_workers(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         app = smart_router.create_app(["http://worker-a"])
         app.state.router.workers[0].healthy = False
@@ -322,7 +322,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertTrue(revision["git_commit"] or revision["package_version"])
 
     def test_router_livez_stays_available_without_ready_workers(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         app = smart_router.create_app(["http://worker-a"])
         endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/livez")
@@ -332,8 +332,8 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_model_cards_use_smallest_worker_context(self):
-        from sparsevllm.entrypoints.openai.smart_router import _router_model_cards
-        from sparsevllm.entrypoints.openai.smart_router import WorkerState
+        from sparseengine.entrypoints.openai.smart_router import _router_model_cards
+        from sparseengine.entrypoints.openai.smart_router import WorkerState
 
         cards = _router_model_cards(
             [
@@ -351,7 +351,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual(cards[0]["max_model_len"], 64000)
 
     def test_choose_worker_prefers_prefix_match_when_load_is_close(self):
-        from sparsevllm.entrypoints.openai.smart_router import WorkerProbe, WorkerState, choose_worker
+        from sparseengine.entrypoints.openai.smart_router import WorkerProbe, WorkerState, choose_worker
 
         cache_worker = WorkerState(url="http://worker-a", info={"sparse_method": "omnikv"})
         load_worker = WorkerState(url="http://worker-b", info={"sparse_method": "omnikv"})
@@ -376,7 +376,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual(reason, "best_prefix_match")
 
     def test_route_headers_report_selected_probe_matched_tokens(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a", "http://worker-b"],
@@ -428,7 +428,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         )
 
     def test_target_worker_route_does_not_claim_unprobed_prefix_match(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -453,7 +453,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         )
 
     def test_probe_uses_nonblocking_prefix_routing_snapshot(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -502,7 +502,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual(probe.matched_tokens, 16)
 
     def test_choose_worker_falls_back_to_lowest_load_when_match_worker_is_overloaded(self):
-        from sparsevllm.entrypoints.openai.smart_router import WorkerProbe, WorkerState, choose_worker
+        from sparseengine.entrypoints.openai.smart_router import WorkerProbe, WorkerState, choose_worker
 
         cache_worker = WorkerState(url="http://worker-a", info={"sparse_method": "omnikv"})
         load_worker = WorkerState(url="http://worker-b", info={"sparse_method": "omnikv"})
@@ -527,7 +527,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual(reason, "prefix_match_overloaded_lowest_load")
 
     def test_route_profiles_filter_heterogeneous_workers_by_sparse_method(self):
-        from sparsevllm.entrypoints.openai.smart_router import SmartRouter
+        from sparseengine.entrypoints.openai.smart_router import SmartRouter
 
         router = SmartRouter(
             worker_urls=["http://omni", "http://snap"],
@@ -558,7 +558,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual([worker.url for worker in bulk], ["http://snap"])
 
     def test_route_profiles_treat_empty_method_as_vanilla(self):
-        from sparsevllm.entrypoints.openai.smart_router import SmartRouter
+        from sparseengine.entrypoints.openai.smart_router import SmartRouter
 
         router = SmartRouter(
             worker_urls=["http://vanilla", "http://snap"],
@@ -580,14 +580,14 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual([worker.url for worker in candidates], ["http://vanilla"])
 
     def test_route_hints_are_stripped_before_forwarding(self):
-        from sparsevllm.entrypoints.openai.smart_router import strip_route_hints
+        from sparseengine.entrypoints.openai.smart_router import strip_route_hints
 
         payload, hints = strip_route_hints(
             {
                 "model": "model",
                 "prompt": "hello",
-                "svllm_route_profile": "bulk",
-                "svllm_method_preference": ["snapkv"],
+                "sengine_route_profile": "bulk",
+                "sengine_method_preference": ["snapkv"],
             }
         )
 
@@ -596,7 +596,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual(hints["method_preference"], ["snapkv"])
 
     def test_match_payload_for_chat_and_completion_requests(self):
-        from sparsevllm.entrypoints.openai.smart_router import match_payload_for_request
+        from sparseengine.entrypoints.openai.smart_router import match_payload_for_request
 
         chat_payload = {
             "model": "model",
@@ -631,7 +631,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         )
 
     def test_responses_route_profile_inference_stays_default(self):
-        from sparsevllm.entrypoints.openai.smart_router import infer_route_profile
+        from sparseengine.entrypoints.openai.smart_router import infer_route_profile
 
         self.assertEqual(
             infer_route_profile(
@@ -642,7 +642,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         )
 
     def test_responses_route_forwards_through_router(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         class JsonRequest:
             async def json(self):
@@ -667,7 +667,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
 
     def test_responses_route_hints_are_stripped_before_forwarding(self):
         from fastapi.responses import Response
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -702,17 +702,17 @@ class OpenAISmartRouterTest(unittest.TestCase):
                 {
                     "model": "model",
                     "input": "hello",
-                    "svllm_target_worker": "0",
-                    "svllm_method_preference": ["omnikv"],
+                    "sengine_target_worker": "0",
+                    "sengine_method_preference": ["omnikv"],
                 },
             )
         )
 
-        self.assertEqual(response.headers["x-sparsevllm-worker"], "http://worker-a")
-        self.assertEqual(response.headers["x-sparsevllm-route-reason"], "target_worker")
+        self.assertEqual(response.headers["x-sparseengine-worker"], "http://worker-a")
+        self.assertEqual(response.headers["x-sparseengine-route-reason"], "target_worker")
 
     def test_streaming_upstream_http_error_is_returned_before_sse_response(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -742,19 +742,19 @@ class OpenAISmartRouterTest(unittest.TestCase):
                         "model": "model",
                         "prompt": "hello",
                         "stream": True,
-                        "svllm_target_worker": "0",
+                        "sengine_target_worker": "0",
                     },
                 )
             )
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.body, b'{"error":"bad request"}')
-        self.assertEqual(response.headers["x-sparsevllm-worker"], "http://worker-a")
-        self.assertEqual(response.headers["x-sparsevllm-route-reason"], "target_worker")
+        self.assertEqual(response.headers["x-sparseengine-worker"], "http://worker-a")
+        self.assertEqual(response.headers["x-sparseengine-route-reason"], "target_worker")
         self.assertEqual(router.workers[0].local_inflight, 0)
 
     def test_responses_streaming_transparently_forwards_sse_bytes(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -804,7 +804,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
                         "model": "model",
                         "input": "hello",
                         "stream": True,
-                        "svllm_target_worker": "0",
+                        "sengine_target_worker": "0",
                     },
                 )
                 chunks = [chunk async for chunk in response.body_iterator]
@@ -813,14 +813,14 @@ class OpenAISmartRouterTest(unittest.TestCase):
         response, chunks = asyncio.run(run_request())
 
         self.assertEqual(b"".join(chunks), b'event: response.created\ndata: {"type":"response.created"}\n\ndata: [DONE]\n\n')
-        self.assertEqual(response.headers["x-sparsevllm-worker"], "http://worker-a")
-        self.assertEqual(response.headers["x-sparsevllm-route-reason"], "target_worker")
+        self.assertEqual(response.headers["x-sparseengine-worker"], "http://worker-a")
+        self.assertEqual(response.headers["x-sparseengine-route-reason"], "target_worker")
         self.assertEqual(response.headers["content-type"], "text/event-stream")
         self.assertTrue(upstream_response.closed)
         self.assertEqual(router.workers[0].local_inflight, 0)
 
     def test_streaming_client_disconnect_closes_upstream(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -869,7 +869,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
                         "model": "model",
                         "input": "hello",
                         "stream": True,
-                        "svllm_target_worker": "0",
+                        "sengine_target_worker": "0",
                     },
                     is_disconnected=is_disconnected,
                 )
@@ -884,7 +884,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
     def test_non_streaming_client_disconnect_closes_upstream(self):
         import threading
 
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -929,7 +929,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertEqual(router.workers[0].local_inflight, 0)
 
     def test_non_streaming_forward_returns_upstream_response(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -969,7 +969,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         import socket
         import threading
 
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.bind(("127.0.0.1", 0))
@@ -1027,7 +1027,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
         self.assertIsInstance(client_errors[0], RuntimeError)
 
     def test_streaming_open_exception_releases_local_inflight(self):
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -1052,7 +1052,7 @@ class OpenAISmartRouterTest(unittest.TestCase):
                             "model": "model",
                             "prompt": "hello",
                             "stream": True,
-                            "svllm_target_worker": "0",
+                            "sengine_target_worker": "0",
                         },
                     )
                 )

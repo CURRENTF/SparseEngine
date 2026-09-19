@@ -17,7 +17,7 @@ def campaign(tmp_path, monkeypatch):
     config = dict(
         output_root=str(root), scratch_root=str(tmp_path / "scratch"),
         model_id="model", models={"model": dict(path=str(tmp_path / "model"), tp=1, ep=1)},
-        lanes=["svllm-vanilla", "vllm-vanilla"], input_lens=[128, 256],
+        lanes=["sengine-vanilla", "vllm-vanilla"], input_lens=[128, 256],
         conda=str(tmp_path / "conda"), native_env=str(tmp_path / "native"),
         vllm_env=str(tmp_path / "vllm"), output_len=4,
         gpu_memory_utilization=.9, num_warmups=1, num_iters=1, case_timeout_s=11,
@@ -164,7 +164,7 @@ def test_request_timeout_records_failure_cleans_up_and_continues(campaign):
     assert len(campaign.requests) == 4
     results = [json.loads(row) for row in (campaign.root / "results.jsonl").read_text().splitlines()]
     assert {(r["input_tokens"], r["lane"]) for r in results} == {
-        (128, "vllm-vanilla"), (256, "svllm-vanilla"), (256, "vllm-vanilla")}
+        (128, "vllm-vanilla"), (256, "sengine-vanilla"), (256, "vllm-vanilla")}
     assert all(process.poll() is not None for process in campaign.processes)
 
 
@@ -177,7 +177,7 @@ def test_external_request_uses_measured_engine_environment_and_kwargs(campaign, 
     external = dict(engine="vllm", method="snapkv", env=str(prefix), environment_kind=environment_kind,
                     backend_label="tangram-snapkv", engine_kwargs={"compression_scorer": "snapkv"},
                     environment={"REVIEW_EXTERNAL_SETTING": "enabled"}, pythonpath=[str(tmp_path / "vendor")])
-    campaign.config.update(lanes=["tangram-snapkv", "svllm-vanilla"], input_lens=[128],
+    campaign.config.update(lanes=["tangram-snapkv", "sengine-vanilla"], input_lens=[128],
                            external_lanes={"tangram-snapkv": external})
     assert campaign.run() == 0
     request, native = campaign.requests

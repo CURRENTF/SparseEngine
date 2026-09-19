@@ -5,12 +5,12 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.base import ExplicitKVPayload
-from sparsevllm.kernels.triton.gemma4_context_attention import (
+from sparseengine.engine.cache_manager.base import ExplicitKVPayload
+from sparseengine.kernels.triton.gemma4_context_attention import (
     gemma4_context_attention,
 )
-from sparsevllm.operators.gemma4_attention import Gemma4FlashInferPrefill
-from sparsevllm.utils.context import reset_context, set_context
+from sparseengine.operators.gemma4_attention import Gemma4FlashInferPrefill
+from sparseengine.utils.context import reset_context, set_context
 
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")

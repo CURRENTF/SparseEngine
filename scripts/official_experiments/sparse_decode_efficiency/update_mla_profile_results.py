@@ -12,9 +12,9 @@ import sys
 
 from plot_decode_capacity import validate_measurement, without_source_fingerprints
 
-CHANGED = {"src/sparsevllm/kernels/tilelang/mla/runtime.py",
-           "src/sparsevllm/operators/mla_attention.py"}
-TARGET = ("glm4.7-flash", "svllm-omnikv")
+CHANGED = {"src/sparseengine/kernels/tilelang/mla/runtime.py",
+           "src/sparseengine/operators/mla_attention.py"}
+TARGET = ("glm4.7-flash", "sengine-omnikv")
 RULE = "sm_parallel_nearest_v1"
 
 
@@ -43,7 +43,7 @@ def selected_bindings(value):
 
 def prepare(args):
     base = read(args.base_plot)
-    if RULE not in (args.repo / "src/sparsevllm/kernels/tilelang/mla/runtime.py").read_text():
+    if RULE not in (args.repo / "src/sparseengine/kernels/tilelang/mla/runtime.py").read_text():
         raise ValueError("Selected source does not contain the requested rule")
     if not args.scratch_root.is_absolute() or len(str(args.scratch_root)) > 65:
         raise ValueError("Use an absolute short scratch path (<=65 characters) for multiprocessing Unix sockets")

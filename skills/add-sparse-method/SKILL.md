@@ -1,11 +1,11 @@
 ---
 name: add-sparse-method
-description: Add or refactor a first-class Sparse-vLLM sparse method alongside vanilla, SnapKV, OmniKV, QuEST, and DeltaKV. Use when Codex needs to introduce a new `sparse_method`, move method logic out of `attention.py` or `utils/`, add method-specific cache metadata or decode-time view building, wire config and registration, and preserve the repo's cache-manager-first architecture.
+description: Add or refactor a first-class Sparse-Engine sparse method alongside vanilla, SnapKV, OmniKV, QuEST, and DeltaKV. Use when Codex needs to introduce a new `sparse_method`, move method logic out of `attention.py` or `utils/`, add method-specific cache metadata or decode-time view building, wire config and registration, and preserve the repo's cache-manager-first architecture.
 ---
 
 # Add Sparse Method
 
-Implement new Sparse-vLLM methods as explicit runtime methods, not as ad-hoc helpers. Keep `attention.py` generic, let `cache_manager` own method state, and let `SparseController` keep scheduling and cross-layer coordination responsibilities.
+Implement new Sparse-Engine methods as explicit runtime methods, not as ad-hoc helpers. Keep `attention.py` generic, let `cache_manager` own method state, and let `SparseController` keep scheduling and cross-layer coordination responsibilities.
 
 Performance is part of method support. Do not treat a method as supported just
 because it produces tokens: decode throughput must be reasonably competitive
@@ -34,15 +34,15 @@ Read [references/quest-pattern.md](references/quest-pattern.md) when the new met
 
 Follow this placement order.
 
-1. Put the method's core runtime logic in `src/sparsevllm/engine/cache_manager/<method>.py` when the method owns any persistent state.
+1. Put the method's core runtime logic in `src/sparseengine/engine/cache_manager/<method>.py` when the method owns any persistent state.
 2. Put persistent page, chunk, token, or compressed metadata in the cache manager, not in `utils/`.
 3. Use `CacheManager.on_kv_stored(...)` when metadata must be updated after KV is written.
 4. Use `CacheManager.build_decode_view(...)` when the method needs the current layer's decode-time `q`.
-5. Keep `src/sparsevllm/layers/attention.py` method-agnostic. It may call generic hooks, but should not grow method-specific branches unless adding a new reusable hook.
-6. Put cross-layer observation, attention-score collection, or scheduler-facing sparse orchestration in `src/sparsevllm/engine/sparse_controller.py`.
-7. Put hidden-state capture, activation steering, and per-sequence steering state in `src/sparsevllm/engine/activation_controller.py`, with `SparseController` owning the lifecycle and model files calling only a generic hook.
-8. Use `src/sparsevllm/utils/` only for truly generic helpers shared by multiple methods. Do not place an entire method implementation there.
-9. Add custom kernels under `src/sparsevllm/kernels/triton/` or another explicit runtime module, then call them through the method's cache manager or shared decode path.
+5. Keep `src/sparseengine/layers/attention.py` method-agnostic. It may call generic hooks, but should not grow method-specific branches unless adding a new reusable hook.
+6. Put cross-layer observation, attention-score collection, or scheduler-facing sparse orchestration in `src/sparseengine/engine/sparse_controller.py`.
+7. Put hidden-state capture, activation steering, and per-sequence steering state in `src/sparseengine/engine/activation_controller.py`, with `SparseController` owning the lifecycle and model files calling only a generic hook.
+8. Use `src/sparseengine/utils/` only for truly generic helpers shared by multiple methods. Do not place an entire method implementation there.
+9. Add custom kernels under `src/sparseengine/kernels/triton/` or another explicit runtime module, then call them through the method's cache manager or shared decode path.
 
 ## Decision Rules
 
@@ -62,11 +62,11 @@ Use these rules before editing code.
 
 ## Editing Workflow
 
-1. Add canonical config knobs to `src/sparsevllm/configs/groups.py` or `runtime.py`; use the same names in public and internal code.
-2. Register the method in `src/sparsevllm/engine/cache_manager/base.py` and `src/sparsevllm/engine/cache_manager/__init__.py` if needed.
-3. Create or update `src/sparsevllm/engine/cache_manager/<method>.py`.
-4. Touch `src/sparsevllm/engine/sparse_controller.py` only for controller responsibilities.
-5. Touch `src/sparsevllm/layers/attention.py` only to use generic hooks or shared kernels.
+1. Add canonical config knobs to `src/sparseengine/configs/groups.py` or `runtime.py`; use the same names in public and internal code.
+2. Register the method in `src/sparseengine/engine/cache_manager/base.py` and `src/sparseengine/engine/cache_manager/__init__.py` if needed.
+3. Create or update `src/sparseengine/engine/cache_manager/<method>.py`.
+4. Touch `src/sparseengine/engine/sparse_controller.py` only for controller responsibilities.
+5. Touch `src/sparseengine/layers/attention.py` only to use generic hooks or shared kernels.
 6. Update README and benchmark examples after the method runs.
 7. Compile touched Python files with `python -m py_compile`.
 8. Run at least one correctness-oriented benchmark or regression task that exercises the new public method end to end and saves result artifacts.
@@ -80,7 +80,7 @@ Use these rules before editing code.
 
 Do not do these things.
 
-- Do not put a new method's main logic in `src/sparsevllm/utils/`.
+- Do not put a new method's main logic in `src/sparseengine/utils/`.
 - Do not add method-specific decode branches directly inside `Attention.forward()` when a cache-manager hook can express the same behavior.
 - Do not make `SparseController` own persistent cache metadata that belongs to one method.
 - Do not make `SparseController` own method-specific activation steering logic; delegate to `activation_controller.py`.
@@ -98,18 +98,18 @@ Compile first.
 
 ```bash
 python -m py_compile \
-  src/sparsevllm/config.py \
-  src/sparsevllm/engine/cache_manager/base.py \
-  src/sparsevllm/engine/cache_manager/__init__.py \
-  src/sparsevllm/engine/cache_manager/<method>.py \
-  src/sparsevllm/engine/sparse_controller.py \
-  src/sparsevllm/layers/attention.py
+  src/sparseengine/config.py \
+  src/sparseengine/engine/cache_manager/base.py \
+  src/sparseengine/engine/cache_manager/__init__.py \
+  src/sparseengine/engine/cache_manager/<method>.py \
+  src/sparseengine/engine/sparse_controller.py \
+  src/sparseengine/layers/attention.py
 ```
 
 Benchmark after correctness is established.
 
 ```bash
-python scripts/benchmarks/bench_sparse_vllm.py \
+python scripts/benchmarks/bench_sparse_engine.py \
   --model_path <MODEL_PATH> \
   --methods <method> \
   --lengths 128000 \
@@ -121,7 +121,7 @@ python scripts/benchmarks/bench_sparse_vllm.py \
 Use the same command shape to run a baseline and a comparable sparse method:
 
 ```bash
-python scripts/benchmarks/bench_sparse_vllm.py \
+python scripts/benchmarks/bench_sparse_engine.py \
   --model_path <MODEL_PATH> \
   --methods vanilla,<nearest_existing_method>,<method> \
   --lengths <REALISTIC_LENGTH> \

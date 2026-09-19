@@ -5,11 +5,11 @@ from unittest.mock import patch
 
 import pytest
 
-from sparsevllm.kernels.external.flashinfer.decode import (
+from sparseengine.kernels.external.flashinfer.decode import (
     _paged_decode_wrapper_type,
     flashinfer_paged_decode_support,
 )
-from sparsevllm.kernels.external.support import ExternalKernelContractError
+from sparseengine.kernels.external.support import ExternalKernelContractError
 
 
 class _PublicPagedDecodeWrapper:
@@ -53,7 +53,7 @@ def test_flashinfer_paged_decode_accepts_public_lse_contract():
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.decode.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.decode.flashinfer_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", return_value=module),
@@ -75,7 +75,7 @@ def test_flashinfer_paged_decode_rejects_wrapper_without_lse_contract():
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.decode.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.decode.flashinfer_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", return_value=module),

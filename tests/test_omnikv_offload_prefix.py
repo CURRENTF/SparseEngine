@@ -3,15 +3,15 @@
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.methods.omnikv.prefix import (
+from sparseengine.engine.cache_manager.methods.omnikv.prefix import (
     OmniKVPrefixOffloadController,
     OmniKVPrefixPool,
 )
-from sparsevllm.engine.cache_manager.methods.omnikv.storage import OmniKVStorage
-from sparsevllm.engine.cache_manager.standard import StandardPrefixBlockPayload
-from sparsevllm.engine.cache_manager.storage import ExplicitKVStorage, MlaLatentStorage
-from sparsevllm.engine.prefix_cache import PrefixCacheBlock, RadixPrefixIndex
-from sparsevllm.operators.indexed_host_copy import gather_rows
+from sparseengine.engine.cache_manager.methods.omnikv.storage import OmniKVStorage
+from sparseengine.engine.cache_manager.standard import StandardPrefixBlockPayload
+from sparseengine.engine.cache_manager.storage import ExplicitKVStorage, MlaLatentStorage
+from sparseengine.engine.prefix_cache import PrefixCacheBlock, RadixPrefixIndex
+from sparseengine.operators.indexed_host_copy import gather_rows
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
@@ -67,7 +67,7 @@ def test_split_prefix_restore_after_slot_reuse(mla, num_layers, monkeypatch):
             x[:12].zero_()
     new_slots = torch.tensor([2, 9], dtype=torch.int32, device="cuda")
     block.payload.token_slots = new_slots
-    from sparsevllm.engine.cache_manager.methods.omnikv import prefix as omnikv_prefix
+    from sparseengine.engine.cache_manager.methods.omnikv import prefix as omnikv_prefix
 
     transfer = omnikv_prefix.transfer_rows
 

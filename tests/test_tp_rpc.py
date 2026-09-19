@@ -11,7 +11,7 @@ import pytest
 import torch
 import torch.distributed as dist
 
-from sparsevllm.engine.model_runner import (
+from sparseengine.engine.model_runner import (
     ModelRunner,
     TP_RUN_STATUS_FAILED,
     TP_RUN_STATUS_SUCCESS,
@@ -20,12 +20,12 @@ from sparsevllm.engine.model_runner import (
     _init_process_group,
     make_tp_shm_name,
 )
-from sparsevllm.engine.startup import (
+from sparseengine.engine.startup import (
     CacheRuntimeBuildMeasurement,
     DeviceMemorySnapshot,
 )
-from sparsevllm.models.spec import ModelSpec
-from sparsevllm.operators import registry as operator_registry
+from sparseengine.models.spec import ModelSpec
+from sparseengine.operators import registry as operator_registry
 
 
 def _runner():
@@ -38,7 +38,7 @@ def _runner():
 def test_init_process_group_binds_the_current_device():
     device = torch.device("cuda", 2)
 
-    with patch("sparsevllm.engine.model_runner.dist.init_process_group") as init:
+    with patch("sparseengine.engine.model_runner.dist.init_process_group") as init:
         _init_process_group(
             backend="nccl",
             init_method="tcp://localhost:1234",
@@ -59,10 +59,10 @@ def test_init_process_group_binds_the_current_device():
 def test_init_process_group_omits_device_id_for_legacy_torch():
     with (
         patch(
-            "sparsevllm.engine.model_runner._INIT_PROCESS_GROUP_SUPPORTS_DEVICE_ID",
+            "sparseengine.engine.model_runner._INIT_PROCESS_GROUP_SUPPORTS_DEVICE_ID",
             False,
         ),
-        patch("sparsevllm.engine.model_runner.dist.init_process_group") as init,
+        patch("sparseengine.engine.model_runner.dist.init_process_group") as init,
     ):
         _init_process_group(
             backend="nccl",
@@ -133,7 +133,7 @@ def test_write_shm_waits_until_worker_reads_command():
     completion_event = ctx.Event()
     event = (command_event, completion_event)
     shm = SharedMemory(
-        name=f"sparsevllm_test_rpc_{os.getpid()}_{uuid4().hex}",
+        name=f"sparseengine_test_rpc_{os.getpid()}_{uuid4().hex}",
         create=True,
         size=2**20,
     )
@@ -180,7 +180,7 @@ def test_write_shm_can_defer_read_ack_to_status_sync():
     command_event = ctx.Event()
     completion_event = ctx.Event()
     shm = SharedMemory(
-        name=f"sparsevllm_test_rpc_{os.getpid()}_{uuid4().hex}",
+        name=f"sparseengine_test_rpc_{os.getpid()}_{uuid4().hex}",
         create=True,
         size=2**20,
     )
@@ -249,7 +249,7 @@ def test_tp_shm_name_is_unique_per_engine_instance():
 
     assert len(names) == 3
     assert all(name.startswith(TP_SHM_NAME_PREFIX) for name in names)
-    assert "sparsevllm" not in names
+    assert "sparseengine" not in names
 
 
 def test_free_slots_batch_releases_each_seq_id():
@@ -361,7 +361,7 @@ def test_run_rpc_reports_any_tp_worker_failure():
     ctx = get_context("spawn")
     events = (ctx.Event(), ctx.Event())
     shm = SharedMemory(
-        name=f"sparsevllm_test_status_{os.getpid()}_{uuid4().hex}",
+        name=f"sparseengine_test_status_{os.getpid()}_{uuid4().hex}",
         create=True,
         size=2**20,
     )
@@ -400,7 +400,7 @@ def test_run_rpc_uses_host_completion_without_collective():
     ctx = get_context("spawn")
     events = (ctx.Event(), ctx.Event())
     shm = SharedMemory(
-        name=f"sparsevllm_test_status_{os.getpid()}_{uuid4().hex}",
+        name=f"sparseengine_test_status_{os.getpid()}_{uuid4().hex}",
         create=True,
         size=2**20,
     )
@@ -665,8 +665,8 @@ def test_model_runner_reset_after_warmup_resets_local_runtime_state():
     with patch.dict(
         os.environ,
         {
-            "SPARSEVLLM_DELTAKV_CLEAR_GRAPHS_AFTER_WARMUP": "0",
-            "SPARSEVLLM_DELTAKV_CLEAR_ATTN_SCORE_BUFFERS_AFTER_WARMUP": "0",
+            "SPARSEENGINE_DELTAKV_CLEAR_GRAPHS_AFTER_WARMUP": "0",
+            "SPARSEENGINE_DELTAKV_CLEAR_ATTN_SCORE_BUFFERS_AFTER_WARMUP": "0",
         },
     ):
         ModelRunner.reset_after_warmup(runner)
@@ -711,7 +711,7 @@ def test_model_runner_releases_the_complete_profiling_cache_runtime():
 
     with (
         patch(
-            "sparsevllm.engine.model_runner.release_unused_device_memory",
+            "sparseengine.engine.model_runner.release_unused_device_memory",
             side_effect=lambda _platform: calls.append("release_memory"),
         ),
         patch.object(DeviceMemorySnapshot, "capture", return_value=snapshot),
@@ -770,32 +770,32 @@ def test_model_runner_runtime_rebuild_resolves_graph_shapes_locally():
 
     with (
         patch(
-            "sparsevllm.engine.model_runner.CacheManager.create",
+            "sparseengine.engine.model_runner.CacheManager.create",
             return_value=object(),
         ),
-        patch("sparsevllm.engine.model_runner.RuntimeState", return_value=object()),
+        patch("sparseengine.engine.model_runner.RuntimeState", return_value=object()),
         patch(
-            "sparsevllm.engine.model_runner.SparseController",
+            "sparseengine.engine.model_runner.SparseController",
             return_value=SimpleNamespace(bind_auxiliary_prefill=auxiliary_executors.append),
         ),
         patch(
-            "sparsevllm.engine.model_runner.collect_decode_graph_participants",
+            "sparseengine.engine.model_runner.collect_decode_graph_participants",
             return_value=(),
         ),
         patch(
-            "sparsevllm.engine.model_runner._decode_cuda_graph_max_real_batch_size",
+            "sparseengine.engine.model_runner._decode_cuda_graph_max_real_batch_size",
             return_value=8,
         ),
         patch(
-            "sparsevllm.engine.model_runner._resolve_decode_cuda_graph_capture_sizes",
+            "sparseengine.engine.model_runner._resolve_decode_cuda_graph_capture_sizes",
             return_value=(1, 8),
         ),
         patch(
-            "sparsevllm.engine.model_runner.DecodeCudaGraphRunner",
+            "sparseengine.engine.model_runner.DecodeCudaGraphRunner",
             side_effect=lambda **kwargs: graph_kwargs.update(kwargs) or object(),
         ),
         patch(
-            "sparsevllm.engine.model_runner.release_unused_device_memory",
+            "sparseengine.engine.model_runner.release_unused_device_memory",
         ),
         patch.object(
             DeviceMemorySnapshot,
@@ -842,7 +842,7 @@ def test_model_runner_decode_graph_startup_controls_use_live_runner():
     seqs = [object()]
 
     with patch(
-        "sparsevllm.engine.model_runner.reset_context",
+        "sparseengine.engine.model_runner.reset_context",
         side_effect=lambda: calls.append(("reset",)),
     ):
         ModelRunner.begin_decode_cuda_graph_capture(runner)
@@ -898,11 +898,11 @@ def test_model_runner_exit_drains_graphs_before_barrier():
 
     with (
         patch(
-            "sparsevllm.engine.model_runner.reset_parallel_context",
+            "sparseengine.engine.model_runner.reset_parallel_context",
             side_effect=lambda: calls.append("reset"),
         ),
         patch(
-            "sparsevllm.engine.model_runner.dist.destroy_process_group",
+            "sparseengine.engine.model_runner.dist.destroy_process_group",
             side_effect=lambda: calls.append("destroy"),
         ),
     ):

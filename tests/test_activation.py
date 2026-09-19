@@ -2,8 +2,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from sparsevllm.layers.activation import SiluAndMul
-from sparsevllm.operators.activation import (
+from sparseengine.layers.activation import SiluAndMul
+from sparseengine.operators.activation import (
     SiluAndMulSpec,
     TorchSiluAndMulProvider,
     TritonSiluAndMulProvider,

@@ -1,6 +1,6 @@
 # KVzip: Query-Agnostic KV Cache Compression with Context Reconstruction [NeurIPS'25 Oral]
 
-> Sparse-vLLM vendors the runtime subset only. The upstream benchmark code is
+> Sparse-Engine vendors the runtime subset only. The upstream benchmark code is
 > intentionally omitted; use `../../benchmark/` for repository-owned runs.
 
 [[Paper](https://arxiv.org/abs/2505.23416)] [[Blog](https://janghyun1230.github.io/kvzip/)] 

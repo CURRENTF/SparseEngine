@@ -61,7 +61,7 @@ def test_relocated_sweep_preflights_statistics_from_explicit_checkout(tmp_path):
     campaign.write_text(json.dumps(config))
     result = subprocess.run([sys.executable, str(relocated / "sweep_decode_capacity.py"),
         "--repo", str(repo), "--config", str(campaign), "--model", "fixture", "--gpus", "none",
-        "--lanes", "svllm-vanilla", "--check-only"], cwd=tmp_path,
+        "--lanes", "sengine-vanilla", "--check-only"], cwd=tmp_path,
         env={**os.environ, "PYTHONPATH": ""}, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "output").exists()
@@ -238,7 +238,7 @@ def arguments(tmp_path):
         tensor_parallel_size=2, expert_parallel_size=2, gpu_memory_utilization=.9,
         max_num_batched_tokens=8192, prefill_wave_size=1, wave_decode_gap_steps=1,
         hyper_params="{}", engine_kwargs="{}", sparse_prefill_score_mode=None,
-        output_dir=str(tmp_path / "run"), engine="sparsevllm", model_path="unused",
+        output_dir=str(tmp_path / "run"), engine="sparseengine", model_path="unused",
         sparse_method="snapkv", backend_label=None)
 
 
@@ -261,7 +261,7 @@ def test_reuse_adapter_preserves_tp_wave_window_and_failure(monkeypatch, tmp_pat
         output.mkdir()
         dt = (99, 2, 4)[len(calls)-1]
         window = dict(decode_stage_tokens=6, decode_stage_elapsed_s=dt)
-        row = dict(engine="sparsevllm", method="snapkv", length=12, output_len=9, batch_size=2,
+        row = dict(engine="sparseengine", method="snapkv", length=12, output_len=9, batch_size=2,
             stage_timing_scope="fixture", decode_warmup_steps_after_full=1,
             measured_decode_steps_after_full=3, status="success", synchronize_step_timing=False,
             measurement_scope="full_batch_decode_window", decode_window=window,

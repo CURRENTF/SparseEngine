@@ -26,11 +26,11 @@ from benchmark.efficiency.paper import without_source_fingerprints
 
 LANES = {
     "vllm-vanilla": ("vLLM (Vanilla)", "o"),
-    "svllm-vanilla": ("SVLLM (Vanilla)", "s"),
-    "svllm-snapkv": ("SVLLM (SnapKV)", "D"),
-    "svllm-h2o": ("SVLLM (H2O)", "h"),
-    "svllm-quest": ("SVLLM (QuEST)", "^"),
-    "svllm-omnikv": ("SVLLM (OmniKV)", "P"),
+    "sengine-vanilla": ("SENGINE (Vanilla)", "s"),
+    "sengine-snapkv": ("SENGINE (SnapKV)", "D"),
+    "sengine-h2o": ("SENGINE (H2O)", "h"),
+    "sengine-quest": ("SENGINE (QuEST)", "^"),
+    "sengine-omnikv": ("SENGINE (OmniKV)", "P"),
 }
 EXTERNAL_LANES = {"tangram-snapkv": ("Tangram (SnapKV)", "v"),
                   "hisparse-quest": ("HiSparse (QuEST)", "X"),
@@ -76,7 +76,7 @@ def validate_measurement(path, concurrency, config):
     steps = [item for item in read_rows(case / "steps.jsonl") if item["measured"]]
     if not steps or any(abs(item["tokens"]) != concurrency or not math.isfinite(item["elapsed_s"]) or item["elapsed_s"] <= 0 for item in steps):
         raise ValueError(f"Measured step is not a full batch: {case}")
-    if row["engine"] == "sparsevllm" and any(item["tokens"] >= 0 for item in steps):
+    if row["engine"] == "sparseengine" and any(item["tokens"] >= 0 for item in steps):
         raise ValueError(f"Prefill included in native decode rate: {case}")
     if row["engine"] in ("vllm", "hisparse") and any(not item["pure_decode"] for item in steps):
         raise ValueError(f"Mixed or prefill step included in vLLM decode rate: {case}")
@@ -319,7 +319,7 @@ def load_grid(path):
                 validate_grid_identity(point, model, local)
         # A populated comparison is required, not four empty axes or smoke points.
         if (sum(len(c["points"]) >= 2 for c in local_curves) < 2
-                or not any(c["lane"] in ("svllm-vanilla", "vllm-vanilla")
+                or not any(c["lane"] in ("sengine-vanilla", "vllm-vanilla")
                            and len(c["points"]) >= 2 for c in local_curves)):
             raise GridNotReadyError(f"Panel {model}/{local['input_len']} needs two measured curves with >=2 points, including a Vanilla baseline")
         panel_id = f"panel-{index}"
@@ -490,7 +490,7 @@ def render_relative_vllm(curves, config, output, colors, lanes):
             ax.plot([p['concurrency'] for p in points],
                     [p['delta_percent'] if p['status'] == 'success' else math.nan for p in points],
                     color=colors[lane], marker=marker, markersize=7, linewidth=2, label=label,
-                    linestyle='--' if lane == 'svllm-vanilla' else '-')
+                    linestyle='--' if lane == 'sengine-vanilla' else '-')
             matched = [p for p in points if p['status'] == 'success']
             xs.extend(p['concurrency'] for p in matched)
             visible_values[index // columns].extend(p['delta_percent'] for p in matched)
@@ -586,8 +586,8 @@ def render(curves, config, output, palette_path=DEFAULT_PALETTE):
             ys = [point["decode_throughput_tps"] for point in points]
             band_values.extend(ys)
             sns.lineplot(x=xs, y=ys, ax=ax, label=label, color=color, marker=marker,
-                         markersize=6.25 if curve["lane"] == "svllm-vanilla" else 7.5,
-                         linestyle="--" if curve["lane"] == "svllm-vanilla" else "-",
+                         markersize=6.25 if curve["lane"] == "sengine-vanilla" else 7.5,
+                         linestyle="--" if curve["lane"] == "sengine-vanilla" else "-",
                          linewidth=2, estimator=None, errorbar=None)
         ax.set(xlabel="Concurrency", ylabel="Throughput (tok/s)")
         ax.set_xscale("log", base=2)
@@ -663,7 +663,7 @@ def render(curves, config, output, palette_path=DEFAULT_PALETTE):
                       [p["decode_throughput_tps"] for p in points],
                       color=colors[curve["lane"]], marker=lanes[curve["lane"]][1],
                       markersize=4.375, linewidth=1.2,
-                      linestyle="--" if curve["lane"] == "svllm-vanilla" else "-")
+                      linestyle="--" if curve["lane"] == "sengine-vanilla" else "-")
         padding = max((max(low_values) - min(low_values)) * .10, max(low_values) * .03)
         zoom.set(xlim=(.85, 6.15), ylim=(max(0, min(low_values) - padding), max(low_values) + padding))
         zoom.set_xticks([1, 2, 4, 6])
@@ -742,7 +742,7 @@ def render(curves, config, output, palette_path=DEFAULT_PALETTE):
                 "decode_throughput_tps", "capacity_confirmed", "artifact"], extrasaction="ignore")
             writer.writeheader()
             writer.writerows(selected)
-        # Match sparsevllm_vs_vortex/plot.py's visual theme, not its mean/SD
+        # Match sparseengine_vs_vortex/plot.py's visual theme, not its mean/SD
         # aggregation: these bars retain the recorded pooled token/time rates.
         sns.set_theme(style="whitegrid", context="paper", font="DejaVu Sans", font_scale=1.15,
                       rc={"axes.edgecolor": "#D6DDE5", "grid.color": "#E9EEF3", "grid.linewidth": .7,
@@ -771,7 +771,7 @@ def render(curves, config, output, palette_path=DEFAULT_PALETTE):
             fig.savefig(output / f"{config['figure_name']}_max_batch.{extension}", dpi=220)
         plt.close(fig)
         (output / "max_batch_style.json").write_text(json.dumps(dict(
-            reference="scripts/official_experiments/sparsevllm_vs_vortex/plot.py",
+            reference="scripts/official_experiments/sparseengine_vs_vortex/plot.py",
             theme="paper/whitegrid", font_scale=1.15, figsize_inches=[width, width / 2.5],
             shared_y_axis=True, bar_labels="framework / method / pooled throughput (one decimal) / B=batch", legend=False,
             aggregation="unchanged pooled completed tokens / elapsed time; no mean/SD substitution",

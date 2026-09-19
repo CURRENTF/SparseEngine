@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from sparsevllm.kernels.tilelang.mla.runtime import (
+from sparseengine.kernels.tilelang.mla.runtime import (
     TileMlaDecodeKernel,
     TileMlaLaunchConfig,
     TileMlaLaunchPlan,
@@ -328,13 +328,13 @@ def test_static_plan_replays_across_contexts_with_unaligned_capacity() -> None:
 @pytest.mark.parametrize("tp_size", [1, 2, 4])
 def test_rule_bound_provider_replays_ragged_128k_without_workspace_changes(tp_size: int) -> None:
     """Exercise real profile binding and the changed BS5 plan, not a fixed override."""
-    from sparsevllm import platforms
-    from sparsevllm.engine.cache_manager import AttentionViewMeta, DecodeComputeView, MlaLatentPayload
-    from sparsevllm.operators.attention_capabilities import AttentionScoreKind
-    from sparsevllm.operators.mla_attention import (
+    from sparseengine import platforms
+    from sparseengine.engine.cache_manager import AttentionViewMeta, DecodeComputeView, MlaLatentPayload
+    from sparseengine.operators.attention_capabilities import AttentionScoreKind
+    from sparseengine.operators.mla_attention import (
         MLA_ATTENTION_REGISTRY, MlaAttentionOpSpec, MlaTileLangScoreProvider,
     )
-    from sparsevllm.operators.registry import OpResolver
+    from sparseengine.operators.registry import OpResolver
 
     torch.manual_seed(20260909 + tp_size)
     torch.cuda.set_device(0)

@@ -297,7 +297,7 @@ def apply_qwen3_vl_prefill_pruning(model: Any, cfg: Qwen3VLPruningConfig) -> dic
     owner = model.model
 
     def model_forward_with_grid_stash(self, *args, **kwargs):
-        self._sparsevllm_last_video_grid_thw = kwargs.get("video_grid_thw")
+        self._sparseengine_last_video_grid_thw = kwargs.get("video_grid_thw")
         return original_model_forward(*args, **kwargs)
 
     def forward_with_pruning(self, *args, **kwargs):
@@ -314,7 +314,7 @@ def apply_qwen3_vl_prefill_pruning(model: Any, cfg: Qwen3VLPruningConfig) -> dic
             keep_indices, selected_visual_local = _build_keep_indices(
                 inputs_embeds,
                 visual_pos_masks,
-                getattr(owner, "_sparsevllm_last_video_grid_thw", None),
+                getattr(owner, "_sparseengine_last_video_grid_thw", None),
                 cfg,
             )
             kwargs["inputs_embeds"] = inputs_embeds.index_select(1, keep_indices)
@@ -330,7 +330,7 @@ def apply_qwen3_vl_prefill_pruning(model: Any, cfg: Qwen3VLPruningConfig) -> dic
                 kwargs["deepstack_visual_embeds"] = [
                     embed.index_select(0, selected_visual_local) for embed in deepstack_visual_embeds
                 ]
-            owner._sparsevllm_last_prune_stats = {
+            owner._sparseengine_last_prune_stats = {
                 "method": cfg.method,
                 "keep_ratio": cfg.keep_ratio,
                 "original_seq_len": int(inputs_embeds.shape[1]),
@@ -384,7 +384,7 @@ def apply_qwen3_vl_fastv(model: Any, cfg: Qwen3VLPruningConfig) -> dict[str, Any
     original_model_forward = model.model.forward
 
     def model_forward_with_grid_stash(self, *args, **kwargs):
-        self._sparsevllm_last_video_grid_thw = kwargs.get("video_grid_thw")
+        self._sparseengine_last_video_grid_thw = kwargs.get("video_grid_thw")
         return original_model_forward(*args, **kwargs)
 
     def attention_forward_with_fastv(
@@ -406,7 +406,7 @@ def apply_qwen3_vl_fastv(model: Any, cfg: Qwen3VLPruningConfig) -> dict[str, Any
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if (
-            getattr(owner, "_sparsevllm_fastv_prefill_active", False)
+            getattr(owner, "_sparseengine_fastv_prefill_active", False)
             and self.layer_idx == int(cfg.fastv_layer) - 1
             and hidden_states.shape[1] > 1
         ):
@@ -417,7 +417,7 @@ def apply_qwen3_vl_fastv(model: Any, cfg: Qwen3VLPruningConfig) -> dict[str, Any
             ) * float(self.scaling)
             if torch.is_tensor(attention_mask) and attention_mask.ndim == 4:
                 score = score + attention_mask[:, :, -1:, :].float()
-            owner._sparsevllm_fastv_attention_scores = torch.softmax(score, dim=-1).mean(dim=1)[0, 0].detach()
+            owner._sparseengine_fastv_attention_scores = torch.softmax(score, dim=-1).mean(dim=1)[0, 0].detach()
 
         if past_key_values is not None:
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
@@ -506,12 +506,12 @@ def apply_qwen3_vl_fastv(model: Any, cfg: Qwen3VLPruningConfig) -> dict[str, Any
 
         hidden_states = inputs_embeds
         position_embeddings = self.rotary_emb(hidden_states, rotary_position_ids)
-        owner._sparsevllm_fastv_prefill_active = bool(prefill_active)
-        owner._sparsevllm_fastv_attention_scores = None
+        owner._sparseengine_fastv_prefill_active = bool(prefill_active)
+        owner._sparseengine_fastv_attention_scores = None
 
         for layer_idx, decoder_layer in enumerate(self.layers):
             if prefill_active and layer_idx == int(cfg.fastv_layer):
-                scores = getattr(owner, "_sparsevllm_fastv_attention_scores", None)
+                scores = getattr(owner, "_sparseengine_fastv_attention_scores", None)
                 if scores is None:
                     raise RuntimeError(
                         "Qwen3-VL FastV did not collect attention scores before the pruning layer."
@@ -534,7 +534,7 @@ def apply_qwen3_vl_fastv(model: Any, cfg: Qwen3VLPruningConfig) -> dict[str, Any
                     deepstack_visual_embeds = [
                         embed.index_select(0, selected_visual_local) for embed in deepstack_visual_embeds
                     ]
-                owner._sparsevllm_last_prune_stats = {
+                owner._sparseengine_last_prune_stats = {
                     "method": cfg.method,
                     "keep_ratio": cfg.keep_ratio,
                     "fastv_layer": int(cfg.fastv_layer),
@@ -560,7 +560,7 @@ def apply_qwen3_vl_fastv(model: Any, cfg: Qwen3VLPruningConfig) -> dict[str, Any
                     deepstack_visual_embeds[layer_idx],
                 )
 
-        owner._sparsevllm_fastv_prefill_active = False
+        owner._sparseengine_fastv_prefill_active = False
         hidden_states = self.norm(hidden_states)
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,

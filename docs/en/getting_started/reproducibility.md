@@ -1,6 +1,6 @@
 # Reproducibility
 
-Use this page as the stable checklist for reproducing Sparse-vLLM experiments.
+Use this page as the stable checklist for reproducing Sparse-Engine experiments.
 Keep local run ledgers out of this repo; when a repo-facing result needs
 evidence, cite the original run artifact path.
 
@@ -24,7 +24,7 @@ The README contains the current install command. The expected baseline is:
   capability. Cite separate validation artifacts for numerical correctness and
   performance claims; an upstream default is not evidence of a local performance
   benchmark. FP8 providers do not download Hub kernels during warmup.
-- RMSNorm defaults to `SPARSEVLLM_RMSNORM_PROVIDER=auto`, which prefers
+- RMSNorm defaults to `SPARSEENGINE_RMSNORM_PROVIDER=auto`, which prefers
   FlashInfer when installed. Set the variable to `triton` to force the local
   Triton kernel, or to `flashinfer` to require FlashInfer explicitly.
 
@@ -45,9 +45,9 @@ id can be passed directly everywhere.
 
 LongBench and MathBench read data roots from environment variables:
 
-- `SPARSEVLLM_OUTPUT_DIR`: output root for benchmark predictions and logs.
-- `SPARSEVLLM_DATA_DIR`: general benchmark dataset root.
-- `SPARSEVLLM_LONGBENCH_DATA_DIR`: LongBench root containing `data/*.jsonl`.
+- `SPARSEENGINE_OUTPUT_DIR`: output root for benchmark predictions and logs.
+- `SPARSEENGINE_DATA_DIR`: general benchmark dataset root.
+- `SPARSEENGINE_LONGBENCH_DATA_DIR`: LongBench root containing `data/*.jsonl`.
 - `SCBENCH_LOCAL_DATA_DIR`: optional local root for standard SCBench files.
 - `SCBENCH_PREPROCESSED_ROOT`: root containing SCBench preprocessed `<task>.parquet` files.
 
@@ -78,7 +78,7 @@ configuration. Do not use legacy keys such as `engine_prefill_chunk_size`,
 [runtime-parameter-semantics.md](../configuration/runtime-parameter-semantics.md)
 for the canonical contract.
 
-Sparse-vLLM requires explicit integer keep budgets. Do not pass ratios such as
+Sparse-Engine requires explicit integer keep budgets. Do not pass ratios such as
 `decode_keep_tokens=0.17`; convert each policy to a token count first.
 
 ## Smoke Checks
@@ -86,7 +86,7 @@ Sparse-vLLM requires explicit integer keep budgets. Do not pass ratios such as
 Start with small commands before long benchmarks:
 
 ```bash
-PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_vllm.py \
+PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_engine.py \
   --model_path <LOCAL_BASE_MODEL> \
   --lengths 1024 \
   --batch_sizes 1 \
@@ -95,10 +95,10 @@ PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_vllm.py \
   --hyper_params '{"gpu_memory_utilization":0.8,"engine_prefill_chunk_size":512}'
 ```
 
-For a compressor-backed DeltaKV Sparse-vLLM smoke:
+For a compressor-backed DeltaKV Sparse-Engine smoke:
 
 ```bash
-PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_vllm.py \
+PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_engine.py \
   --model_path <LOCAL_BASE_MODEL> \
   --lengths 1024 \
   --batch_sizes 2 \

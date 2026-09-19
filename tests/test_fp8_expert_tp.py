@@ -1,8 +1,8 @@
 import pytest
 import torch
 
-from sparsevllm.quantization.fp8 import fp8_blockwise_linear_reference
-from sparsevllm.quantization.fp8_tp import Fp8ExpertTpShard
+from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+from sparseengine.quantization.fp8_tp import Fp8ExpertTpShard
 
 
 def test_qwen_tp4_uses_block_aligned_physical_shards():

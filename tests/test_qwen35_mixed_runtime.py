@@ -6,56 +6,56 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-import sparsevllm.platforms as platforms
-from sparsevllm.platforms import device_runtime
-from sparsevllm.config import Config, RuntimeLayout
-from sparsevllm.distributed import ParallelContext, ParallelGroup, ParallelTopology
-from sparsevllm.engine.cache_manager.base import (
+import sparseengine.platforms as platforms
+from sparseengine.platforms import device_runtime
+from sparseengine.config import Config, RuntimeLayout
+from sparseengine.distributed import ParallelContext, ParallelGroup, ParallelTopology
+from sparseengine.engine.cache_manager.base import (
     CacheManager,
     LayerBatchStates,
     resolve_joint_prefix_capacity,
 )
-from sparsevllm.engine.cache_manager.methods.quest import QuestCacheManager, QuestPrefixBlockPayload
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
-from sparsevllm.engine.cache_manager.standard import (
+from sparseengine.engine.cache_manager.methods.quest import QuestCacheManager, QuestPrefixBlockPayload
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.engine.cache_manager.standard import (
     StandardCacheManager,
     StandardPrefixBlockPayload,
 )
-from sparsevllm.engine.model_runner import ModelRunner
-from sparsevllm.engine.prefix_cache import (
+from sparseengine.engine.model_runner import ModelRunner
+from sparseengine.engine.prefix_cache import (
     PrefixCacheBlock,
     PrefixTransferKind,
     RadixPrefixIndex,
 )
-from sparsevllm.engine.prefix_cache_coordinator import MixedPrefixBlockPayload, PrefixCacheCoordinator
-from sparsevllm.engine.cache_manager.prefix_cache_mixin import PrefixLookupCache
-from sparsevllm.engine.recurrent_state_manager import (
+from sparseengine.engine.prefix_cache_coordinator import MixedPrefixBlockPayload, PrefixCacheCoordinator
+from sparseengine.engine.cache_manager.prefix_cache_mixin import PrefixLookupCache
+from sparseengine.engine.recurrent_state_manager import (
     RecurrentPrefixPayload,
     RecurrentStateManager,
     RecurrentStateSpec,
     RecurrentTensorSpec,
 )
-from sparsevllm.engine.runtime_state import RuntimeState
-from sparsevllm.engine.scheduler import Scheduler
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.sparse_controller import LayerBatchSparseState, SparseController
-from sparsevllm.engine.sparse_methods.dynamic import OmniKVRuntime
-from sparsevllm.models.qwen3_5 import (
+from sparseengine.engine.runtime_state import RuntimeState
+from sparseengine.engine.scheduler import Scheduler
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.sparse_controller import LayerBatchSparseState, SparseController
+from sparseengine.engine.sparse_methods.dynamic import OmniKVRuntime
+from sparseengine.models.qwen3_5 import (
     Qwen35ForCausalLM,
     Qwen35LinearAttention,
     Qwen35LinearConv1D,
     Qwen35RMSNorm,
     _get_rotary_dim,
 )
-from sparsevllm.models.qwen3_5_moe import (
+from sparseengine.models.qwen3_5_moe import (
     Qwen35MoePackedExperts,
     Qwen35MoeRouter,
     Qwen35MoeSparseMoeBlock,
 )
-from sparsevllm.models.spec import resolve_model_spec
-from sparsevllm.platforms.cpu import CpuPlatform
-from sparsevllm.sampling_params import SamplingParams
-from sparsevllm.utils.loader import _target_weight_name_for_model, _validate_all_quantized_weights_loaded
+from sparseengine.models.spec import resolve_model_spec
+from sparseengine.platforms.cpu import CpuPlatform
+from sparseengine.sampling_params import SamplingParams
+from sparseengine.utils.loader import _target_weight_name_for_model, _validate_all_quantized_weights_loaded
 
 
 def _single_process_parallel_context() -> ParallelContext:
@@ -77,11 +77,11 @@ def test_qwen35_runtime_passes_h2o_score_contract_to_full_attention_builder():
     gated_delta_rule = object()
     with (
         patch(
-            "sparsevllm.models.qwen3_5.build_mha_full_attention_provider",
+            "sparseengine.models.qwen3_5.build_mha_full_attention_provider",
             return_value=full_attention,
         ) as build_attention,
         patch(
-            "sparsevllm.models.qwen3_5.build_gated_delta_rule_op",
+            "sparseengine.models.qwen3_5.build_gated_delta_rule_op",
             return_value=gated_delta_rule,
         ),
     ):
@@ -115,11 +115,11 @@ def test_qwen35_runtime_closes_attention_if_gdn_prepare_fails():
     full_attention = Mock(name="full_attention")
     with (
         patch(
-            "sparsevllm.models.qwen3_5.build_mha_full_attention_provider",
+            "sparseengine.models.qwen3_5.build_mha_full_attention_provider",
             return_value=full_attention,
         ),
         patch(
-            "sparsevllm.models.qwen3_5.build_gated_delta_rule_op",
+            "sparseengine.models.qwen3_5.build_gated_delta_rule_op",
             side_effect=RuntimeError("GDN prepare failed"),
         ),
         pytest.raises(RuntimeError, match="GDN prepare failed"),
@@ -193,7 +193,7 @@ def _qwen35_outer_config(*, num_layers: int = 64, full_layers: tuple[int, ...] |
 
 
 def _make_config(tmp_path, **kwargs):
-    with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=_qwen35_outer_config()):
+    with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=_qwen35_outer_config()):
         return Config(model=str(tmp_path), **kwargs)
 
 
@@ -204,11 +204,11 @@ def test_linear_attention_fuses_qkvz_and_ba_projections():
     parallel_context = _single_process_parallel_context()
     with (
         patch(
-            "sparsevllm.models.qwen3_5.get_parallel_context",
+            "sparseengine.models.qwen3_5.get_parallel_context",
             return_value=parallel_context,
         ),
         patch(
-            "sparsevllm.layers.linear.get_parallel_context",
+            "sparseengine.layers.linear.get_parallel_context",
             return_value=parallel_context,
         ),
     ):
@@ -307,10 +307,10 @@ def test_qwen35_moe_reduces_routed_and_shared_outputs_together():
     block.parallel_context.world.all_reduce.side_effect = lambda outputs: outputs + 1
 
     with patch(
-        "sparsevllm.models.qwen3_5_moe.gated_shared_add",
+        "sparseengine.models.qwen3_5_moe.gated_shared_add",
         side_effect=lambda routed, shared, gate: routed + shared * gate.sigmoid(),
     ):
-        from sparsevllm.distributed.moe_communication import AllReduceMoeCommunication
+        from sparseengine.distributed.moe_communication import AllReduceMoeCommunication
         block.mlp_chunk_size = 16
         block.experts.fp8_enabled = False
         block.moe_communication = AllReduceMoeCommunication(block.parallel_context.world.all_reduce)
@@ -344,10 +344,10 @@ def test_qwen35_moe_skips_single_rank_output_packing():
     block.parallel_context.world.size = 1
 
     with patch(
-        "sparsevllm.models.qwen3_5_moe.gated_shared_add",
+        "sparseengine.models.qwen3_5_moe.gated_shared_add",
         side_effect=lambda routed, shared, gate: routed + shared * gate.sigmoid(),
     ):
-        from sparsevllm.distributed.moe_communication import AllReduceMoeCommunication
+        from sparseengine.distributed.moe_communication import AllReduceMoeCommunication
         block.mlp_chunk_size = 16
         block.experts.fp8_enabled = False
         block.moe_communication = AllReduceMoeCommunication(block.parallel_context.world.all_reduce)
@@ -697,7 +697,7 @@ def _deprecation_messages(mock_log_once):
 
 
 def test_recurrent_budget_accepts_deprecated_prefix_cache_alias(tmp_path):
-    with patch("sparsevllm.configs.prefix_cache.log_once") as mock_log_once:
+    with patch("sparseengine.configs.prefix_cache.log_once") as mock_log_once:
         config = _make_config(tmp_path, prefix_cache_max_recurrent_bytes=2 << 30)
 
     assert config.recurrent_state_max_bytes == 2 << 30
@@ -965,12 +965,12 @@ def test_model_runner_resets_inherited_allocator_peak_before_model_construction(
     )
     with (
         patch.object(platforms, "_current_platform", platform),
-        patch("sparsevllm.engine.model_runner.dist.is_initialized", return_value=True),
+        patch("sparseengine.engine.model_runner.dist.is_initialized", return_value=True),
         patch(
-            "sparsevllm.engine.model_runner.init_parallel_context",
+            "sparseengine.engine.model_runner.init_parallel_context",
             return_value=_single_process_parallel_context(),
         ),
-        patch("sparsevllm.engine.model_runner.Qwen2ForCausalLM", side_effect=stop_at_model_construction),
+        patch("sparseengine.engine.model_runner.Qwen2ForCausalLM", side_effect=stop_at_model_construction),
         pytest.raises(RuntimeError, match="stop after model construction boundary"),
     ):
         ModelRunner(config, rank=0, event=[])
@@ -1056,7 +1056,7 @@ def test_runtime_layout_maps_qwen35_full_layers_to_compact_kv_indices():
 
 def test_omnikv_observation_layers_follow_compact_qwen_kv_order(tmp_path):
     outer_config = _qwen35_outer_config(full_layers=tuple(range(3, 64, 4)))
-    with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
+    with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
         cfg = Config(
             model=str(tmp_path),
             sparse_method="omnikv",
@@ -1068,7 +1068,7 @@ def test_omnikv_observation_layers_follow_compact_qwen_kv_order(tmp_path):
 
 def test_qwen35_pyramidkv_ratios_follow_compact_kv_order(tmp_path):
     outer_config = _qwen35_outer_config(full_layers=tuple(range(3, 64, 4)))
-    with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
+    with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
         cfg = Config(
             model=str(tmp_path),
             sparse_method="pyramidkv",
@@ -1095,7 +1095,7 @@ def test_qwen35_pyramidkv_ratios_follow_compact_kv_order(tmp_path):
 
 def test_qwen35_pyramidkv_allocates_slots_only_for_kv_layers(tmp_path):
     outer_config = _qwen35_outer_config(num_layers=8, full_layers=(3, 7))
-    with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
+    with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
         cfg = Config(
             model=str(tmp_path),
             sparse_method="pyramidkv",
@@ -1128,7 +1128,7 @@ def test_qwen35_pyramidkv_allocates_slots_only_for_kv_layers(tmp_path):
 
 def test_qwen35_snapkv_initializes_compact_kv_metadata(tmp_path):
     outer_config = _qwen35_outer_config(num_layers=8, full_layers=(3, 7))
-    with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
+    with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
         cfg = Config(
             model=str(tmp_path),
             sparse_method="snapkv",
@@ -1200,7 +1200,7 @@ def test_qwen35_snapkv_initializes_compact_kv_metadata(tmp_path):
 def test_qwen35_pyramidkv_projects_legacy_transformer_layer_ratios(tmp_path):
     outer_config = _qwen35_outer_config(num_layers=8, full_layers=(3, 7))
     legacy_ratios = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3]
-    with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
+    with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
         cfg = Config(
             model=str(tmp_path),
             sparse_method="pyramidkv",
@@ -1240,7 +1240,7 @@ def test_qwen35_raw_config_fallback_when_transformers_autoconfig_is_unknown(tmp_
             f,
         )
 
-    with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", side_effect=ValueError("unknown model")):
+    with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", side_effect=ValueError("unknown model")):
         cfg = Config(model=str(tmp_path))
 
     assert cfg.outer_hf_config.model_type == "qwen3_5"
@@ -1252,7 +1252,7 @@ def test_qwen35_rejects_unquantized_fp16_checkpoint(tmp_path):
     outer_config = _qwen35_outer_config()
     outer_config.text_config.quantization_config = None
 
-    with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
+    with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
         with pytest.raises(ValueError, match="requires BF16 weights"):
             Config(model=str(tmp_path))
 
@@ -1261,14 +1261,14 @@ def test_qwen35_rejects_unsupported_quantization(tmp_path):
     outer_config = _qwen35_outer_config()
     outer_config.text_config.quantization_config = {"quant_method": "awq"}
 
-    with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
+    with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=outer_config):
         with pytest.raises(NotImplementedError, match="quant_method='awq'"):
             Config(model=str(tmp_path))
 
 
 def test_qwen35_linear_conv1d_matches_hf_biasless_checkpoint():
     with patch(
-        "sparsevllm.models.qwen3_5.get_parallel_context",
+        "sparseengine.models.qwen3_5.get_parallel_context",
         return_value=_single_process_parallel_context(),
     ):
         conv = Qwen35LinearConv1D(conv_dim=16, kernel_size=4, qk_dim=4, v_dim=8)
@@ -1363,7 +1363,7 @@ def test_qwen35_rmsnorm_supports_strided_qkv_views(dtype):
 
 
 def test_qwen35_decode_state_padding_preserves_real_rows_for_static_batch():
-    from sparsevllm.models.qwen3_5 import Qwen35LinearAttention
+    from sparseengine.models.qwen3_5 import Qwen35LinearAttention
 
     conv = torch.arange(2 * 3 * 4, dtype=torch.float32).reshape(2, 3, 4)
     recurrent = torch.arange(2 * 3 * 2 * 2, dtype=torch.float32).reshape(2, 3, 2, 2)
@@ -1488,7 +1488,7 @@ def test_omnikv_uses_first_target_kv_layer_for_slot_table_in_mixed_layout():
     runtime.num_sink = 0
     runtime.num_recent = 1
     runtime.decode_keep_tokens = 2
-    from sparsevllm.operators.omnikv_selection import (
+    from sparseengine.operators.omnikv_selection import (
         OmniKVSelectionSpec, prepare_omnikv_selection,
     )
     runtime._omnikv_selection_provider = prepare_omnikv_selection(
@@ -1513,7 +1513,7 @@ def test_omnikv_uses_first_target_kv_layer_for_slot_table_in_mixed_layout():
 
     context = SimpleNamespace(is_prefill=False)
     with patch(
-        "sparsevllm.engine.sparse_methods.dynamic.build_omnikv_keep_and_slots",
+        "sparseengine.engine.sparse_methods.dynamic.build_omnikv_keep_and_slots",
         side_effect=fake_build,
     ):
         runtime._update_dynamic_indices(3, [7], context)

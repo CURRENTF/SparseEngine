@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from sparsevllm.configs.full_attention_profiles import (
+from sparseengine.configs.full_attention_profiles import (
     _parse_profile_catalog,
     load_full_attention_layer_profiles,
     resolve_auto_full_attention_layers,
@@ -93,7 +93,7 @@ def test_prefill_auto_uses_catalog_independently_and_excludes_sliding_layers():
             hf_config=SimpleNamespace(num_hidden_layers=4,
                 layer_types=["sliding_attention", "full_attention"] * 2),
         )
-        with patch("sparsevllm.configs.full_attention_profiles.load_full_attention_layer_profiles", return_value=(profile,)):
+        with patch("sparseengine.configs.full_attention_profiles.load_full_attention_layer_profiles", return_value=(profile,)):
             resolve_auto_full_attention_layers(config)
         assert config.omnikv_prefill_full_attention_layers == [1, 3]
         assert config.full_attention_layers == ([] if decode_layers == "auto" else [2])
@@ -105,7 +105,7 @@ def test_prefill_auto_rejects_missing_profile_instead_of_using_decode_layers():
         prefill_sparse_method="omnikv_prefill", omnikv_prefill_full_attention_layers="auto",
         outer_hf_config=SimpleNamespace(), hf_config=SimpleNamespace(),
     )
-    with patch("sparsevllm.configs.full_attention_profiles.load_full_attention_layer_profiles", return_value=()):
+    with patch("sparseengine.configs.full_attention_profiles.load_full_attention_layer_profiles", return_value=()):
         with pytest.raises(ValueError, match="No automatic"):
             resolve_auto_full_attention_layers(config)
 
@@ -128,7 +128,7 @@ def test_packaged_profile_catalog_satisfies_schema_contract():
 
 @pytest.mark.parametrize("sparse_method", ["omnikv", "deltakv"])
 def test_config_auto_resolution_consumes_packaged_profile(tmp_path, sparse_method):
-    from sparsevllm.config import Config
+    from sparseengine.config import Config
 
     profile = load_full_attention_layer_profiles()[0]
     model_dir = tmp_path / profile.model_names[0]
@@ -142,7 +142,7 @@ def test_config_auto_resolution_consumes_packaged_profile(tmp_path, sparse_metho
         num_hidden_layers=max(profile.full_attention_layers) + 1,
     )
     with patch(
-        "sparsevllm.configs.runtime.AutoConfig.from_pretrained",
+        "sparseengine.configs.runtime.AutoConfig.from_pretrained",
         return_value=hf_config,
     ):
         config = Config(

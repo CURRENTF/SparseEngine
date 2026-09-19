@@ -1,4 +1,4 @@
-# Sparse-vLLM Documentation
+# Sparse-Engine Documentation
 
 English | [简体中文](../zh/README.md)
 
@@ -13,7 +13,7 @@ repo-facing result claim needs evidence.
 ## Stable Docs
 
 - [Getting Started](getting_started/README.md): installation, checkpoint
-  download, and a minimal Sparse-vLLM usage example.
+  download, and a minimal Sparse-Engine usage example.
 - [Features](features/README.md): sparse method taxonomy, DeltaKV notes, and
   Qwen3MoE expert parallelism.
 - [Design](design/README.md): repository layout, runtime flow, and method
@@ -30,11 +30,11 @@ repo-facing result claim needs evidence.
 - [Supported models](features/supported-models.md)
 - [Research code guidelines](governance/research-code-guidelines.md)
 - [Runtime parameter semantics](configuration/runtime-parameter-semantics.md)
-- [Sparse-vLLM control map](design/control-map.md)
+- [Sparse-Engine control map](design/control-map.md)
 
 ## Benchmark Runbooks
 
 - [Benchmark inventory](benchmarking/README.md)
 - [Efficiency and throughput suite](benchmarking/efficiency.md)
-- [Sparse-vLLM regression tests](benchmarking/sparsevllm-regression-tests.md)
+- [Sparse-Engine regression tests](benchmarking/sparseengine-regression-tests.md)
 - [Multimodal benchmarks](benchmarking/multimodal/README.md)

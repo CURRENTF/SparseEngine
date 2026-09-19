@@ -22,11 +22,11 @@ import torch.multiprocessing as mp
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from benchmark.model_adapters.sparsevllm import get_sparsevllm_generate_api
+from benchmark.model_adapters.sparseengine import get_sparseengine_generate_api
 
 # Keep defaults consistent with benchmark/long_bench/pred.py, but allow env overrides.
-BASE_PATH = os.getenv("SPARSEVLLM_OUTPUT_DIR", str(REPO_ROOT / "outputs"))
-DATA_PREFIX_PATH = os.getenv("SPARSEVLLM_DATA_DIR")
+BASE_PATH = os.getenv("SPARSEENGINE_OUTPUT_DIR", str(REPO_ROOT / "outputs"))
+DATA_PREFIX_PATH = os.getenv("SPARSEENGINE_DATA_DIR")
 DEFAULT_GSM8K_DATASET = ("openai/gsm8k", "main", "test")
 DEFAULT_AIME2024_DATASET = ("Maxwell-Jia/AIME_2024", None, "train")
 DEFAULT_MATH500_DATASET = ("HuggingFaceH4/MATH-500", None, "test")
@@ -226,7 +226,7 @@ def load_model_and_tokenizer(rank: int, args):
                     f"It is neither a valid file path nor a valid JSON string. Error: {e}"
                 )
 
-    generate_fn = get_sparsevllm_generate_api(
+    generate_fn = get_sparseengine_generate_api(
         model_path=args.model_path,
         infer_config=infer_config,
         deltakv_checkpoint_path=args.deltakv_checkpoint_path,
@@ -246,7 +246,7 @@ def _count_generated_text_tokens(tokenizer, texts: list[str]) -> int:
 
 
 def _decode_cuda_graph_status(generate_fn) -> dict:
-    llm = getattr(generate_fn, "_sparsevllm_llm", None)
+    llm = getattr(generate_fn, "_sparseengine_llm", None)
     runner = getattr(getattr(llm, "model_runner", None), "decode_graph_runner", None)
     states = getattr(runner, "_graphs", {}) if runner is not None else {}
     graph_count = sum(
@@ -437,7 +437,7 @@ def worker(rank: int, world_size: int, datasets: List[str], args, out_root: str)
     perf_summary = {
         "rank": rank,
         "world_size": world_size,
-        "backend": "sparsevllm",
+        "backend": "sparseengine",
         "sparse_method": args.sparse_method,
         "model": args.model,
         "model_path": args.model_path,
@@ -453,7 +453,7 @@ def worker(rank: int, world_size: int, datasets: List[str], args, out_root: str)
         "force_think_prefix": args.force_think_prefix,
         "prompt_think_instruction": not args.no_prompt_think_instruction,
         "think_prefix": args.think_prefix,
-        "hyper_param": getattr(model, "_sparsevllm_infer_config", args.hyper_param),
+        "hyper_param": getattr(model, "_sparseengine_infer_config", args.hyper_param),
         "datasets": perf_records,
         "generated_text_tokens": total_tokens,
         "generation_elapsed_s": total_elapsed,

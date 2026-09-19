@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-DATA_ROOT="${SPARSEVLLM_DATA_DIR:-${REPO_ROOT}/data}"
+DATA_ROOT="${SPARSEENGINE_DATA_DIR:-${REPO_ROOT}/data}"
 
 ROOT="${VIDEOMME_ROOT:-${DATA_ROOT}/Video-MME_hf}"
 CACHE_DIR="${HF_CACHE_DIR:-${HF_HOME:-${REPO_ROOT}/.hf_cache}}"

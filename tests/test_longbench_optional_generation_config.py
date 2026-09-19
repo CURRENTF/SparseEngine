@@ -25,7 +25,7 @@ def test_longbench_missing_generation_metadata_preserves_eos_but_bad_file_fails(
         else:
             assert _eos_token_ids(str(tmp_path), tokenizer) == [2, 3, 4]
         return
-    with patch('benchmark.long_bench.pred.get_sparsevllm_generate_api'), patch(
+    with patch('benchmark.long_bench.pred.get_sparseengine_generate_api'), patch(
         'benchmark.long_bench.pred.AutoTokenizer.from_pretrained', return_value=tokenizer
     ):
         if malformed:

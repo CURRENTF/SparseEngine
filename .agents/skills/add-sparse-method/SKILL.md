@@ -1,6 +1,6 @@
 ---
 name: add-sparse-method
-description: Add or refactor a first-class Sparse-vLLM sparse method across configuration, capability registration, cache and controller ownership, scheduler admission, typed attention views, model and storage compatibility, CUDA Graph and prefix-cache lifecycles, operators, and reproducible validation. Use for a new canonical sparse_method or an integration whose sparse runtime semantics change; do not use for a kernel/provider optimization that leaves method semantics unchanged.
+description: Add or refactor a first-class Sparse-Engine sparse method across configuration, capability registration, cache and controller ownership, scheduler admission, typed attention views, model and storage compatibility, CUDA Graph and prefix-cache lifecycles, operators, and reproducible validation. Use for a new canonical sparse_method or an integration whose sparse runtime semantics change; do not use for a kernel/provider optimization that leaves method semantics unchanged.
 ---
 
 # Add Sparse Method
@@ -158,7 +158,7 @@ Use `build_decode_view` when the method only changes the logical explicit-KV vie
 Read and apply `$review-operator-organization` whenever a sparse-method change
 adds or changes provider selection, physical weight layout, or production
 kernel dispatch.
-Use `$optimize-sparsevllm-kernel` when implementing or tuning a GPU kernel;
+Use `$optimize-sparseengine-kernel` when implementing or tuning a GPU kernel;
 reusing an existing kernel does not by itself require a tuning project.
 
 ## 7. Integrate In Dependency Order

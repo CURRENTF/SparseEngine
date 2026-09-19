@@ -10,8 +10,8 @@ from benchmark.long_bench_v2.contracts import (
     render_prompt,
     select_samples,
 )
-from benchmark.sparsevllm_regression.grading import grade_longbench_v2_quality
-from benchmark.sparsevllm_regression.run_suite import (
+from benchmark.sparseengine_regression.grading import grade_longbench_v2_quality
+from benchmark.sparseengine_regression.run_suite import (
     _validated_longbench_v2_metrics,
 )
 

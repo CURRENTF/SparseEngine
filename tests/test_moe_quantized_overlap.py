@@ -6,12 +6,12 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from sparsevllm.operators.fp8_linear import (
+from sparseengine.operators.fp8_linear import (
     Fp8LinearProvider, Fp8LinearDispatchRoute, Sm120Fp8LinearDispatchPlan,
     _sm120_activation_buffers,
 )
-from sparsevllm.operators.moe_execution import prepare_model_moe_execution
-from sparsevllm.operators.workspace import bind_module_workspace_lane, close_workspace_manager
+from sparseengine.operators.moe_execution import prepare_model_moe_execution
+from sparseengine.operators.workspace import bind_module_workspace_lane, close_workspace_manager
 
 
 def test_activation_scratch_reuses_within_lane_but_not_across_branches():
@@ -28,9 +28,9 @@ def test_activation_scratch_reuses_within_lane_but_not_across_branches():
 
 
 def test_shared_lane_reaches_linear_dispatch_routes_and_packed_projections():
-    from sparsevllm.layers.linear import LinearBase
-    from sparsevllm.layers.packed_moe import PackedMoeExperts
-    from sparsevllm.operators.moe import MoeProvider
+    from sparseengine.layers.linear import LinearBase
+    from sparseengine.layers.packed_moe import PackedMoeExperts
+    from sparseengine.operators.moe import MoeProvider
 
     # Exercise real ownership hooks without requiring GPU provider resolution.
     plan = object.__new__(Sm120Fp8LinearDispatchPlan)
@@ -55,11 +55,11 @@ def test_shared_lane_reaches_linear_dispatch_routes_and_packed_projections():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize("model_kind", ["glm_block", "glm_tensor", "glm_packed", "qwen"])
 def test_quantized_model_branches_overlap_eager_and_graph(tmp_path, model_kind, record_property):
-    from sparsevllm.distributed import init_parallel_context, reset_parallel_context, ParallelTopology
-    from sparsevllm.models.glm4_moe_lite import Glm4MoeLiteSparseMoeBlock
-    from sparsevllm.models.qwen3_5_moe import Qwen35MoeSparseMoeBlock
-    from sparsevllm.quantization.config import QuantizationConfig
-    from sparsevllm.quantization.fp8 import fp8_blockwise_linear_reference
+    from sparseengine.distributed import init_parallel_context, reset_parallel_context, ParallelTopology
+    from sparseengine.models.glm4_moe_lite import Glm4MoeLiteSparseMoeBlock
+    from sparseengine.models.qwen3_5_moe import Qwen35MoeSparseMoeBlock
+    from sparseengine.quantization.config import QuantizationConfig
+    from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
     from tests.test_glm4_moe_lite import _config
     from tests.test_triton_fp8_operators import _reference_moe
 
@@ -85,7 +85,7 @@ def test_quantized_model_branches_overlap_eager_and_graph(tmp_path, model_kind, 
                 config.norm_topk_prob = True
                 block = Qwen35MoeSparseMoeBlock(config)
             else:
-                with patch("sparsevllm.models.glm4_moe_lite.use_packed_shared_experts",
+                with patch("sparseengine.models.glm4_moe_lite.use_packed_shared_experts",
                            return_value=model_kind == "glm_packed"):
                     block = Glm4MoeLiteSparseMoeBlock(config, mlp_chunk_size=8, decode_graph=True)
         with torch.no_grad():
@@ -199,8 +199,8 @@ def test_quantized_model_branches_overlap_eager_and_graph(tmp_path, model_kind, 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_branch_scratch_isolation_across_streams_and_graph_replays():
     """Exercise the SM120 scratch allocator on any CUDA device, without its GEMM."""
-    from sparsevllm.distributed.moe_communication import AllReduceMoeCommunication
-    from sparsevllm.operators.moe_execution import MoeExecutionPlan
+    from sparseengine.distributed.moe_communication import AllReduceMoeCommunication
+    from sparseengine.operators.moe_execution import MoeExecutionPlan
 
     class ScratchBranch(nn.Module):
         def __init__(self, offset):

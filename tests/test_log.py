@@ -20,7 +20,7 @@ def _import_log_module(log_level: str):
             sys.executable,
             "-c",
             (
-                "from sparsevllm.utils.log import log_level; "
+                "from sparseengine.utils.log import log_level; "
                 "print(log_level)"
             ),
         ],

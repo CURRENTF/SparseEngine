@@ -1,6 +1,6 @@
 # 稀疏方法运行时架构
 
-本文说明 Sparse-vLLM 如何组织不同的稀疏方法，以及新增方法时应该把代码放在
+本文说明 Sparse-Engine 如何组织不同的稀疏方法，以及新增方法时应该把代码放在
 哪里。它也适用于接入模型原生的动态稀疏注意力（DSA）。
 
 最重要的原则只有三条：
@@ -74,7 +74,7 @@ slot 必须逐项对应。捕获容量和图身份保持不变。
 
 ## SparseController：统一入口
 
-`src/sparsevllm/engine/sparse_controller.py` 应保持轻量。推理引擎主要使用以下
+`src/sparseengine/engine/sparse_controller.py` 应保持轻量。推理引擎主要使用以下
 接口：
 
 ```python
@@ -95,7 +95,7 @@ class SparseController:
 
 ## SparseMethodRuntime：方法逻辑
 
-`src/sparsevllm/engine/sparse_methods/base.py` 定义了统一的输入类型：
+`src/sparseengine/engine/sparse_methods/base.py` 定义了统一的输入类型：
 
 - `SparseStepContext`：一次 prefill 或 decode 的上下文。
 - `PrefillSelectionRequest`：某层的 prefill 选择请求。

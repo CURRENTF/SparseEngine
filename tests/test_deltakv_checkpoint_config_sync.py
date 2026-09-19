@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import torch
 
-from sparsevllm.utils.loader import sync_deltakv_config_from_checkpoint
+from sparseengine.utils.loader import sync_deltakv_config_from_checkpoint
 
 
 def _base_config(tmp_path):

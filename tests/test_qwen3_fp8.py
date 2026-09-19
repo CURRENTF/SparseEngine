@@ -5,10 +5,10 @@ import torch
 from safetensors.torch import save_file
 from transformers import Qwen3Config
 
-from sparsevllm.config import QuantizationConfig
-from sparsevllm.models.qwen3 import Qwen3ForCausalLM
-from sparsevllm.quantization.fp8 import fp8_blockwise_linear_reference
-from sparsevllm.utils.loader import load_model
+from sparseengine.config import QuantizationConfig
+from sparseengine.models.qwen3 import Qwen3ForCausalLM
+from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+from sparseengine.utils.loader import load_model
 
 
 def _parallel_context():
@@ -85,11 +85,11 @@ def _checkpoint(model: Qwen3ForCausalLM) -> dict[str, torch.Tensor]:
 def test_qwen3_dense_loads_official_block_fp8_projection_layout(tmp_path):
     context = _parallel_context()
     with (
-        patch("sparsevllm.models.qwen3.get_parallel_context", return_value=context),
-        patch("sparsevllm.layers.linear.get_parallel_context", return_value=context),
-        patch("sparsevllm.layers.embed_head.get_parallel_context", return_value=context),
+        patch("sparseengine.models.qwen3.get_parallel_context", return_value=context),
+        patch("sparseengine.layers.linear.get_parallel_context", return_value=context),
+        patch("sparseengine.layers.embed_head.get_parallel_context", return_value=context),
         patch(
-            "sparsevllm.layers.linear.QuantizationRegistry.resolve_linear_provider",
+            "sparseengine.layers.linear.QuantizationRegistry.resolve_linear_provider",
             return_value=Mock(side_effect=fp8_blockwise_linear_reference),
         ),
     ):
@@ -139,11 +139,11 @@ def test_qwen3_dense_loads_official_block_fp8_projection_layout(tmp_path):
 def test_qwen3_dense_fp8_forward_uses_loaded_scales(tmp_path):
     context = _parallel_context()
     with (
-        patch("sparsevllm.models.qwen3.get_parallel_context", return_value=context),
-        patch("sparsevllm.layers.linear.get_parallel_context", return_value=context),
-        patch("sparsevllm.layers.embed_head.get_parallel_context", return_value=context),
+        patch("sparseengine.models.qwen3.get_parallel_context", return_value=context),
+        patch("sparseengine.layers.linear.get_parallel_context", return_value=context),
+        patch("sparseengine.layers.embed_head.get_parallel_context", return_value=context),
         patch(
-            "sparsevllm.layers.linear.QuantizationRegistry.resolve_linear_provider",
+            "sparseengine.layers.linear.QuantizationRegistry.resolve_linear_provider",
             return_value=Mock(side_effect=fp8_blockwise_linear_reference),
         ),
     ):

@@ -10,7 +10,7 @@ validation_root=$(realpath "$3")
 gpus=$4
 package=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 : "${CONDA_EXE:?Set conda executable}"
-: "${SPARSE_VLLM_ENV:?Set native CUDA conda environment}"
+: "${SPARSE_ENGINE_ENV:?Set native CUDA conda environment}"
 test -f "$run_root/manifest.json"
 test ! -e "$run_root/run.log"
 exec > >(tee "$run_root/run.log") 2>&1
@@ -26,7 +26,7 @@ printf '%s\tvalidation\tcompleted\n' "$(date -Is)" >> "$run_root/status.tsv"
 export TILELANG_CACHE_DIR="$run_root/cache/tilelang"
 python3 "$package/sweep_decode_capacity.py" --config "$run_root/config.json" \
     --repo "$benchmark_repo" --model glm4.7-flash --gpus "$gpus" \
-    --lanes svllm-omnikv --attempt sm-parallel
-"$CONDA_EXE" run --no-capture-output -p "$SPARSE_VLLM_ENV" python \
+    --lanes sengine-omnikv --attempt sm-parallel
+"$CONDA_EXE" run --no-capture-output -p "$SPARSE_ENGINE_ENV" python \
     "$package/update_mla_profile_results.py" export --run-root "$run_root"
 printf '%s\texport\tcompleted\n' "$(date -Is)" >> "$run_root/status.tsv"

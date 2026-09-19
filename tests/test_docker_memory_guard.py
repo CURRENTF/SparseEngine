@@ -36,9 +36,9 @@ class DockerMemoryGuardTests(unittest.TestCase):
                     "State": {"Pid": 123},
                 }
                 with patch.dict(os.environ, {
-                    "SPARSEVLLM_DOCKER_MEMORY_LIMIT_BYTES": "64",
-                    "SPARSEVLLM_DOCKER_MEMORY_PARENT": parent,
-                    "SPARSEVLLM_DOCKER_MEMORY_EVENTS": "oom.jsonl",
+                    "SPARSEENGINE_DOCKER_MEMORY_LIMIT_BYTES": "64",
+                    "SPARSEENGINE_DOCKER_MEMORY_PARENT": parent,
+                    "SPARSEENGINE_DOCKER_MEMORY_EVENTS": "oom.jsonl",
                 }), patch.object(DockerMemoryGuard, "inspect", return_value=record), \
                         patch.object(Path, "read_text", side_effect=[
                             f"0::{cgroup}\n", "oom 0\noom_kill 0\n",
@@ -138,8 +138,8 @@ class DockerMemoryGuardTests(unittest.TestCase):
         env._writable_guard_state = GuardState("owned-container", "test-image")
         return env
 
-    @patch.dict(os.environ, {'SPARSEVLLM_DOCKER_MEMORY_LIMIT_BYTES': '67108864',
-                            'SPARSEVLLM_DOCKER_MEMORY_PARENT': 'test.slice'})
+    @patch.dict(os.environ, {'SPARSEENGINE_DOCKER_MEMORY_LIMIT_BYTES': '67108864',
+                            'SPARSEENGINE_DOCKER_MEMORY_PARENT': 'test.slice'})
     def test_scorer_cannot_override_limits_and_input_is_not_mutated(self):
         original = {'name': 'task-container'}
         result = constrain_sdk_kwargs(original)

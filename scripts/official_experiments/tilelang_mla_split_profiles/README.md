@@ -25,7 +25,7 @@ Other tiles and score semantics are preserved from that baseline. Head counts
 
 From the repository root, set `RUN_ROOT` to a **new** directory on an output
 volume, `CUDA_VISIBLE_DEVICES` to one idle GPU, `CONDA_EXE` to conda, and
-`SPARSE_VLLM_ENV` to the environment containing the project's CUDA dependencies:
+`SPARSE_ENGINE_ENV` to the environment containing the project's CUDA dependencies:
 
 ```bash
 bash scripts/official_experiments/tilelang_mla_split_profiles/run.sh

@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 import torch
 
-from sparsevllm.kernels.triton.mla import (
+from sparseengine.kernels.triton.mla import (
     DEFAULT_GLM_MLA_DECODE_CONFIG,
     GLM_MLA_SOFTMAX_SCALE,
     MlaDecodeWorkspace,
@@ -52,7 +52,7 @@ def test_mla_decode_metadata_capture_validation_is_host_read_free(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "sparsevllm.kernels.triton.mla.decode_schedule.device_runtime.is_stream_capturing",
+        "sparseengine.kernels.triton.mla.decode_schedule.device_runtime.is_stream_capturing",
         lambda: True,
     )
     validate_mla_decode_metadata(
@@ -434,7 +434,7 @@ def test_mla_decode_writes_raw_attention_scores(reduce_heads: bool) -> None:
 @CUDA_REQUIRED
 @pytest.mark.parametrize("graph_mode", [False, True])
 def test_mla_h2o_reduced_score_softmax_matches_approximation(graph_mode):
-    from sparsevllm.kernels.triton.h2o_score import h2o_softmax_accumulate
+    from sparseengine.kernels.triton.h2o_score import h2o_softmax_accumulate
 
     torch.manual_seed(218)
     case = _make_decode_case(batch_size=1, head_count=20, max_context_len=33)

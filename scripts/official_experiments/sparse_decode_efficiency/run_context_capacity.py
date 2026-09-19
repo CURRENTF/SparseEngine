@@ -35,7 +35,7 @@ def main():
     lanes = cfg['lanes']
     for lane in lanes:
         engine, _, external = resolve_lane(cfg, lane)
-        if engine not in ('sparsevllm', 'vllm'):
+        if engine not in ('sparseengine', 'vllm'):
             raise ValueError(
                 f'{lane}: request probes do not support engine={engine!r}; '
                 'use sweep_decode_capacity.py for decode-only measurements.'

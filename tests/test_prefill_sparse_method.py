@@ -4,24 +4,24 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.config import Config
-from sparsevllm.configs.sparse import normalize_prefill_sparse_method
-from sparsevllm.engine.cache_manager.base import (
+from sparseengine.config import Config
+from sparseengine.configs.sparse import normalize_prefill_sparse_method
+from sparseengine.engine.cache_manager.base import (
     AttentionViewMeta,
     ExplicitKVPayload,
     PrefillComputeView,
 )
-from sparsevllm.kernels.external.flashprefill_v2.prefill import (
+from sparseengine.kernels.external.flashprefill_v2.prefill import (
     build_flashprefill_v2_page_table,
 )
-from sparsevllm.operators.attention_capabilities import AttentionScoreKind
-from sparsevllm.operators.prefill_attention import (
+from sparseengine.operators.attention_capabilities import AttentionScoreKind
+from sparseengine.operators.prefill_attention import (
     FlashPrefillV2Provider,
     FlashPrefillV2Semantics,
     PrefillAttentionOpSpec,
     _resolve_prefill_attention_provider,
 )
-from sparsevllm.platforms import DeviceCaps, PlatformEnum
+from sparseengine.platforms import DeviceCaps, PlatformEnum
 
 
 def _config(**overrides):
@@ -69,7 +69,7 @@ def _runtime_config(tmp_path, **kwargs):
         num_key_value_heads=2,
     )
     with patch(
-        "sparsevllm.configs.runtime.AutoConfig.from_pretrained",
+        "sparseengine.configs.runtime.AutoConfig.from_pretrained",
         return_value=hf_config,
     ):
         return Config(model=str(tmp_path), **kwargs)
@@ -267,11 +267,11 @@ def test_flashprefill_semantics_exclude_dense_providers_and_resolve_explicitly()
     platform = SimpleNamespace(get_device_caps=lambda _index: _h100_caps())
     with (
         patch(
-            "sparsevllm.platforms.get_current_platform",
+            "sparseengine.platforms.get_current_platform",
             return_value=platform,
         ),
         patch(
-            "sparsevllm.operators.prefill_attention.flashprefill_v2_support",
+            "sparseengine.operators.prefill_attention.flashprefill_v2_support",
             return_value=(True, "flashprefill available"),
         ),
     ):
@@ -295,7 +295,7 @@ def test_flashprefill_semantics_exclude_dense_providers_and_resolve_explicitly()
 )
 def test_flashprefill_provider_rejects_unvalidated_kernel_contracts(overrides, reason):
     with patch(
-        "sparsevllm.operators.prefill_attention.flashprefill_v2_support",
+        "sparseengine.operators.prefill_attention.flashprefill_v2_support",
         return_value=(True, "flashprefill available"),
     ):
         result = FlashPrefillV2Provider.supports(
@@ -335,7 +335,7 @@ def test_flashprefill_provider_maps_prefix_aware_varlen_view_to_upstream_call():
     scope = object()
 
     with patch(
-        "sparsevllm.utils.context.get_context",
+        "sparseengine.utils.context.get_context",
         return_value=SimpleNamespace(attention_validation_scope=scope),
     ):
         actual = provider.run(

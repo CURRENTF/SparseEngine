@@ -6,18 +6,18 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from sparsevllm.distributed.collective_runtime import (
+from sparseengine.distributed.collective_runtime import (
     ParallelCollectiveRuntime,
     ParallelCollectiveState,
 )
-from sparsevllm.distributed.parallel_context import (
+from sparseengine.distributed.parallel_context import (
     ParallelContext,
     ParallelGroup,
     init_parallel_context,
     reset_parallel_context,
 )
-from sparsevllm.distributed.topology import ParallelTopology
-from sparsevllm.utils.context import reset_context, set_context
+from sparseengine.distributed.topology import ParallelTopology
+from sparseengine.utils.context import reset_context, set_context
 
 
 def _group(ranks=(0,), rank=0, process_group=None):
@@ -129,7 +129,7 @@ def test_same_group_requests_share_one_operator_with_largest_capacity():
     )
     op = _prepared_op()
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         return_value=op,
     ) as prepare:
         runtime.prepare()
@@ -158,7 +158,7 @@ def test_attention_subgroup_and_world_group_prepare_distinct_operators():
     )
 
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         side_effect=(_prepared_op("attention"), _prepared_op("world")),
     ) as prepare:
         runtime.prepare()
@@ -181,7 +181,7 @@ def test_expert_parallel_attention_identity_only_prepares_world_operator():
     op = _prepared_op("world")
 
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         return_value=op,
     ) as prepare:
         runtime.prepare()
@@ -211,7 +211,7 @@ def test_single_rank_collective_is_identity_without_prepared_operator():
     )
 
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce"
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce"
     ) as prepare:
         runtime.prepare()
 
@@ -235,7 +235,7 @@ def test_cuda_graph_replay_is_blocked_until_registration_finishes():
     )
     op = _prepared_op()
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         return_value=op,
     ):
         runtime.prepare()
@@ -276,7 +276,7 @@ def test_completed_collectives_can_reset_for_production_graph_recapture():
     profiling_op = _prepared_op("profiling")
     production_op = _prepared_op("production")
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         side_effect=(profiling_op, production_op),
     ) as prepare:
         runtime.prepare()
@@ -315,7 +315,7 @@ def test_uncaptured_collectives_need_no_reset_before_runtime_rebuild():
     )
     op = _prepared_op()
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         return_value=op,
     ):
         runtime.prepare()
@@ -338,7 +338,7 @@ def test_handle_uses_plain_collective_for_prefill_and_prepared_op_for_decode():
     ).attention
     op = _prepared_op()
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         return_value=op,
     ):
         runtime.prepare()
@@ -346,7 +346,7 @@ def test_handle_uses_plain_collective_for_prefill_and_prepared_op_for_decode():
 
     with (
         patch(
-            "sparsevllm.distributed.collective_runtime.get_context",
+            "sparseengine.distributed.collective_runtime.get_context",
             return_value=SimpleNamespace(is_prefill=True),
         ),
         patch.object(
@@ -360,7 +360,7 @@ def test_handle_uses_plain_collective_for_prefill_and_prepared_op_for_decode():
     op.run.assert_not_called()
 
     with patch(
-        "sparsevllm.distributed.collective_runtime.get_context",
+        "sparseengine.distributed.collective_runtime.get_context",
         return_value=SimpleNamespace(is_prefill=False),
     ):
         assert handle.run(tensor) is tensor
@@ -378,7 +378,7 @@ def test_provider_mismatch_stops_before_any_subgroup_exchange():
         dtype=torch.float16,
     )
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         return_value=_prepared_op("provider-a"),
     ):
         runtime.prepare()
@@ -415,7 +415,7 @@ def test_inconsistent_subgroup_membership_stops_before_subgroup_exchange():
         dtype=torch.float16,
     )
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         side_effect=(_prepared_op("attention"), _prepared_op("world")),
     ):
         runtime.prepare()
@@ -467,7 +467,7 @@ def test_metadata_count_mismatch_is_reported_after_required_exchange():
     )
     op = _prepared_op()
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         return_value=op,
     ):
         runtime.prepare()
@@ -506,7 +506,7 @@ def test_local_registration_failure_never_marks_runtime_replayable():
     op = _prepared_op()
     op.register_cuda_graph_buffers.side_effect = RuntimeError("registration failed")
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         return_value=op,
     ):
         runtime.prepare()
@@ -539,7 +539,7 @@ def test_local_metadata_failure_cannot_start_registration_exchange():
     op = _prepared_op()
     op.collect_local_cuda_graph_metadata.side_effect = RuntimeError("local failure")
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         return_value=op,
     ):
         runtime.prepare()
@@ -565,7 +565,7 @@ def test_local_metadata_validation_failure_cannot_start_exchange():
     op = _prepared_op()
     op.graph_metadata_summary.side_effect = RuntimeError("invalid local metadata")
     with patch(
-        "sparsevllm.distributed.collective_runtime.prepare_parallel_all_reduce",
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
         return_value=op,
     ):
         runtime.prepare()

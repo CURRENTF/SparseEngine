@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from sparsevllm.engine.cache_manager.raw_kv_offload import RawKVOffloadBuffer
+from sparseengine.engine.cache_manager.raw_kv_offload import RawKVOffloadBuffer
 
 
 class RawKVOffloadBufferTest(unittest.TestCase):

@@ -1,8 +1,8 @@
 """Opt-in real-model phase handoff and repeated decode graph regression.
 
-Set SPARSEVLLM_TEST_MODEL and SPARSEVLLM_TEST_OUTPUT_DIR; select an idle GPU
+Set SPARSEENGINE_TEST_MODEL and SPARSEENGINE_TEST_OUTPUT_DIR; select an idle GPU
 with CUDA_VISIBLE_DEVICES. The model must have at least four KV layers. Set
-SPARSEVLLM_TEST_PREFILL_LAYERS to comma-separated global observers for models
+SPARSEENGINE_TEST_PREFILL_LAYERS to comma-separated global observers for models
 with sliding layers. Heterogeneous Gemma4 storage uses the vanilla cases only.
 This is a correctness smoke, not quality scoring.
 """
@@ -16,23 +16,23 @@ import torch
 
 
 def _prefill_layers():
-    return [int(layer) for layer in os.environ.get("SPARSEVLLM_TEST_PREFILL_LAYERS", "0,2").split(",")]
+    return [int(layer) for layer in os.environ.get("SPARSEENGINE_TEST_PREFILL_LAYERS", "0,2").split(",")]
 
 
 @pytest.mark.skipif(
-    not torch.cuda.is_available() or not os.environ.get("SPARSEVLLM_TEST_MODEL"),
+    not torch.cuda.is_available() or not os.environ.get("SPARSEENGINE_TEST_MODEL"),
     reason="requires CUDA and an explicit local test model",
 )
 @pytest.mark.parametrize("method,offload", [("", False), ("omnikv", False), ("omnikv", True)])
 def test_prefill_then_repeated_graph_decode_matches_eager(method, offload):
-    from sparsevllm import LLM, SamplingParams
+    from sparseengine import LLM, SamplingParams
 
-    output_dir = Path(os.environ["SPARSEVLLM_TEST_OUTPUT_DIR"])
+    output_dir = Path(os.environ["SPARSEENGINE_TEST_OUTPUT_DIR"])
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs = []
     for graph in (False, True):
         kwargs = dict(
-            model=os.environ["SPARSEVLLM_TEST_MODEL"], sparse_method=method,
+            model=os.environ["SPARSEENGINE_TEST_MODEL"], sparse_method=method,
             prefill_sparse_method="omnikv_prefill",
             omnikv_prefill_full_attention_layers=_prefill_layers(),
             omnikv_prefill_keep_tokens=32, omnikv_prefill_sink_keep_tokens=2,
@@ -73,21 +73,21 @@ def test_prefill_then_repeated_graph_decode_matches_eager(method, offload):
 
 
 @pytest.mark.skipif(
-    not torch.cuda.is_available() or not os.environ.get("SPARSEVLLM_TEST_MODEL"),
+    not torch.cuda.is_available() or not os.environ.get("SPARSEENGINE_TEST_MODEL"),
     reason="requires CUDA and an explicit local test model",
 )
 @pytest.mark.parametrize("method", ["", "omnikv"])
 def test_chain_resume_and_eviction_match_omnikv_offload(method):
-    from sparsevllm import LLM, SamplingParams
-    from sparsevllm.engine.chain_cache import ChainGoneError, ChainPrefixMismatchError
+    from sparseengine import LLM, SamplingParams
+    from sparseengine.engine.chain_cache import ChainGoneError, ChainPrefixMismatchError
 
-    output_dir = Path(os.environ["SPARSEVLLM_TEST_OUTPUT_DIR"])
+    output_dir = Path(os.environ["SPARSEENGINE_TEST_OUTPUT_DIR"])
     output_dir.mkdir(parents=True, exist_ok=True)
     reference = {}
     for offload_cache in ([None] if not method else [None, 0, 64]):
         for graph in (False, True):
             kwargs = dict(
-                model=os.environ["SPARSEVLLM_TEST_MODEL"], sparse_method=method,
+                model=os.environ["SPARSEENGINE_TEST_MODEL"], sparse_method=method,
                 prefill_sparse_method="omnikv_prefill",
                 omnikv_prefill_full_attention_layers=_prefill_layers(),
                 omnikv_prefill_keep_tokens=32, omnikv_prefill_sink_keep_tokens=2,

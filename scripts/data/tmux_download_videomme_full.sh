@@ -3,7 +3,7 @@ set -euo pipefail
 
 SESSION="${VIDEOMME_TMUX_SESSION:-videomme_download}"
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DATA_ROOT="${SPARSEVLLM_DATA_DIR:-${project_dir}/data}"
+DATA_ROOT="${SPARSEENGINE_DATA_DIR:-${project_dir}/data}"
 ROOT="${VIDEOMME_ROOT:-${DATA_ROOT}/Video-MME_hf}"
 LOG_DIR="${VIDEOMME_LOG_DIR:-${ROOT}/logs}"
 mkdir -p "${LOG_DIR}"

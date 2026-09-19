@@ -4,14 +4,14 @@ import pytest
 import torch
 from glm_test_helpers import _glm_config, _single_rank_parallel_context
 
-from sparsevllm.engine.cache_manager import MlaLatentWrite, SparseSelection
-from sparsevllm.engine.cache_manager.methods.quest import QuestCacheManager
-from sparsevllm.engine.decode_graph_contract import (
+from sparseengine.engine.cache_manager import MlaLatentWrite, SparseSelection
+from sparseengine.engine.cache_manager.methods.quest import QuestCacheManager
+from sparseengine.engine.decode_graph_contract import (
     DecodeGraphContract,
     DecodeGraphInputs,
 )
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.utils.context import reset_context, set_context
+from sparseengine.engine.sequence import Sequence
+from sparseengine.utils.context import reset_context, set_context
 
 
 def _manager():

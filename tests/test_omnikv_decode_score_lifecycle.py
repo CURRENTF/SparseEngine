@@ -4,9 +4,9 @@ from unittest.mock import MagicMock, patch
 import torch
 import pytest
 
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.sparse_controller import SparseController
-from sparsevllm.utils.context import get_context, reset_context, set_context
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.sparse_controller import SparseController
+from sparseengine.utils.context import get_context, reset_context, set_context
 
 
 class _Manager:
@@ -147,7 +147,7 @@ def test_omnikv_decode_graph_reuses_selection_output_buffers():
 
     pointers = []
     with patch(
-        "sparsevllm.engine.sparse_methods.dynamic.build_omnikv_keep_and_slots",
+        "sparseengine.engine.sparse_methods.dynamic.build_omnikv_keep_and_slots",
         side_effect=fake_build,
     ):
         for _ in range(2):

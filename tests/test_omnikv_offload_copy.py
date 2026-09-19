@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from sparsevllm.operators.indexed_host_copy import (
+from sparseengine.operators.indexed_host_copy import (
     append_rows,
     gather_rows,
     store_rows,

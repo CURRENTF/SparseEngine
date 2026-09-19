@@ -29,7 +29,7 @@ from benchmark.swe_bench_lite.run import (
 def _prediction(instance_id: str, patch: str = "diff --git a/a b/a\n") -> dict:
     return {
         "instance_id": instance_id,
-        "model_name_or_path": "openai/sparsevllm-swe",
+        "model_name_or_path": "openai/sparseengine-swe",
         "model_patch": patch,
     }
 
@@ -56,7 +56,7 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "server_manifest.json"
             manifest = {
-                "command": "python -m sparsevllm.entrypoints.openai.api_server",
+                "command": "python -m sparseengine.entrypoints.openai.api_server",
                 "model_path": "/models/test",
                 "served_model_name": "test-model",
                 "cuda_visible_devices": "0",
@@ -208,12 +208,12 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
             env = runner._model_env()
 
         self.assertEqual(env["PYTHONPATH"], f"{runner.repo_root}:/existing")
-        self.assertEqual(env["SPARSEVLLM_CHAIN_CACHE"], "1")
+        self.assertEqual(env["SPARSEENGINE_CHAIN_CACHE"], "1")
 
     def test_chain_cache_setting_is_resolved_once_from_environment(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
             "os.environ",
-            {"SPARSEVLLM_CHAIN_CACHE": "true"},
+            {"SPARSEENGINE_CHAIN_CACHE": "true"},
             clear=True,
         ):
             args = build_parser().parse_args(
@@ -224,7 +224,7 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
 
         self.assertTrue(runner.args.chain_cache)
         self.assertTrue(runner.args.preserve_thinking)
-        self.assertEqual(env["SPARSEVLLM_CHAIN_CACHE"], "1")
+        self.assertEqual(env["SPARSEENGINE_CHAIN_CACHE"], "1")
 
     def test_chain_rejects_explicit_reasoning_removal_before_recording_config(self):
         """The adapter must not silently override a recorded CLI setting."""
@@ -240,7 +240,7 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
     def test_chain_cache_cli_override_clears_ambient_setting(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
             "os.environ",
-            {"SPARSEVLLM_CHAIN_CACHE": "1"},
+            {"SPARSEENGINE_CHAIN_CACHE": "1"},
             clear=True,
         ):
             args = build_parser().parse_args(
@@ -256,7 +256,7 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
             env = runner._model_env()
 
         self.assertFalse(runner.args.chain_cache)
-        self.assertNotIn("SPARSEVLLM_CHAIN_CACHE", env)
+        self.assertNotIn("SPARSEENGINE_CHAIN_CACHE", env)
 
     def test_prefix_prune_environment_is_explicit_and_chain_cache_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -282,13 +282,13 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
             runner = SweBenchLiteRunner(args)
             env = runner._model_env()
 
-            self.assertEqual(env["SPARSEVLLM_PREFIX_PRUNE_POLICY"], "kvzip_global")
-            self.assertEqual(env["SPARSEVLLM_PREFIX_PRUNE_TRIGGER_TOKENS"], "6144")
-            self.assertEqual(env["SPARSEVLLM_PREFIX_PRUNE_RANGE_START"], "1024")
-            self.assertEqual(env["SPARSEVLLM_PREFIX_PRUNE_RANGE_END"], "6144")
-            self.assertEqual(env["SPARSEVLLM_PREFIX_PRUNE_KEEP_TOKENS"], "2304")
+            self.assertEqual(env["SPARSEENGINE_PREFIX_PRUNE_POLICY"], "kvzip_global")
+            self.assertEqual(env["SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS"], "6144")
+            self.assertEqual(env["SPARSEENGINE_PREFIX_PRUNE_RANGE_START"], "1024")
+            self.assertEqual(env["SPARSEENGINE_PREFIX_PRUNE_RANGE_END"], "6144")
+            self.assertEqual(env["SPARSEENGINE_PREFIX_PRUNE_KEEP_TOKENS"], "2304")
             self.assertEqual(
-                env["SPARSEVLLM_PREFIX_PRUNE_EVENTS"],
+                env["SPARSEENGINE_PREFIX_PRUNE_EVENTS"],
                 str(runner.run_dir / "prefix_prune_events.jsonl"),
             )
 
@@ -325,13 +325,13 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
                 env = runner._model_env()
 
         self.assertEqual(
-            env["SPARSEVLLM_DOCKER_WRITABLE_LAYER_LIMIT_BYTES"],
+            env["SPARSEENGINE_DOCKER_WRITABLE_LAYER_LIMIT_BYTES"],
             str(4 * 1024**3),
         )
-        self.assertEqual(env["SPARSEVLLM_DOCKER_WRITABLE_LAYER_POLL_SECONDS"], "1.0")
-        self.assertEqual(env["SPARSEVLLM_SWE_RUN_ID"], "guarded-run")
+        self.assertEqual(env["SPARSEENGINE_DOCKER_WRITABLE_LAYER_POLL_SECONDS"], "1.0")
+        self.assertEqual(env["SPARSEENGINE_SWE_RUN_ID"], "guarded-run")
         self.assertEqual(
-            env["SPARSEVLLM_DOCKER_WRITABLE_LAYER_EVENTS"],
+            env["SPARSEENGINE_DOCKER_WRITABLE_LAYER_EVENTS"],
             str(runner.run_dir / "docker_writable_layer_guard.jsonl"),
         )
         self.assertTrue(
@@ -520,7 +520,7 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
                 self.assertEqual(cwd, runner.official_dir)
                 official_run_id = command[command.index("--run_id") + 1]
                 _write_json(
-                    cwd / f"openai__sparsevllm-swe.{official_run_id}.json",
+                    cwd / f"openai__sparseengine-swe.{official_run_id}.json",
                     {"total_instances": 1},
                 )
 
@@ -533,7 +533,7 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
                 / "logs"
                 / "run_evaluation"
                 / str(runner.official_run_id)
-                / ".sparsevllm_adapter_identity.json"
+                / ".sparseengine_adapter_identity.json"
             )
             self.assertTrue(marker.is_file())
 
@@ -549,7 +549,7 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
                     "run_id": "artifact-run",
                     "instance_ids": ["a"],
                     "batch_size": 1,
-                    "model": "openai/sparsevllm-swe",
+                    "model": "openai/sparseengine-swe",
                     "dataset": "SWE-bench/SWE-bench_Lite",
                     "split": "test",
                 },

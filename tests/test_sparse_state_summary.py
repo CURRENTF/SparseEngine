@@ -4,11 +4,11 @@ from unittest.mock import patch
 
 import torch
 
-from sparsevllm.engine.cache_manager.base import _debug_tensor_summary
-from sparsevllm.distributed import ParallelContext, ParallelGroup
-from sparsevllm.engine.model_runner import ModelRunner
-from sparsevllm.engine.sparse_controller import LayerBatchSparseState
-from sparsevllm.engine.sparse_methods.passthrough import PassThroughRuntime
+from sparseengine.engine.cache_manager.base import _debug_tensor_summary
+from sparseengine.distributed import ParallelContext, ParallelGroup
+from sparseengine.engine.model_runner import ModelRunner
+from sparseengine.engine.sparse_controller import LayerBatchSparseState
+from sparseengine.engine.sparse_methods.passthrough import PassThroughRuntime
 
 
 def test_debug_tensor_summary_is_order_sensitive_and_deterministic():
@@ -113,7 +113,7 @@ def test_model_runner_gathers_one_debug_summary_per_world_rank():
 
     with (
         patch.object(runner, "_sync_tp_rpc_status") as sync_status,
-        patch("sparsevllm.engine.model_runner.dist.all_gather_object", side_effect=gather),
+        patch("sparseengine.engine.model_runner.dist.all_gather_object", side_effect=gather),
     ):
         summaries = runner.debug_sparse_state_summaries()
 
@@ -184,7 +184,7 @@ def test_run_model_does_not_capture_non_tensor_tp_logits():
             return None
 
     runner.model = FakeModel()
-    with patch.dict(os.environ, {"SPARSEVLLM_DEBUG_RUNTIME": "1"}):
+    with patch.dict(os.environ, {"SPARSEENGINE_DEBUG_RUNTIME": "1"}):
         logits = runner.run_model(torch.ones(1), torch.ones(1), is_prefill=False)
 
     assert logits is None
@@ -196,7 +196,7 @@ def test_debug_logits_can_be_refreshed_after_cuda_graph_replay():
     capture_value = torch.tensor([[1.0, 2.0]])
     replay_value = torch.tensor([[3.0, 4.0]])
 
-    with patch.dict(os.environ, {"SPARSEVLLM_DEBUG_RUNTIME": "1"}):
+    with patch.dict(os.environ, {"SPARSEENGINE_DEBUG_RUNTIME": "1"}):
         runner._record_debug_logits(capture_value)
         runner._record_debug_logits(replay_value)
 

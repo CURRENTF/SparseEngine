@@ -13,8 +13,8 @@ class DockerMemoryLimitExceeded(RuntimeError):
 
 
 def memory_settings() -> tuple[int, str]:
-    limit = int(os.environ.get("SPARSEVLLM_DOCKER_MEMORY_LIMIT_BYTES", "0"))
-    parent = os.environ.get("SPARSEVLLM_DOCKER_MEMORY_PARENT", "")
+    limit = int(os.environ.get("SPARSEENGINE_DOCKER_MEMORY_LIMIT_BYTES", "0"))
+    parent = os.environ.get("SPARSEENGINE_DOCKER_MEMORY_PARENT", "")
     if limit <= 0 or not parent:
         raise ValueError("Docker memory guard requires a positive limit and cgroup parent")
     return limit, parent
@@ -35,13 +35,13 @@ def constrain_sdk_kwargs(kwargs: dict) -> dict:
 def install_sdk_limits() -> None:
     from docker.models.containers import ContainerCollection
     original = ContainerCollection.create
-    if getattr(original, "_sparsevllm_memory_guard", False):
+    if getattr(original, "_sparseengine_memory_guard", False):
         return
 
     def create(self, *args, **kwargs):
         return original(self, *args, **constrain_sdk_kwargs(kwargs))
 
-    create._sparsevllm_memory_guard = True
+    create._sparseengine_memory_guard = True
     ContainerCollection.create = create
 
 
@@ -73,9 +73,9 @@ class DockerMemoryGuard:
             )
         if not contained:
             raise RuntimeError(f"Container is outside the bounded memory parent: {self.events}")
-        event_path = os.environ.get("SPARSEVLLM_DOCKER_MEMORY_EVENTS", "")
+        event_path = os.environ.get("SPARSEENGINE_DOCKER_MEMORY_EVENTS", "")
         if not event_path:
-            raise ValueError("SPARSEVLLM_DOCKER_MEMORY_EVENTS is required")
+            raise ValueError("SPARSEENGINE_DOCKER_MEMORY_EVENTS is required")
         self.log_path = Path(event_path)
         self.check()
 

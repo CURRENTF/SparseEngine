@@ -17,9 +17,9 @@ full path; reusable preparation, sweep, validation, and plotting remain here.
 ## Framework color families
 
 The default `palettes/framework_families.json` keeps a fresh, modern palette.
-Each framework has a distinct color family: SVLLM uses related teal shades,
+Each framework has a distinct color family: SENGINE uses related teal shades,
 vLLM blue, Tangram coral, Vortex lavender, and HiSparse warm gold. Methods
-within SVLLM retain distinct markers and explicit framework/method labels.
+within SENGINE retain distinct markers and explicit framework/method labels.
 Reuse this family assignment when adding methods; preserve archived palettes
 when reproducing historical figures.
 
@@ -67,7 +67,7 @@ display is restricted. A separate 1×2 bar figure takes each method's throughput
 at its largest validated batch, not the highest throughput across batches.
 Capacity verification status is retained in the exported data, without markers
 or footnotes on the figure. Bars use the paper/whitegrid theme from
-`sparsevllm_vs_vortex/plot.py`, borderless fills, shared y limits, and direct
+`sparseengine_vs_vortex/plot.py`, borderless fills, shared y limits, and direct
 framework/method/throughput/batch labels above each bar, without a legend. This borrows visual styling only, retaining the recorded
 pooled token/time rates rather than substituting a mean or error bars.
 Bars start at zero; line panels start at their visible
@@ -105,7 +105,7 @@ Set `max_num_batched_tokens` and `engine_prefill_chunk_size` explicitly to overr
 the sweep's historical 8192-token defaults. `native_admission` maps method names
 to `wave_size` and `decode_gap_steps`; `wave_size: 0` disables staged admission.
 Without an override, the historical SnapKV wave size/gap of 1 remains unchanged.
-H2O is available as `svllm-h2o`, with its explicit parameters in `methods.h2o`.
+H2O is available as `sengine-h2o`, with its explicit parameters in `methods.h2o`.
 Zero jitter request traces now preserve the exact requested length at every batch
 size (`random-varlen-v2`); old multi-request traces could vary by one token.
 
@@ -169,7 +169,7 @@ the pinned external virtual environments. Keep `DECODE_SCRATCH_ROOT` short
 python scripts/official_experiments/sparse_decode_efficiency/sweep_decode_capacity.py \
   --config scripts/official_experiments/sparse_decode_efficiency/config.boundary-sync.json \
   --repo "$BENCHMARK_REPO" --model qwen3-30b-fp8 --gpus auto:1 \
-  --lanes svllm-vanilla,vllm-vanilla,svllm-snapkv,svllm-quest,svllm-omnikv,tangram-snapkv,hisparse-quest \
+  --lanes sengine-vanilla,vllm-vanilla,sengine-snapkv,sengine-quest,sengine-omnikv,tangram-snapkv,hisparse-quest \
   --smoke-only --attempt smoke1
 ```
 
@@ -428,7 +428,7 @@ Set these environment variables to your actual absolute paths:
 | --- | --- |
 | `BENCHMARK_REPO` | Compatible benchmark checkout |
 | `CONDA_EXE` | Conda executable |
-| `SPARSE_VLLM_ENV`, `VLLM_ENV` | Native and vLLM conda environment prefixes |
+| `SPARSE_ENGINE_ENV`, `VLLM_ENV` | Native and vLLM conda environment prefixes |
 | `QWEN3_MODEL`, `GLM47_MODEL` | Local model directories |
 | `DECODE_OUTPUT_ROOT` | New persistent campaign output directory |
 | `DECODE_SCRATCH_ROOT` | Scratch directory on a disk with sufficient space |
@@ -467,7 +467,7 @@ Use the same measured runtime source and environment as the original campaign;
 do not combine new-runtime OmniKV measurements with old-runtime baselines.
 Set the same path variables above, but choose a **new** `DECODE_OUTPUT_ROOT`.
 Pass `config.omnikv-total2048.json` to the canonical sweep with
-`--lanes svllm-omnikv --attempt total2048`, once per model. The existing sweep
+`--lanes sengine-omnikv --attempt total2048`, once per model. The existing sweep
 runs a fresh smoke, preserves its GPU reservation, and searches through the exact
 integer capacity boundary. `run_aligned_omnikv.sh BENCHMARK_REPO RESOLVED_CONFIG
 OUTPUT_ROOT` runs these two queues serially under tmux; its config must already
@@ -511,7 +511,7 @@ records Git commit/dirty status and config checksums, without copying source or
 checking source-file equality. `BASE_PLOT_DATA` is the full-path, raw-validated aligned-budget
 export, not its portable copy. Use a short absolute scratch path on the output
 volume (at most 65 characters) for multiprocessing Unix sockets.
-Set `CONDA_EXE` and `SPARSE_VLLM_ENV`, then run
+Set `CONDA_EXE` and `SPARSE_ENGINE_ENV`, then run
 `run_sm_parallel_profile.sh "$BENCHMARK_REPO" "$PROFILE_RUN_ROOT"
 "$VALIDATION_ROOT" auto:2` under tmux. `VALIDATION_ROOT` comes from the successful
 `tilelang_mla_split_profiles/validate_rule.sh` correctness run on the patched
@@ -540,7 +540,7 @@ checkout and checks the numerical oracle's actual split count before benchmarkin
 Remove the patch again after the experiment. Do not apply it to unrelated or
 newer runtime code without reviewing the changed contract.
 
-Set `BENCHMARK_REPO`, `CONDA_EXE`, `SPARSE_VLLM_ENV`, `GLM47_MODEL`,
+Set `BENCHMARK_REPO`, `CONDA_EXE`, `SPARSE_ENGINE_ENV`, `GLM47_MODEL`,
 `DECODE_SCRATCH_ROOT`, and a fresh `ABLATION_OUTPUT_ROOT`, then run under tmux:
 
 ```bash

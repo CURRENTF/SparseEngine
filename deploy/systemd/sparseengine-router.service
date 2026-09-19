@@ -1,0 +1,22 @@
+[Unit]
+Description=Sparse-Engine OpenAI smart router
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+UMask=0077
+Environment=PYTHONUNBUFFERED=1
+Environment=SPARSEENGINE_ROUTER_REQUEST_TIMEOUT_S=30
+Environment=SPARSEENGINE_ROUTER_CONTROL_TIMEOUT_S=5
+EnvironmentFile=%h/.config/sparseengine/router.env
+ExecStart=/bin/bash -c 'cd "$SPARSEENGINE_REPO" && exec env PYTHONPATH="$SPARSEENGINE_REPO/src" "$SPARSEENGINE_PYTHON" -m sparseengine.entrypoints.openai.smart_router --worker-urls "$SPARSEENGINE_WORKER_URLS" --host "$SPARSEENGINE_ROUTER_HOST" --port "$SPARSEENGINE_ROUTER_PORT" --request-timeout-s "$SPARSEENGINE_ROUTER_REQUEST_TIMEOUT_S" --control-timeout-s "$SPARSEENGINE_ROUTER_CONTROL_TIMEOUT_S" --route-log-dir "$SPARSEENGINE_ROUTE_LOG_DIR"'
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from benchmark.sparsevllm_regression.manifest import load_manifest
-from scripts.benchmarks import run_scbench_sparsevllm_methods as runner
+from benchmark.sparseengine_regression.manifest import load_manifest
+from scripts.benchmarks import run_scbench_sparseengine_methods as runner
 
 
 class FakeTokenizer:

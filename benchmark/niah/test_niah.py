@@ -21,10 +21,10 @@ import jsonlines
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from benchmark.model_adapters.sparsevllm import get_sparsevllm_generate_api
+from benchmark.model_adapters.sparseengine import get_sparseengine_generate_api
 from benchmark.niah.gen_niah import generate_text
 
-BASE_PATH = os.environ.get("SPARSEVLLM_OUTPUT_DIR", os.path.join(os.getcwd(), "outputs"))
+BASE_PATH = os.environ.get("SPARSEENGINE_OUTPUT_DIR", os.path.join(os.getcwd(), "outputs"))
 
 
 def _load_or_generate_data(
@@ -179,7 +179,7 @@ def test(
     if max_num_batched_tokens > 0:
         infer_config["max_num_batched_tokens"] = max_num_batched_tokens
 
-    chat = get_sparsevllm_generate_api(
+    chat = get_sparseengine_generate_api(
         model_path,
         infer_config,
         deltakv_checkpoint_path=deltakv_checkpoint_path,

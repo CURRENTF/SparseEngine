@@ -2,14 +2,14 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 
-from sparsevllm.configs.model import (
+from sparseengine.configs.model import (
     _finalize_model_config,
     _model_context_length,
     _validate_sparse_method_rope_compatibility,
 )
-from sparsevllm.configs.runtime import Config
-from sparsevllm.engine.cache_manager.standard import StandardCacheManager
-from sparsevllm.models.rope import resolve_rope_max_position
+from sparseengine.configs.runtime import Config
+from sparseengine.engine.cache_manager.standard import StandardCacheManager
+from sparseengine.models.rope import resolve_rope_max_position
 
 
 def test_extended_linear_rope_uses_declared_length_for_admission_and_cache():
@@ -133,7 +133,7 @@ def test_auto_max_model_len_uses_model_context_length(monkeypatch):
         max_num_seqs_in_batch=32,
     )
     monkeypatch.setattr(
-        "sparsevllm.configs.model.RuntimeLayout.from_config",
+        "sparseengine.configs.model.RuntimeLayout.from_config",
         lambda *_args, **_kwargs: object(),
     )
 
@@ -157,7 +157,7 @@ def test_auto_max_model_len_uses_effective_yarn_context_length(monkeypatch):
         max_num_seqs_in_batch=32,
     )
     monkeypatch.setattr(
-        "sparsevllm.configs.model.RuntimeLayout.from_config",
+        "sparseengine.configs.model.RuntimeLayout.from_config",
         lambda *_args, **_kwargs: object(),
     )
 
@@ -174,7 +174,7 @@ def test_explicit_max_model_len_cannot_exceed_model_context(monkeypatch):
         max_num_seqs_in_batch=32,
     )
     monkeypatch.setattr(
-        "sparsevllm.configs.model.RuntimeLayout.from_config",
+        "sparseengine.configs.model.RuntimeLayout.from_config",
         lambda *_args, **_kwargs: object(),
     )
 

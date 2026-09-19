@@ -15,28 +15,28 @@ from transformers.models.glm4_moe_lite.modeling_glm4_moe_lite import (
     apply_rotary_pos_emb_interleave,
 )
 
-from sparsevllm.config import QuantizationConfig
-from sparsevllm.debug.tiny_random import (
+from sparseengine.config import QuantizationConfig
+from sparseengine.debug.tiny_random import (
     build_tiny_random_hf_model,
     initialize_sparse_model,
 )
-from sparsevllm.distributed import ParallelContext, ParallelGroup
-from sparsevllm.distributed.moe_communication import AllReduceMoeCommunication
-from sparsevllm.engine.model_runner import ModelRunner
-from sparsevllm.layers.rotary_embedding import apply_interleaved_rotary_emb
-from sparsevllm.models.glm4_moe_lite import (
+from sparseengine.distributed import ParallelContext, ParallelGroup
+from sparseengine.distributed.moe_communication import AllReduceMoeCommunication
+from sparseengine.engine.model_runner import ModelRunner
+from sparseengine.layers.rotary_embedding import apply_interleaved_rotary_emb
+from sparseengine.models.glm4_moe_lite import (
     Glm4MoeLiteAttention,
     Glm4MoeLiteForCausalLM,
     Glm4MoeLiteRouter,
     Glm4MoeLiteSparseMoeBlock,
     build_glm4_moe_lite_mla_attention,
 )
-from sparsevllm.models.qwen3 import Qwen3MLP
-from sparsevllm.operators.attention_capabilities import AttentionScoreKind
-from sparsevllm.operators.mla_attention import MlaAttentionOpSpec
-from sparsevllm.operators.moe import TritonMoeProvider
-from sparsevllm.operators.moe_router import GlmBiasedSigmoidRouterProvider
-from sparsevllm.platforms import device_runtime
+from sparseengine.models.qwen3 import Qwen3MLP
+from sparseengine.operators.attention_capabilities import AttentionScoreKind
+from sparseengine.operators.mla_attention import MlaAttentionOpSpec
+from sparseengine.operators.moe import TritonMoeProvider
+from sparseengine.operators.moe_router import GlmBiasedSigmoidRouterProvider
+from sparseengine.platforms import device_runtime
 
 
 def _config(**overrides) -> Glm4MoeLiteConfig:
@@ -136,28 +136,28 @@ def _construction_context(context: ParallelContext):
     with ExitStack() as stack:
         stack.enter_context(
             patch(
-                "sparsevllm.models.glm4_moe_lite.get_parallel_context",
+                "sparseengine.models.glm4_moe_lite.get_parallel_context",
                 return_value=context,
             )
         )
         stack.enter_context(
-            patch("sparsevllm.layers.linear.get_parallel_context", return_value=context)
+            patch("sparseengine.layers.linear.get_parallel_context", return_value=context)
         )
         stack.enter_context(
             patch(
-                "sparsevllm.layers.embed_head.get_parallel_context",
+                "sparseengine.layers.embed_head.get_parallel_context",
                 return_value=context,
             )
         )
         stack.enter_context(
             patch(
-                "sparsevllm.models.glm4_moe_lite.resolve_moe_provider",
+                "sparseengine.models.glm4_moe_lite.resolve_moe_provider",
                 return_value=TritonMoeProvider(),
             )
         )
         stack.enter_context(
             patch(
-                "sparsevllm.models.glm4_moe_lite.resolve_moe_router_provider",
+                "sparseengine.models.glm4_moe_lite.resolve_moe_router_provider",
                 return_value=GlmBiasedSigmoidRouterProvider(),
             )
         )
@@ -229,7 +229,7 @@ def test_glm_runtime_kwargs_bind_shared_operators(
     collective_runtime = Mock()
     collective_runtime.request_moe_collectives.return_value = all_reduce
     with patch(
-        "sparsevllm.models.glm4_moe_lite.build_glm4_moe_lite_mla_attention",
+        "sparseengine.models.glm4_moe_lite.build_glm4_moe_lite_mla_attention",
         return_value=mla,
     ) as build_mla:
         kwargs = Glm4MoeLiteForCausalLM.build_runtime_kwargs(
@@ -279,11 +279,11 @@ def test_glm_decode_graph_mla_spec_owns_context_capacity() -> None:
     bound = object()
     with (
         patch(
-            "sparsevllm.models.glm4_moe_lite.get_parallel_context",
+            "sparseengine.models.glm4_moe_lite.get_parallel_context",
             return_value=_tp_context(tp_size=2),
         ),
         patch(
-            "sparsevllm.models.glm4_moe_lite.MLAAttention.bind",
+            "sparseengine.models.glm4_moe_lite.MLAAttention.bind",
             return_value=bound,
         ) as bind,
     ):
@@ -432,7 +432,7 @@ def test_glm_decode_absorption_and_value_reconstruction_match_linear_algebra() -
 def test_glm_router_uses_bias_only_for_selection_and_scales_weights() -> None:
     torch.manual_seed(23)
     with patch(
-        "sparsevllm.models.glm4_moe_lite.resolve_moe_router_provider",
+        "sparseengine.models.glm4_moe_lite.resolve_moe_router_provider",
         return_value=GlmBiasedSigmoidRouterProvider(),
     ):
         router = Glm4MoeLiteRouter(_config())
@@ -569,7 +569,7 @@ def test_glm_sparse_moe_reduces_pure_tp_over_world(
     with (
         patch.object(dist, "all_reduce") as all_reduce,
         patch(
-            "sparsevllm.models.glm4_moe_lite.get_context",
+            "sparseengine.models.glm4_moe_lite.get_context",
             return_value=SimpleNamespace(is_prefill=is_prefill),
         ),
     ):
@@ -604,7 +604,7 @@ def test_glm_tp1_prefill_uses_fused_routed_and_shared_path() -> None:
     hidden_states = torch.arange(8, dtype=torch.float32).reshape(2, 4)
 
     with patch(
-        "sparsevllm.models.glm4_moe_lite.get_context",
+        "sparseengine.models.glm4_moe_lite.get_context",
         return_value=SimpleNamespace(is_prefill=True),
     ):
         output = block(hidden_states)
@@ -700,7 +700,7 @@ def test_glm_moe_debug_contract_populates_model_runner_summaries(reduced_scale) 
     hidden_states = torch.arange(8, dtype=torch.float32).reshape(2, 4)
 
     with (
-        patch.dict(os.environ, {"SPARSEVLLM_DEBUG_MOE": "1"}),
+        patch.dict(os.environ, {"SPARSEENGINE_DEBUG_MOE": "1"}),
         patch.object(
             device_runtime,
             "is_stream_capturing",

@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from sparsevllm.configs.sparse import _normalize_h2o
-from sparsevllm.engine.cache_manager.methods.h2o import H2OCacheManager
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
-from sparsevllm.engine.chain_cache import (
+from sparseengine.configs.sparse import _normalize_h2o
+from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.engine.chain_cache import (
     ChainAdmissionPlan,
     ChainBusyError,
     ChainCacheIndex,
@@ -23,11 +23,11 @@ from sparsevllm.engine.chain_cache import (
     normalize_prefix_cache_mode,
     stable_token_digest,
 )
-from sparsevllm.engine.chain_cache import ChainCacheCoordinator
-from sparsevllm.engine.llm_engine import LLMEngine
-from sparsevllm.engine.runtime_state import RuntimeState
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.sampling_params import SamplingParams
+from sparseengine.engine.chain_cache import ChainCacheCoordinator
+from sparseengine.engine.llm_engine import LLMEngine
+from sparseengine.engine.runtime_state import RuntimeState
+from sparseengine.engine.sequence import Sequence
+from sparseengine.sampling_params import SamplingParams
 
 
 FINGERPRINT = b"chain-test-fingerprint"
@@ -1283,7 +1283,7 @@ def test_bulk_token_digest_preserves_wire_format(count):
 
 
 def test_prepared_chain_history_is_owned_validated_and_immutable():
-    from sparsevllm.engine.chain_cache import ChainRecord
+    from sparseengine.engine.chain_cache import ChainRecord
 
     coordinator = object.__new__(ChainCacheCoordinator)
     coordinator.index = ChainCacheIndex(max_token_history_tokens=8)

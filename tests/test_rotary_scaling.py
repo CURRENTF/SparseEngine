@@ -4,12 +4,12 @@ import pytest
 import torch
 from transformers import LlamaConfig, ROPE_INIT_FUNCTIONS
 
-from sparsevllm.layers.rotary_embedding import (
+from sparseengine.layers.rotary_embedding import (
     RotaryEmbedding,
     apply_rotary_emb,
     reverse_rotary_emb,
 )
-from sparsevllm.models.rope import (
+from sparseengine.models.rope import (
     resolve_rope_max_position,
     resolve_rope_scaling,
     resolve_rope_theta,

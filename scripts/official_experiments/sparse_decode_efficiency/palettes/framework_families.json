@@ -6,14 +6,14 @@
     "tangram": "#DE9098",
     "vortex": "#A68BC8",
     "hisparse": "#D9AF70",
-    "svllm": "#60BBA7"
+    "sengine": "#60BBA7"
   },
   "colors": {
     "vllm-vanilla": "#779DCF",
-    "svllm-vanilla": "#A1C9BF",
-    "svllm-snapkv": "#399D8F",
-    "svllm-quest": "#64BEA5",
-    "svllm-omnikv": "#76AAA9",
+    "sengine-vanilla": "#A1C9BF",
+    "sengine-snapkv": "#399D8F",
+    "sengine-quest": "#64BEA5",
+    "sengine-omnikv": "#76AAA9",
     "tangram-snapkv": "#DE9098",
     "hisparse-quest": "#D9AF70",
     "vortex-quest": "#A68BC8"

@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from sparsevllm.kernels.triton.prefill_score import (
+from sparseengine.kernels.triton.prefill_score import (
     PrefillScoreWorkspace,
     prefill_score_from_lse_fwd,
     prefill_score_fwd,

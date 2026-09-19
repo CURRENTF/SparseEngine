@@ -2,10 +2,10 @@
   "name": "fresh_modern",
   "colors": {
     "vllm-vanilla": "#7396D2",
-    "svllm-vanilla": "#91A7AE",
-    "svllm-snapkv": "#43B6A4",
-    "svllm-quest": "#E3AD58",
-    "svllm-omnikv": "#AD8BC7",
+    "sengine-vanilla": "#91A7AE",
+    "sengine-snapkv": "#43B6A4",
+    "sengine-quest": "#E3AD58",
+    "sengine-omnikv": "#AD8BC7",
     "tangram-snapkv": "#E28C89",
     "hisparse-quest": "#58A9C0",
     "vortex-quest": "#C487A7"

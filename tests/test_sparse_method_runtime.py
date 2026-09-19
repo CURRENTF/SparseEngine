@@ -3,17 +3,17 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.engine.sparse_methods import (
+from sparseengine.engine.sparse_methods import (
     PrefillSelectionRequest,
     SparseMethodRuntime,
     SparseStepContext,
     create_sparse_method_runtime,
 )
-from sparsevllm.engine.sparse_methods.dynamic import DeltaKVRuntime
-from sparsevllm.engine.sparse_methods.h2o import H2ORuntime
-from sparsevllm.engine.sparse_methods.passthrough import PassThroughRuntime
-from sparsevllm.engine.sparse_methods.snapkv import PyramidKVRuntime
-from sparsevllm.engine.sparse_methods.streamingllm import StreamingLLMRuntime
+from sparseengine.engine.sparse_methods.dynamic import DeltaKVRuntime
+from sparseengine.engine.sparse_methods.h2o import H2ORuntime
+from sparseengine.engine.sparse_methods.passthrough import PassThroughRuntime
+from sparseengine.engine.sparse_methods.snapkv import PyramidKVRuntime
+from sparseengine.engine.sparse_methods.streamingllm import StreamingLLMRuntime
 
 
 def _config(method: str):

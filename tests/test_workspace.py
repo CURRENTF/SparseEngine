@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from sparsevllm.operators.workspace import (
+from sparseengine.operators.workspace import (
     ReusableWorkspaceManager,
     close_workspace_manager,
     get_workspace_manager,

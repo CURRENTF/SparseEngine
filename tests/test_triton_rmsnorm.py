@@ -3,8 +3,8 @@ from unittest.mock import patch
 import pytest
 import torch
 
-import sparsevllm.layers.layernorm as layernorm
-from sparsevllm.layers.layernorm import GemmaRMSNorm, RMSNorm
+import sparseengine.layers.layernorm as layernorm
+from sparseengine.layers.layernorm import GemmaRMSNorm, RMSNorm
 
 
 def _reference(
@@ -26,7 +26,7 @@ def _reference(
 def force_triton_rmsnorm():
     layernorm._resolve_rmsnorm_ops.cache_clear()
     with patch(
-        "sparsevllm.layers.layernorm.find_spec",
+        "sparseengine.layers.layernorm.find_spec",
         return_value=None,
     ):
         yield
@@ -34,12 +34,12 @@ def force_triton_rmsnorm():
 
 
 def test_rmsnorm_rejects_unknown_explicit_provider(monkeypatch):
-    monkeypatch.setenv("SPARSEVLLM_RMSNORM_PROVIDER", "unknown")
+    monkeypatch.setenv("SPARSEENGINE_RMSNORM_PROVIDER", "unknown")
     layernorm._resolve_rmsnorm_ops.cache_clear()
     try:
         with pytest.raises(
             ValueError,
-            match="SPARSEVLLM_RMSNORM_PROVIDER",
+            match="SPARSEENGINE_RMSNORM_PROVIDER",
         ):
             RMSNorm(128)
     finally:
@@ -50,9 +50,9 @@ def test_rmsnorm_does_not_mask_broken_flashinfer_installation():
     layernorm._resolve_rmsnorm_ops.cache_clear()
     try:
         with (
-            patch("sparsevllm.layers.layernorm.find_spec", return_value=object()),
+            patch("sparseengine.layers.layernorm.find_spec", return_value=object()),
             patch(
-                "sparsevllm.layers.layernorm.import_module",
+                "sparseengine.layers.layernorm.import_module",
                 side_effect=ImportError("broken flashinfer installation"),
             ),
             pytest.raises(ImportError, match="broken flashinfer installation"),

@@ -224,10 +224,10 @@ def _make_attention_callables(
     )
     callables: dict[str, TimedCallable] = {}
     if "triton" in backends:
-        from sparsevllm.kernels.triton.flash_decoding_stage2 import (
+        from sparseengine.kernels.triton.flash_decoding_stage2 import (
             flash_decode_stage2,
         )
-        from sparsevllm.kernels.triton.gqa_flash_decoding_stage1 import (
+        from sparseengine.kernels.triton.gqa_flash_decoding_stage1 import (
             flash_decode_stage1,
         )
 
@@ -415,7 +415,7 @@ def _make_moe_callable(
     batch_size: int,
     seed: int,
 ) -> tuple[TimedCallable, dict[str, dict[str, float]]]:
-    from sparsevllm.kernels.triton.moe import fused_moe_fp8
+    from sparseengine.kernels.triton.moe import fused_moe_fp8
 
     generator = torch.Generator(device="cuda")
     generator.manual_seed(seed + 7919 * batch_size)

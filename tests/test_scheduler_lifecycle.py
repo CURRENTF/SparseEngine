@@ -5,14 +5,14 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.engine.llm_engine import LLMEngine
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
-from sparsevllm.engine.cache_manager.methods.streamingllm import StreamingLLMCacheManager
-from sparsevllm.engine.chain_cache import ChainCacheCoordinator, ChainGoneError
-from sparsevllm.engine.runtime_state import RuntimeState
-from sparsevllm.engine.scheduler import Scheduler
-from sparsevllm.engine.sequence import Sequence, SequenceStatus
-from sparsevllm.sampling_params import SamplingParams
+from sparseengine.engine.llm_engine import LLMEngine
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.engine.cache_manager.methods.streamingllm import StreamingLLMCacheManager
+from sparseengine.engine.chain_cache import ChainCacheCoordinator, ChainGoneError
+from sparseengine.engine.runtime_state import RuntimeState
+from sparseengine.engine.scheduler import Scheduler
+from sparseengine.engine.sequence import Sequence, SequenceStatus
+from sparseengine.sampling_params import SamplingParams
 from test_chain_offload import make_manager
 from test_prefill_schedule_policy import FakeMemoryOracle, make_scheduler
 

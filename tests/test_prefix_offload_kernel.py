@@ -8,23 +8,23 @@ pytest.importorskip(
     reason="prefix offload transfer tests require the prefix-offload extra",
 )
 
-from sparsevllm.engine.cache_manager.prefix_offload import (
+from sparseengine.engine.cache_manager.prefix_offload import (
     PinnedPrefixKVPool,
     PinnedQuestPrefixPool,
     QuestPrefixOffloadController,
     StandardPrefixOffloadController,
 )
-from sparsevllm.engine.cache_manager.methods.quest import QuestPrefixBlockPayload
-from sparsevllm.engine.cache_manager.standard import StandardPrefixBlockPayload
-from sparsevllm.engine.prefix_cache import PrefixCacheBlock, RadixPrefixIndex
-from sparsevllm.engine.mixed_prefix_offload import (
+from sparseengine.engine.cache_manager.methods.quest import QuestPrefixBlockPayload
+from sparseengine.engine.cache_manager.standard import StandardPrefixBlockPayload
+from sparseengine.engine.prefix_cache import PrefixCacheBlock, RadixPrefixIndex
+from sparseengine.engine.mixed_prefix_offload import (
     MixedPrefixOffloadController,
     MixedQuestPrefixOffloadController,
     PinnedMixedPrefixPool,
     PinnedMixedQuestPrefixPool,
 )
-from sparsevllm.engine.prefix_cache_coordinator import MixedPrefixBlockPayload
-from sparsevllm.engine.recurrent_state_manager import (
+from sparseengine.engine.prefix_cache_coordinator import MixedPrefixBlockPayload
+from sparseengine.engine.recurrent_state_manager import (
     RecurrentPrefixPayload,
     RecurrentStateSpec,
     RecurrentTensorSpec,

@@ -1,7 +1,7 @@
-"""Reproducible vLLM latency baseline for Sparse-vLLM comparisons.
+"""Reproducible vLLM latency baseline for Sparse-Engine comparisons.
 
 Run this script with an isolated vLLM environment. It intentionally imports
-vLLM inside ``main`` so the Sparse-vLLM project environment does not need vLLM.
+vLLM inside ``main`` so the Sparse-Engine project environment does not need vLLM.
 """
 
 from __future__ import annotations

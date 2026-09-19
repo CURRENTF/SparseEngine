@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 
-from sparsevllm.engine.llm_engine import LLMEngine
-from sparsevllm.engine.model_runner import ModelRunner
-from sparsevllm.engine.startup import (
+from sparseengine.engine.llm_engine import LLMEngine
+from sparseengine.engine.model_runner import ModelRunner
+from sparseengine.engine.startup import (
     CacheRuntimeBuildMeasurement,
     DeviceMemorySnapshot,
     MemoryProfileMeasurement,

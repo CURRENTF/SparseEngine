@@ -55,7 +55,7 @@ class _RecordingSparseVLLMSearch(run_scbench.SparseVLLMSCBenchSearch):
         return f"{mode}-{turn_idx}"
 
 
-def test_sparsevllm_scdq_keeps_shared_context_as_reusable_prefix():
+def test_sparseengine_scdq_keeps_shared_context_as_reusable_prefix():
     search = _RecordingSparseVLLMSearch()
     example = {
         "prompts": [[10, 11, 12, 13], "Q1", "Q2"],
@@ -74,7 +74,7 @@ def test_sparsevllm_scdq_keeps_shared_context_as_reusable_prefix():
     assert search.calls[1]["reusable_prefix_tokens"] == 4
 
 
-def test_sparsevllm_multiturn_accumulates_history_prefix():
+def test_sparseengine_multiturn_accumulates_history_prefix():
     search = _RecordingSparseVLLMSearch()
     example = {
         "prompts": [[1, 2], "A", "B"],
@@ -93,7 +93,7 @@ def test_sparsevllm_multiturn_accumulates_history_prefix():
     assert search.calls[2]["reusable_prefix_tokens"] == 3
 
 
-def test_sparsevllm_adapter_accepts_hit_beyond_planned_session_prefix():
+def test_sparseengine_adapter_accepts_hit_beyond_planned_session_prefix():
     accounting = run_scbench._cache_reuse_accounting(
         cached_tokens=16,
         planned_session_eligible_tokens=0,
@@ -113,7 +113,7 @@ def test_sparsevllm_adapter_accepts_hit_beyond_planned_session_prefix():
     ) == "cached_tokens=32 exceeds max_usable_cache_tokens=16."
 
 
-def test_sparsevllm_prefix_summary_reports_reuse(tmp_path):
+def test_sparseengine_prefix_summary_reports_reuse(tmp_path):
     trace_path = tmp_path / "prefix_cache_trace_scbench_kv_scdq.jsonl"
     summary_path = tmp_path / "prefix_cache_summary_scbench_kv_scdq.json"
     records = [
@@ -147,7 +147,7 @@ def test_sparsevllm_prefix_summary_reports_reuse(tmp_path):
         encoding="utf-8",
     )
 
-    summary = run_scbench._write_sparsevllm_prefix_summary(trace_path, summary_path)
+    summary = run_scbench._write_sparseengine_prefix_summary(trace_path, summary_path)
 
     assert summary["status"] == "success"
     assert summary["request_count"] == 2
@@ -203,7 +203,7 @@ def test_compare_script_builds_isolated_on_off_commands(tmp_path):
 
     assert "benchmark/scbench/run_scbench.py" in cmd[2]
     assert "--same_context_different_query" in cmd
-    assert cmd[cmd.index("--attn_type") + 1] == "sparsevllm"
+    assert cmd[cmd.index("--attn_type") + 1] == "sparseengine"
     encoded_hyper = json.loads(cmd[cmd.index("--hyper_param") + 1])
     assert encoded_hyper["enable_prefix_caching"] is True
     assert encoded_hyper["prefix_cache_block_size"] == 16

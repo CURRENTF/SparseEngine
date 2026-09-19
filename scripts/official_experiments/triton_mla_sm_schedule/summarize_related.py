@@ -17,7 +17,7 @@ for source, engine in ((args.baseline_root, "Legacy Triton"), (args.new_root, "S
                       "directory": str((source / "queue" / name).resolve()), "concurrency": concurrency, "phase": "measure"})
 case_path = args.new_root / "comparison_cases.json"
 case_path.write_text(json.dumps({"cases": cases}, indent=2) + "\n")
-summarizer = Path(__file__).resolve().parents[1] / "sparsevllm_vs_vortex/summarize.py"
+summarizer = Path(__file__).resolve().parents[1] / "sparseengine_vs_vortex/summarize.py"
 output = args.output or args.new_root / "comparison.json"
 subprocess.run([sys.executable, str(summarizer), "--root", str(args.new_root), "--cases", str(case_path),
                 "--output", str(output)], check=True)

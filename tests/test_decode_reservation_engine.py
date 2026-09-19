@@ -6,15 +6,15 @@ import socket
 import pytest
 import torch
 
-from sparsevllm import LLM, SamplingParams
+from sparseengine import LLM, SamplingParams
 
 
 @pytest.mark.parametrize('method', ['', 'quest', 'snapkv', 'h2o'])
 @pytest.mark.parametrize('graph', [False, True])
 def test_window_output_invariance(method, graph, tmp_path, monkeypatch):
-    model = os.getenv('SPARSEVLLM_DECODE_WINDOW_MODEL')
+    model = os.getenv('SPARSEENGINE_DECODE_WINDOW_MODEL')
     if not model or not torch.cuda.is_available():
-        pytest.skip('set SPARSEVLLM_DECODE_WINDOW_MODEL and expose idle CUDA devices')
+        pytest.skip('set SPARSEENGINE_DECODE_WINDOW_MODEL and expose idle CUDA devices')
     tiny = tmp_path / 'tiny.json'
     tiny.write_text(json.dumps(dict(num_hidden_layers=2, hidden_size=256,
                                    intermediate_size=512, num_attention_heads=4,
@@ -24,9 +24,9 @@ def test_window_output_invariance(method, graph, tmp_path, monkeypatch):
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             port = sock.getsockname()[1]
-        monkeypatch.setenv('SPARSEVLLM_MASTER_PORT', str(port))
+        monkeypatch.setenv('SPARSEENGINE_MASTER_PORT', str(port))
         llm = LLM(model, tiny_random=True, tiny_random_config=str(tiny),
-                  tensor_parallel_size=int(os.getenv('SPARSEVLLM_DECODE_WINDOW_TP', '1')),
+                  tensor_parallel_size=int(os.getenv('SPARSEENGINE_DECODE_WINDOW_TP', '1')),
                   sparse_method=method, enable_prefix_caching=True,
                   max_model_len=128, max_num_batched_tokens=128,
                   engine_prefill_chunk_size=64, max_num_seqs_in_batch=2,

@@ -5,14 +5,14 @@ from unittest.mock import patch
 
 import pytest
 
-import sparsevllm.operators.registry as operator_registry
-from sparsevllm.kernels.external.support import (
+import sparseengine.operators.registry as operator_registry
+from sparseengine.kernels.external.support import (
     ExternalKernelFamilyError,
     KernelFamilyHealth,
     KernelFamilyState,
     RequiredExternalKernelFamilyError,
 )
-from sparsevllm.operators.registry import (
+from sparseengine.operators.registry import (
     NoProviderError,
     OpRegistry,
     OpResolver,
@@ -26,7 +26,7 @@ from sparsevllm.operators.registry import (
     operator_runtime_stats,
     record_operator_binding,
 )
-from sparsevllm.platforms.interface import DeviceCaps, PlatformEnum
+from sparseengine.platforms.interface import DeviceCaps, PlatformEnum
 
 
 @dataclass(frozen=True)

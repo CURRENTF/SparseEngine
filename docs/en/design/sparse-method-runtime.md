@@ -1,7 +1,7 @@
 # Sparse Method Runtime Architecture
 
 This document defines the control-plane boundary for first-class sparse methods
-in Sparse-vLLM. It is the architectural contract for adding a method, refactoring
+in Sparse-Engine. It is the architectural contract for adding a method, refactoring
 an existing method, or integrating a model with native dynamic sparse attention.
 
 The central rule is:
@@ -83,7 +83,7 @@ State ownership is determined by lifetime and semantics, not convenience:
 
 ## The Public Controller Facade
 
-`src/sparsevllm/engine/sparse_controller.py` intentionally stays small. Its
+`src/sparseengine/engine/sparse_controller.py` intentionally stays small. Its
 engine-facing lifecycle is:
 
 ```python
@@ -106,7 +106,7 @@ hook, or another narrow owner-specific interface.
 
 ## The Method Runtime Contract
 
-`src/sparsevllm/engine/sparse_methods/base.py` defines typed lifecycle inputs:
+`src/sparseengine/engine/sparse_methods/base.py` defines typed lifecycle inputs:
 
 - `SparseStepContext`
 - `PrefillSelectionRequest`

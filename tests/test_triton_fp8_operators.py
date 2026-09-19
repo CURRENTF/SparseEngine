@@ -2,17 +2,17 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from sparsevllm.operators.fp8_linear import (
+from sparseengine.operators.fp8_linear import (
     FlashInferGroupwiseSm120Fp8LinearProvider,
     Fp8LinearSpec,
     _sm120_activation_workspace,
     resolve_fp8_linear_provider,
 )
-from sparsevllm.platforms import current_platform
-from sparsevllm.quantization.fp8 import fp8_blockwise_linear_reference
-from sparsevllm.kernels.triton.fp8_blockwise import fp8_blockwise_matmul
-from sparsevllm.kernels.triton.moe import fused_moe_fp8
-from sparsevllm.kernels.triton.minimax_m2_moe import fused_minimax_m2_moe_fp8
+from sparseengine.platforms import current_platform
+from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+from sparseengine.kernels.triton.fp8_blockwise import fp8_blockwise_matmul
+from sparseengine.kernels.triton.moe import fused_moe_fp8
+from sparseengine.kernels.triton.minimax_m2_moe import fused_minimax_m2_moe_fp8
 
 
 pytestmark = pytest.mark.skipif(
@@ -346,7 +346,7 @@ def test_qwen_fp8_decode_routes_preserve_packed_weights_across_graph_replays(tok
     The small generic MoE oracle does not cover the Qwen expert dimensions,
     shared layout between providers, or changing routes in a captured graph.
     """
-    from sparsevllm.operators.moe import (
+    from sparseengine.operators.moe import (
         FlashInferCutlassFp8MoeProvider,
         MoeOpSpec,
         TritonUpGateFp8MoeProvider,

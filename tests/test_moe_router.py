@@ -3,13 +3,13 @@ from __future__ import annotations
 import pytest
 import torch
 
-from sparsevllm.operators.moe_router import (
+from sparseengine.operators.moe_router import (
     GlmBiasedSigmoidRouterProvider,
     MiniMaxBiasedSigmoidRouterProvider,
     MoeRouterOpSpec,
     TritonMoeRouterProvider,
 )
-from sparsevllm.platforms import DeviceCaps, PlatformEnum
+from sparseengine.platforms import DeviceCaps, PlatformEnum
 
 
 def _caps() -> DeviceCaps:
@@ -68,7 +68,7 @@ def _assert_same_routes(
 
 def test_glm_router_rejects_wrong_shape() -> None:
     spec = MoeRouterOpSpec(32, 4, torch.float32, True, True, "biased_sigmoid")
-    from sparsevllm.platforms import DeviceCaps, PlatformEnum
+    from sparseengine.platforms import DeviceCaps, PlatformEnum
 
     caps = DeviceCaps(
         platform=PlatformEnum.CUDA,

@@ -61,7 +61,7 @@ provider binding.
   forward. Do not treat a few fixed-shape experiments as production support.
 - When a standard upstream provider already exposes a graph-stable lifecycle,
   adapt that lifecycle instead of cloning its kernel. Use a repository-owned
-  fixed-grid provider for missing Sparse-vLLM semantics, portable fallback, or
+  fixed-grid provider for missing Sparse-Engine semantics, portable fallback, or
   an algorithmic improvement supported by representative validation, or an exact
   measured tuning override. Choose defaults deliberately through the portfolio.
 - Fail unsupported capacity or layout before cache mutation. Once bound, do not

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Evaluate Sparse-vLLM methods on the self-contained RULER core task set.
+"""Evaluate Sparse-Engine methods on the self-contained RULER core task set.
 
 The runner covers retrieval, multi-hop tracing, and aggregation without
 requiring downloaded essays or QA corpora.  It uses this repo's native
-Sparse-vLLM inference path and RULER's string-match-all scoring contract.
+Sparse-Engine inference path and RULER's string-match-all scoring contract.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import torch
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from benchmark.model_adapters.sparsevllm import get_sparsevllm_generate_api
+from benchmark.model_adapters.sparseengine import get_sparseengine_generate_api
 from benchmark.ruler_vt.tasks import (
     RulerSample,
     SUPPORTED_TASKS,
@@ -467,10 +467,10 @@ def write_run_info(
 
 
 def _cache_stats(generate_fn) -> dict[str, int]:
-    llm = getattr(generate_fn, "_sparsevllm_llm", None)
+    llm = getattr(generate_fn, "_sparseengine_llm", None)
     if llm is None:
         raise RuntimeError(
-            "SparseVLLM RULER generation did not expose _sparsevllm_llm; "
+            "SparseVLLM RULER generation did not expose _sparseengine_llm; "
             "cannot validate prefix-cache execution."
         )
     stats = llm.model_runner.runtime_state.free_slot_stats()
@@ -596,7 +596,7 @@ def evaluate_samples(
         path.write_text("", encoding="utf-8")
 
     tokenizer_path = args.tokenizer_path or args.model_path
-    generate = get_sparsevllm_generate_api(
+    generate = get_sparseengine_generate_api(
         model_path=args.model_path,
         infer_config=infer_config,
         deltakv_checkpoint_path=args.deltakv_checkpoint_path,

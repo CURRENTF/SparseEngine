@@ -8,12 +8,12 @@ from unittest.mock import ANY, Mock, patch
 import pytest
 import torch
 
-from sparsevllm.kernels.external.support import (
+from sparseengine.kernels.external.support import (
     KernelFamilyHealth,
     KernelFamilyState,
     RequiredExternalKernelFamilyError,
 )
-from sparsevllm.operators.all_reduce import (
+from sparseengine.operators.all_reduce import (
     ALL_REDUCE_REGISTRY,
     AllReduceGraphBufferMetadata,
     AllReduceOpSpec,
@@ -25,8 +25,8 @@ from sparsevllm.operators.all_reduce import (
     _flashinfer_dependency_support,
     _loaded_cuda_runtime_path,
 )
-from sparsevllm.operators.registry import OpResolver, SupportResult
-from sparsevllm.platforms import DeviceCaps, PlatformEnum
+from sparseengine.operators.registry import OpResolver, SupportResult
+from sparseengine.platforms import DeviceCaps, PlatformEnum
 
 
 def _spec(
@@ -97,7 +97,7 @@ def test_all_reduce_rejects_missing_required_flashinfer() -> None:
     )
     with (
         patch(
-            "sparsevllm.operators.all_reduce.flashinfer_kernel_support",
+            "sparseengine.operators.all_reduce.flashinfer_kernel_support",
             side_effect=error,
         ),
         pytest.raises(
@@ -112,7 +112,7 @@ def test_vllm_all_reduce_uses_explicit_cuda_ordinals_not_global_ranks():
     with (
         patch.dict(sys.modules, _fake_flashinfer_modules()),
         patch(
-            "sparsevllm.operators.all_reduce._flashinfer_dependency_support",
+            "sparseengine.operators.all_reduce._flashinfer_dependency_support",
             return_value=SupportResult.yes("test dependency"),
         ),
     ):
@@ -125,7 +125,7 @@ def test_vllm_all_reduce_rejects_duplicate_ordinals_from_multiple_hosts():
     with (
         patch.dict(sys.modules, _fake_flashinfer_modules()),
         patch(
-            "sparsevllm.operators.all_reduce._flashinfer_dependency_support",
+            "sparseengine.operators.all_reduce._flashinfer_dependency_support",
             return_value=SupportResult.yes("test dependency"),
         ),
     ):
@@ -138,7 +138,7 @@ def test_vllm_all_reduce_is_selected_for_cuda_graph_replay():
     with (
         patch.dict(sys.modules, _fake_flashinfer_modules()),
         patch(
-            "sparsevllm.operators.all_reduce._flashinfer_dependency_support",
+            "sparseengine.operators.all_reduce._flashinfer_dependency_support",
             return_value=SupportResult.yes("test dependency"),
         ),
     ):
@@ -346,14 +346,14 @@ def test_trtllm_all_reduce_binds_runtime_before_workspace_allocation():
     with (
         patch.dict(sys.modules, modules),
         patch(
-            "sparsevllm.operators.all_reduce._loaded_cuda_runtime_path",
+            "sparseengine.operators.all_reduce._loaded_cuda_runtime_path",
             return_value="/env/nvidia/cu13/lib/libcudart.so.13",
         ),
         patch.object(torch.cuda, "current_device", return_value=0),
         patch.object(torch.distributed, "get_backend", return_value="nccl"),
-        patch("sparsevllm.operators.all_reduce.platforms.current_platform") as platform,
+        patch("sparseengine.operators.all_reduce.platforms.current_platform") as platform,
         patch(
-            "sparsevllm.operators.all_reduce._flashinfer_trtllm_profile",
+            "sparseengine.operators.all_reduce._flashinfer_trtllm_profile",
             return_value=SimpleNamespace(max_rows=16, provider_output_buffer=False),
         ),
     ):
@@ -418,12 +418,12 @@ def test_vllm_all_reduce_initializes_the_upstream_nvlink_mode(world_size, full_n
     with (
         patch.dict(sys.modules, modules),
         patch(
-            "sparsevllm.operators.all_reduce.platforms",
+            "sparseengine.operators.all_reduce.platforms",
             SimpleNamespace(
                 current_platform=SimpleNamespace(supports_nvlink_group=topology)
             ),
         ),
-        patch("sparsevllm.operators.all_reduce._prepare_flashinfer_cuda_runtime"),
+        patch("sparseengine.operators.all_reduce._prepare_flashinfer_cuda_runtime"),
         patch.object(torch.cuda, "current_device", return_value=0),
         patch.object(torch.cuda, "can_device_access_peer", return_value=True),
         patch.object(torch, "empty", return_value=rank_data),
@@ -460,11 +460,11 @@ def test_extended_all_reduce_profile_requires_verified_nvlink(
     topology = Mock(return_value=full_nvlink)
     with (
         patch(
-            "sparsevllm.operators.all_reduce.importlib.util.find_spec",
+            "sparseengine.operators.all_reduce.importlib.util.find_spec",
             return_value=object() if nvml_present else None,
         ),
         patch(
-            "sparsevllm.operators.all_reduce.platforms",
+            "sparseengine.operators.all_reduce.platforms",
             SimpleNamespace(
                 current_platform=SimpleNamespace(supports_nvlink_group=topology)
             ),
@@ -487,11 +487,11 @@ def test_extended_all_reduce_profile_surfaces_topology_query_failure():
     )
     with (
         patch(
-            "sparsevllm.operators.all_reduce.importlib.util.find_spec",
+            "sparseengine.operators.all_reduce.importlib.util.find_spec",
             return_value=object(),
         ),
         patch(
-            "sparsevllm.operators.all_reduce.platforms",
+            "sparseengine.operators.all_reduce.platforms",
             SimpleNamespace(
                 current_platform=SimpleNamespace(
                     supports_nvlink_group=Mock(
@@ -510,7 +510,7 @@ def test_vllm_all_reduce_rejects_odd_rank_count_before_loading_extension():
         _spec((0, 1)), world_size=3, ranks=(0, 1, 2), device_ordinals=(0, 1, 2)
     )
     with patch(
-        "sparsevllm.operators.all_reduce._flashinfer_dependency_support"
+        "sparseengine.operators.all_reduce._flashinfer_dependency_support"
     ) as dependency:
         assert not FlashInferVllmAllReduceProvider.supports(spec, _caps()).supported
     dependency.assert_not_called()
@@ -521,6 +521,6 @@ def test_extended_all_reduce_profile_does_not_change_eager_selection():
         _spec((0, 1)),
         max_rows=FlashInferVllmAllReduceProfile.max_rows_without_nvlink + 1,
     )
-    with patch("sparsevllm.operators.all_reduce.importlib.util.find_spec") as discover:
+    with patch("sparseengine.operators.all_reduce.importlib.util.find_spec") as discover:
         assert not FlashInferVllmAllReduceProfile.matches(spec, _caps()).matched
     discover.assert_not_called()

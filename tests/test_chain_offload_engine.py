@@ -7,27 +7,27 @@ import json
 import pytest
 import torch
 
-from sparsevllm import LLM, SamplingParams
+from sparseengine import LLM, SamplingParams
 
 
 @pytest.mark.parametrize("method", ["snapkv", "h2o"])
 @pytest.mark.parametrize("graph", [False, True], ids=["eager", "graph"])
 def test_chain_restore_matches_resident_engine(method, graph, monkeypatch):
-    model = os.getenv("SPARSEVLLM_CHAIN_OFFLOAD_MODEL")
+    model = os.getenv("SPARSEENGINE_CHAIN_OFFLOAD_MODEL")
     if not model or not torch.cuda.is_available():
-        pytest.skip("set SPARSEVLLM_CHAIN_OFFLOAD_MODEL and expose idle CUDA devices")
-    tp = int(os.getenv("SPARSEVLLM_CHAIN_OFFLOAD_TP", "1"))
+        pytest.skip("set SPARSEENGINE_CHAIN_OFFLOAD_MODEL and expose idle CUDA devices")
+    tp = int(os.getenv("SPARSEENGINE_CHAIN_OFFLOAD_TP", "1"))
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
-    monkeypatch.setenv("SPARSEVLLM_MASTER_PORT", str(port))
+    monkeypatch.setenv("SPARSEENGINE_MASTER_PORT", str(port))
     llm = LLM(
         model, sparse_method=method, tensor_parallel_size=tp,
         enable_prefix_caching=True, enable_prefix_cache_offload=True,
         prefix_cache_host_size_gb=0.25, max_model_len=256,
         max_num_batched_tokens=256, engine_prefill_chunk_size=64,
         max_num_seqs_in_batch=1, max_num_seqs_in_gpu=2,
-        gpu_memory_utilization=float(os.getenv("SPARSEVLLM_CHAIN_OFFLOAD_GPU_FRACTION", "0.04")),
+        gpu_memory_utilization=float(os.getenv("SPARSEENGINE_CHAIN_OFFLOAD_GPU_FRACTION", "0.04")),
         sink_keep_tokens=4, recent_keep_tokens=8, decode_keep_tokens=16,
         h2o_decode_budget=32, h2o_prefill_budget=32,
         h2o_decode_eviction_interval=1,

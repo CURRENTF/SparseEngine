@@ -6,7 +6,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-SYSTEMS="${1:-svllm-vanilla,svllm-snapkv,vllm-vanilla}" # comma-separated
+SYSTEMS="${1:-sengine-vanilla,sengine-snapkv,vllm-vanilla}" # comma-separated
 MODEL_NAME="${2:-qwen3_30b}" # qwen3_30b | qwen3_8b | qwen25_7b | custom path
 GPUS="${3:-0,1}"
 PROMPT_LENS="${PROMPT_LENS:-8192,16384,32768}"
@@ -34,8 +34,8 @@ esac
 
 # 1. Environment & Path Configurations
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-BASE_OUT="${SPARSEVLLM_OUTPUT_DIR:-outputs}/efficiency_probe_$(date +%Y%m%d_%H%M%S)"
-MANIFEST_PATH="${SPARSEVLLM_REGRESSION_MANIFEST:-${REPO_ROOT}/benchmark/sparsevllm_regression/manifest.json}"
+BASE_OUT="${SPARSEENGINE_OUTPUT_DIR:-outputs}/efficiency_probe_$(date +%Y%m%d_%H%M%S)"
+MANIFEST_PATH="${SPARSEENGINE_REGRESSION_MANIFEST:-${REPO_ROOT}/benchmark/sparseengine_regression/manifest.json}"
 mkdir -p "${BASE_OUT}"
 
 case "${MODEL_NAME}" in
@@ -107,27 +107,27 @@ for SYS in "${SYS_ARR[@]}"; do
 
   # 1. Determine Engine and Sparse Method
   case "${SYS_TRIM}" in
-    svllm-vanilla)
-      ENGINE="sparsevllm"
+    sengine-vanilla)
+      ENGINE="sparseengine"
       SPARSE_METHOD="vanilla"
       ;;
-    svllm-snapkv)
-      ENGINE="sparsevllm"
+    sengine-snapkv)
+      ENGINE="sparseengine"
       SPARSE_METHOD="snapkv"
       ;;
-    svllm-h2o)
-      ENGINE="sparsevllm"
+    sengine-h2o)
+      ENGINE="sparseengine"
       SPARSE_METHOD="h2o"
       ;;
-    svllm-omnikv)
-      ENGINE="sparsevllm"
+    sengine-omnikv)
+      ENGINE="sparseengine"
       SPARSE_METHOD="omnikv"
       ;;
-    svllm-deltakv)
-      ENGINE="sparsevllm"
+    sengine-deltakv)
+      ENGINE="sparseengine"
       SPARSE_METHOD="deltakv"
       if [ -z "${DELTAKV_COMPRESSOR_PATH}" ]; then
-        echo "ERROR: svllm-deltakv requires DELTAKV_COMPRESSOR_PATH." >&2
+        echo "ERROR: sengine-deltakv requires DELTAKV_COMPRESSOR_PATH." >&2
         exit 2
       fi
       ;;
@@ -136,13 +136,13 @@ for SYS in "${SYS_ARR[@]}"; do
       SPARSE_METHOD="vanilla"
       ;;
     *)
-      ENGINE="sparsevllm"
+      ENGINE="sparseengine"
       SPARSE_METHOD="${SYS_TRIM}"
       ;;
   esac
 
   SYSTEM_HPARAMS="{}"
-  if [ "${ENGINE}" = sparsevllm ]; then
+  if [ "${ENGINE}" = sparseengine ]; then
     OVERRIDES_JSON=$("${PYTHON_BIN}" -c '
 import json, sys
 tp_size, method, score_mode, compressor, omnikv_layers = sys.argv[1:]
@@ -156,7 +156,7 @@ if method == "omnikv" and omnikv_layers:
 print(json.dumps(params, separators=(",", ":")))
 ' "${TP_SIZE}" "${SPARSE_METHOD}" "${SPARSE_PREFILL_SCORE_MODE}" "${DELTAKV_COMPRESSOR_PATH}" "${OMNIKV_FULL_ATTENTION_LAYERS}")
     CONFIG_ARGS=(
-      -m benchmark.sparsevllm_regression.manifest
+      -m benchmark.sparseengine_regression.manifest
       --manifest "${MANIFEST_PATH}"
       --method "${SPARSE_METHOD}"
       --overrides-json "${OVERRIDES_JSON}"

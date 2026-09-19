@@ -3,7 +3,7 @@
   "output_root": "${DECODE_OUTPUT_ROOT}",
   "scratch_root": "${DECODE_SCRATCH_ROOT}",
   "conda": "${CONDA_EXE}",
-  "native_env": "${SPARSE_VLLM_ENV}",
+  "native_env": "${SPARSE_ENGINE_ENV}",
   "vllm_env": "${VLLM_ENV}",
   "input_len": 131072,
   "output_len": 2048,

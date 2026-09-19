@@ -19,7 +19,7 @@ from metrics import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BASE_PATH = os.getenv("SPARSEVLLM_OUTPUT_DIR", str(REPO_ROOT / "outputs"))
+BASE_PATH = os.getenv("SPARSEENGINE_OUTPUT_DIR", str(REPO_ROOT / "outputs"))
 SAMPLE_STATUSES = {
     "success",
     "invalid_input",

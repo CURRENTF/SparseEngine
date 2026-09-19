@@ -8,14 +8,14 @@ import torch
 from safetensors.torch import save_file
 from torch import nn
 
-from sparsevllm.layers.linear import (
+from sparseengine.layers.linear import (
     AbsorbedColumnParallelLinear,
     MergedReplicatedLinear,
     RowParallelLinear,
 )
-from sparsevllm.quantization.config import QuantizationConfig
-from sparsevllm.quantization.fp8 import expand_fp8_tensor_scale
-from sparsevllm.utils.loader import _read_safetensors_shard, load_model
+from sparseengine.quantization.config import QuantizationConfig
+from sparseengine.quantization.fp8 import expand_fp8_tensor_scale
+from sparseengine.utils.loader import _read_safetensors_shard, load_model
 
 
 def _quantization():
@@ -31,7 +31,7 @@ def _weight(shape):
 
 
 def test_missing_generation_config_preserves_all_model_stop_ids(tmp_path):
-    from sparsevllm.engine.llm_engine import _resolve_eos_token_ids
+    from sparseengine.engine.llm_engine import _resolve_eos_token_ids
 
     config = SimpleNamespace(eos_token_id=[154820, 154827, 154829])
     assert _resolve_eos_token_ids(str(tmp_path), config, 154820) == (154820, 154827, 154829)
@@ -39,14 +39,14 @@ def test_missing_generation_config_preserves_all_model_stop_ids(tmp_path):
 
 def test_existing_generation_config_overrides_model_stop_ids(tmp_path):
     from transformers import GenerationConfig
-    from sparsevllm.engine.llm_engine import _resolve_eos_token_ids
+    from sparseengine.engine.llm_engine import _resolve_eos_token_ids
 
     GenerationConfig(eos_token_id=[5, 6]).save_pretrained(tmp_path)
     assert _resolve_eos_token_ids(str(tmp_path), SimpleNamespace(eos_token_id=7), 6) == (5, 6)
 
 
 def test_malformed_generation_config_does_not_use_model_defaults(tmp_path):
-    from sparsevllm.engine.llm_engine import _resolve_eos_token_ids
+    from sparseengine.engine.llm_engine import _resolve_eos_token_ids
 
     (tmp_path / "generation_config.json").write_text("invalid JSON")
     with pytest.raises(OSError):
@@ -61,8 +61,8 @@ def test_scalar_checkpoint_load_preserves_merged_and_tp_weights(tmp_path, tp_siz
     assert QuantizationConfig.from_hf_config(quantization.to_dict()).checkpoint_scale_layout == "per_tensor"
     context = SimpleNamespace(attn_tp_size=tp_size, attn_tp_rank=tp_rank)
     with (
-        patch("sparsevllm.layers.linear.get_parallel_context", return_value=context),
-        patch("sparsevllm.layers.linear.QuantizationRegistry.resolve_linear_provider"),
+        patch("sparseengine.layers.linear.get_parallel_context", return_value=context),
+        patch("sparseengine.layers.linear.QuantizationRegistry.resolve_linear_provider"),
     ):
         model = nn.Module()
         model.packed_modules_mapping = {"q_a": ("qkv_a", 0), "kv_a": ("qkv_a", 1)}
@@ -122,9 +122,9 @@ def test_skipped_expert_scales_follow_weight_ownership(tmp_path):
 @pytest.mark.parametrize("tp_size,tp_rank", [(1, 0), (4, 1)])
 def test_glm_checkpoint_loads_dense_shared_and_routed_projections(tmp_path, tp_size, tp_rank):
     from tests.test_glm4_moe_lite import _config, _construction_context, _tp_context
-    from sparsevllm.debug.tiny_random import build_tiny_random_hf_model
-    from sparsevllm.models.glm4_moe_lite import Glm4MoeLiteForCausalLM
-    from sparsevllm.operators.mla_attention import MlaAttentionOpSpec
+    from sparseengine.debug.tiny_random import build_tiny_random_hf_model
+    from sparseengine.models.glm4_moe_lite import Glm4MoeLiteForCausalLM
+    from sparseengine.operators.mla_attention import MlaAttentionOpSpec
 
     config = _config(hidden_size=128, intermediate_size=512, moe_intermediate_size=512,
                      q_lora_rank=128, kv_lora_rank=128, num_attention_heads=4,
@@ -136,7 +136,7 @@ def test_glm_checkpoint_loads_dense_shared_and_routed_projections(tmp_path, tp_s
                           spec=MlaAttentionOpSpec(4, 128, 64, 128, 128,
                                                   torch.bfloat16, torch.bfloat16, tp_size, False))
     with _construction_context(_tp_context(tp_rank, tp_size)), patch(
-        "sparsevllm.layers.linear.QuantizationRegistry.resolve_linear_provider"
+        "sparseengine.layers.linear.QuantizationRegistry.resolve_linear_provider"
     ):
         model = Glm4MoeLiteForCausalLM(config, mla_attention=mla,
                                       mlp_chunk_size=8, decode_graph=False)
@@ -161,7 +161,7 @@ def test_glm_checkpoint_loads_dense_shared_and_routed_projections(tmp_path, tp_s
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires an idle CUDA GPU")
 def test_glm_fp8_projection_graph_matches_independent_quantized_math():
-    from sparsevllm.operators.fp8_linear import resolve_fp8_linear_provider
+    from sparseengine.operators.fp8_linear import resolve_fp8_linear_provider
 
     torch.manual_seed(29)
     x = torch.randn(3, 2048, device="cuda", dtype=torch.bfloat16)
@@ -190,7 +190,7 @@ def test_glm_fp8_projection_graph_matches_independent_quantized_math():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires an idle CUDA GPU")
 def test_tensor_fp8_linear_preserves_merged_scales_and_graph_inputs():
     """Catch accidental fused-scale collapse and stale activation quantization on replay."""
-    from sparsevllm.operators.fp8_linear import resolve_fp8_linear_provider
+    from sparseengine.operators.fp8_linear import resolve_fp8_linear_provider
 
     torch.manual_seed(91)
     weight = _weight((1344, 2048)).cuda()
@@ -229,7 +229,7 @@ def test_tensor_fp8_linear_preserves_merged_scales_and_graph_inputs():
 @pytest.mark.parametrize("tensor_scales", [False, True])
 def test_glm_fp8_experts_graph_matches_quantized_reference(tensor_scales):
     from tests.test_triton_fp8_operators import _reference_moe, _assert_fp8_pipeline_close
-    from sparsevllm.operators.moe import MoeOpSpec, resolve_moe_provider
+    from sparseengine.operators.moe import MoeOpSpec, resolve_moe_provider
 
     torch.manual_seed(41)
     spec = MoeOpSpec(num_experts=64, num_local_experts=64, hidden_size=2048,
@@ -285,15 +285,15 @@ def test_glm_fp8_experts_graph_matches_quantized_reference(tensor_scales):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires an idle CUDA GPU")
 def test_packed_tensor_shared_expert_matches_separate_paths_on_replay():
     """Protect packed scale slicing and the shared-expert prefill/decode split."""
-    from sparsevllm.models.glm4_moe_lite import Glm4MoeLitePackedExperts
+    from sparseengine.models.glm4_moe_lite import Glm4MoeLitePackedExperts
     from tests.test_glm4_moe_lite import _tp_context
     torch.manual_seed(53)
     config = SimpleNamespace(n_routed_experts=64, num_experts_per_tok=4, n_shared_experts=1,
                              hidden_size=2048, moe_intermediate_size=1536,
                              dtype=torch.bfloat16, quantization_config=_quantization(), moe_max_num_tokens=4)
     with (torch.device("cuda"),
-          patch("sparsevllm.models.glm4_moe_lite.get_parallel_context", return_value=_tp_context()),
-          patch("sparsevllm.models.glm4_moe_lite.use_packed_shared_experts", return_value=True)):
+          patch("sparseengine.models.glm4_moe_lite.get_parallel_context", return_value=_tp_context()),
+          patch("sparseengine.models.glm4_moe_lite.use_packed_shared_experts", return_value=True)):
         experts = Glm4MoeLitePackedExperts(config, decode_graph=True)
     experts.w13_weight.data.copy_(torch.randn_like(experts.w13_weight, dtype=torch.bfloat16).to(torch.float8_e4m3fn))
     experts.w2_weight.data.copy_(torch.randn_like(experts.w2_weight, dtype=torch.bfloat16).to(torch.float8_e4m3fn))

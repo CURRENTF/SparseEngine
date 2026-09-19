@@ -5,12 +5,12 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from sparsevllm.engine.sparse_methods.base import LayerEndEvent, SparseStepContext
-from sparsevllm.engine.sparse_methods.dynamic import OmniKVRuntime, DeltaKVRuntime
-from sparsevllm.kernels.triton.deltakv_kernels import deltakv_static_decode_plan
-from sparsevllm.kernels.triton.quest_decode_view import finalize_quest_paged_decode_view
-from sparsevllm.kernels.triton.quest_fused_selection import fused_exact_select_quest_paged_view
-from sparsevllm.operators.flashinfer_decode_state import FlashInferPagedDecodeGraphState
+from sparseengine.engine.sparse_methods.base import LayerEndEvent, SparseStepContext
+from sparseengine.engine.sparse_methods.dynamic import OmniKVRuntime, DeltaKVRuntime
+from sparseengine.kernels.triton.deltakv_kernels import deltakv_static_decode_plan
+from sparseengine.kernels.triton.quest_decode_view import finalize_quest_paged_decode_view
+from sparseengine.kernels.triton.quest_fused_selection import fused_exact_select_quest_paged_view
+from sparseengine.operators.flashinfer_decode_state import FlashInferPagedDecodeGraphState
 
 CUDA = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 

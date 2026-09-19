@@ -1,6 +1,6 @@
 # MathBench (GSM8K + AIME 2024 + MATH-500)
 
-This benchmark follows the same native Sparse-vLLM inference adapter as
+This benchmark follows the same native Sparse-Engine inference adapter as
 `benchmark/long_bench/pred.py`, but evaluates **pass@1** only.
 
 ## Data format
@@ -13,7 +13,7 @@ By default, this runner loads datasets via HuggingFace Datasets:
 - HMMT Nov 2025: `load_dataset('MathArena/hmmt_nov_2025', split='train')` (columns: `problem`, `answer`) (task: `hmmt_nov`)
 
 You can also place local dataset files under `--data_dir` (default:
-`$SPARSEVLLM_DATA_DIR` or `<DATA_ROOT>`) or pass explicit paths:
+`$SPARSEENGINE_DATA_DIR` or `<DATA_ROOT>`) or pass explicit paths:
 
 - GSM8K: a `.jsonl` / `.json` file containing at least `question` and `answer` (official GSM8K uses `answer` with `#### <final>`).
 - AIME 2024: a `.jsonl` / `.json` file containing at least `Problem`/`problem` (or `question`) and `Answer`/`answer` (integer).
@@ -37,8 +37,8 @@ python benchmark/math_bench/pred.py \
 
 Outputs:
 
-- Predictions: `$SPARSEVLLM_OUTPUT_DIR/benchmark/math_bench/pred/<model>/<compressor>_<time>/`
-- Eval result: `result.json` in the output folder, `*_parsed_outputs.jsonl`, `*_per_sample_results.jsonl`, plus `$SPARSEVLLM_OUTPUT_DIR/mathbench_eval.log`
+- Predictions: `$SPARSEENGINE_OUTPUT_DIR/benchmark/math_bench/pred/<model>/<compressor>_<time>/`
+- Eval result: `result.json` in the output folder, `*_parsed_outputs.jsonl`, `*_per_sample_results.jsonl`, plus `$SPARSEENGINE_OUTPUT_DIR/mathbench_eval.log`
 
 Notes:
 

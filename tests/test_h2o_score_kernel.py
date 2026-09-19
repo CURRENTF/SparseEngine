@@ -2,7 +2,7 @@ import pytest
 import torch
 from types import SimpleNamespace
 
-from sparsevllm.kernels.triton.h2o_score import (
+from sparseengine.kernels.triton.h2o_score import (
     h2o_softmax_accumulate,
     h2o_headwise_softmax_accumulate,
 )
@@ -12,8 +12,8 @@ from sparsevllm.kernels.triton.h2o_score import (
 @pytest.mark.parametrize("heads,kv_heads,capacity,width", [(7, 1, 257, 129), (32, 8, 33408, 4225)])
 def test_shared_h2o_workspace_preserves_layers_and_graphs(heads, kv_heads, capacity, width):
     """Catch overwritten earlier-layer scores and shared scratch replay contamination."""
-    from sparsevllm import platforms
-    from sparsevllm.operators.decode_attention import (
+    from sparseengine import platforms
+    from sparseengine.operators.decode_attention import (
         DecodeAttentionOpSpec, FixedGridTritonPagedDecodeAttentionProvider,
         PreparedDecodeAttentionOp,
     )
@@ -147,8 +147,8 @@ def test_h2o_fused_headwise_paged_graph_matches_independent_torch(heads, kv_head
             torch.testing.assert_close(output[row], reference_output, atol=2e-2, rtol=2e-2)
         torch.testing.assert_close(cumulative, expected, atol=2e-5, rtol=2e-5)
         assert pointers == (raw.data_ptr(), cumulative.data_ptr(), output.data_ptr())
-from sparsevllm.kernels.triton.h2o_decode_score import h2o_probability_from_lse
-from sparsevllm.kernels.triton.paged_flash_decoding import paged_flash_decode
+from sparseengine.kernels.triton.h2o_decode_score import h2o_probability_from_lse
+from sparseengine.kernels.triton.paged_flash_decoding import paged_flash_decode
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")

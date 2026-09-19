@@ -1,15 +1,15 @@
 import pytest
 import torch
 
-from sparsevllm.layers.gemma4_rmsnorm import Gemma4RMSNorm
-from sparsevllm.operators.gemma4 import (
+from sparseengine.layers.gemma4_rmsnorm import Gemma4RMSNorm
+from sparseengine.operators.gemma4 import (
     GEMMA4_REGISTRY,
     Gemma4OpSpec,
     TorchGemma4OperatorProvider,
     TritonGemma4OperatorProvider,
 )
-from sparsevllm.operators.registry import OpResolver
-from sparsevllm.platforms.interface import DeviceCaps, PlatformEnum
+from sparseengine.operators.registry import OpResolver
+from sparseengine.platforms.interface import DeviceCaps, PlatformEnum
 
 
 def _reference(x: torch.Tensor, weight: torch.Tensor | None, eps: float) -> torch.Tensor:

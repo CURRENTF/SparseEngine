@@ -769,7 +769,7 @@ class SweBenchLiteRunner:
                 getattr(args, "allow_dataset_download", False)
             )
         if getattr(args, "chain_cache", None) is None:
-            args.chain_cache = _env_truthy("SPARSEVLLM_CHAIN_CACHE")
+            args.chain_cache = _env_truthy("SPARSEENGINE_CHAIN_CACHE")
         if args.preserve_thinking is None:
             args.preserve_thinking = bool(args.chain_cache)
         if args.chain_cache and not args.preserve_thinking:
@@ -966,55 +966,55 @@ class SweBenchLiteRunner:
         env.pop("MSWEA_GLOBAL_CALL_LIMIT", None)
         env.pop("MSWEA_GLOBAL_COST_LIMIT", None)
         if bool(getattr(self.args, "chain_cache", False)):
-            env["SPARSEVLLM_CHAIN_CACHE"] = "1"
+            env["SPARSEENGINE_CHAIN_CACHE"] = "1"
         else:
-            env.pop("SPARSEVLLM_CHAIN_CACHE", None)
+            env.pop("SPARSEENGINE_CHAIN_CACHE", None)
         prune_env_vars = (
-            "SPARSEVLLM_PREFIX_PRUNE_POLICY",
-            "SPARSEVLLM_PREFIX_PRUNE_TRIGGER_TOKENS",
-            "SPARSEVLLM_PREFIX_PRUNE_RANGE_START",
-            "SPARSEVLLM_PREFIX_PRUNE_RANGE_END",
-            "SPARSEVLLM_PREFIX_PRUNE_KEEP_TOKENS",
-            "SPARSEVLLM_PREFIX_PRUNE_EVENTS",
+            "SPARSEENGINE_PREFIX_PRUNE_POLICY",
+            "SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS",
+            "SPARSEENGINE_PREFIX_PRUNE_RANGE_START",
+            "SPARSEENGINE_PREFIX_PRUNE_RANGE_END",
+            "SPARSEENGINE_PREFIX_PRUNE_KEEP_TOKENS",
+            "SPARSEENGINE_PREFIX_PRUNE_EVENTS",
         )
         prune_policy = getattr(self.args, "prefix_prune_policy", None)
         if prune_policy:
-            env["SPARSEVLLM_PREFIX_PRUNE_POLICY"] = str(prune_policy)
-            env["SPARSEVLLM_PREFIX_PRUNE_TRIGGER_TOKENS"] = str(
+            env["SPARSEENGINE_PREFIX_PRUNE_POLICY"] = str(prune_policy)
+            env["SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS"] = str(
                 self.args.prefix_prune_trigger_tokens
             )
-            env["SPARSEVLLM_PREFIX_PRUNE_RANGE_START"] = str(
+            env["SPARSEENGINE_PREFIX_PRUNE_RANGE_START"] = str(
                 self.args.prefix_prune_range_start
             )
-            env["SPARSEVLLM_PREFIX_PRUNE_RANGE_END"] = str(
+            env["SPARSEENGINE_PREFIX_PRUNE_RANGE_END"] = str(
                 self.args.prefix_prune_range_end
             )
-            env["SPARSEVLLM_PREFIX_PRUNE_KEEP_TOKENS"] = str(
+            env["SPARSEENGINE_PREFIX_PRUNE_KEEP_TOKENS"] = str(
                 self.args.prefix_prune_keep_tokens
             )
-            env["SPARSEVLLM_PREFIX_PRUNE_EVENTS"] = str(
+            env["SPARSEENGINE_PREFIX_PRUNE_EVENTS"] = str(
                 self.run_dir / "prefix_prune_events.jsonl"
             )
         else:
             for key in prune_env_vars:
                 env.pop(key, None)
         guard_env_vars = (
-            "SPARSEVLLM_DOCKER_WRITABLE_LAYER_LIMIT_BYTES",
-            "SPARSEVLLM_DOCKER_WRITABLE_LAYER_POLL_SECONDS",
-            "SPARSEVLLM_DOCKER_WRITABLE_LAYER_EVENTS",
-            "SPARSEVLLM_SWE_RUN_ID",
+            "SPARSEENGINE_DOCKER_WRITABLE_LAYER_LIMIT_BYTES",
+            "SPARSEENGINE_DOCKER_WRITABLE_LAYER_POLL_SECONDS",
+            "SPARSEENGINE_DOCKER_WRITABLE_LAYER_EVENTS",
+            "SPARSEENGINE_SWE_RUN_ID",
         )
         if writable_limit_gib > 0:
-            env["SPARSEVLLM_DOCKER_WRITABLE_LAYER_LIMIT_BYTES"] = str(
+            env["SPARSEENGINE_DOCKER_WRITABLE_LAYER_LIMIT_BYTES"] = str(
                 int(writable_limit_gib * 1024**3)
             )
-            env["SPARSEVLLM_DOCKER_WRITABLE_LAYER_POLL_SECONDS"] = str(
+            env["SPARSEENGINE_DOCKER_WRITABLE_LAYER_POLL_SECONDS"] = str(
                 getattr(self.args, "docker_writable_layer_poll_seconds", 1.0)
             )
-            env["SPARSEVLLM_DOCKER_WRITABLE_LAYER_EVENTS"] = str(
+            env["SPARSEENGINE_DOCKER_WRITABLE_LAYER_EVENTS"] = str(
                 self.run_dir / "docker_writable_layer_guard.jsonl"
             )
-            env["SPARSEVLLM_SWE_RUN_ID"] = self.run_id
+            env["SPARSEENGINE_SWE_RUN_ID"] = self.run_id
         else:
             for key in guard_env_vars:
                 env.pop(key, None)
@@ -1330,7 +1330,7 @@ class SweBenchLiteRunner:
             _write_json(self.evaluation_identity_path, identity)
 
         log_root = self.official_dir / "logs" / "run_evaluation" / official_run_id
-        marker_path = log_root / ".sparsevllm_adapter_identity.json"
+        marker_path = log_root / ".sparseengine_adapter_identity.json"
         if log_root.exists() and not marker_path.exists() and any(log_root.iterdir()):
             raise RunnerError(
                 f"Refusing unowned SWE-bench cache directory without identity marker: {log_root}"
@@ -1715,7 +1715,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slice", default=None, help="START:STOP applied after --filter.")
 
     parser.add_argument(
-        "--model", default=None, help="LiteLLM model id, e.g. openai/sparsevllm-swe."
+        "--model", default=None, help="LiteLLM model id, e.g. openai/sparseengine-swe."
     )
     parser.add_argument(
         "--api-base", default=None, help="OpenAI-compatible API base ending in /v1."
@@ -1778,8 +1778,8 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Enable Sparse-vLLM chain reuse in the mini-SWE-agent model adapter. "
-            "When omitted, SPARSEVLLM_CHAIN_CACHE is read once for compatibility; "
+            "Enable Sparse-Engine chain reuse in the mini-SWE-agent model adapter. "
+            "When omitted, SPARSEENGINE_CHAIN_CACHE is read once for compatibility; "
             "the resolved value is persisted in run_config.json."
         ),
     )

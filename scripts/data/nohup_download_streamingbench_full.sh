@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-DATA_ROOT="${SPARSEVLLM_DATA_DIR:-${REPO_ROOT}/data}"
+DATA_ROOT="${SPARSEENGINE_DATA_DIR:-${REPO_ROOT}/data}"
 LOG_DIR="${STREAMINGBENCH_LOG_DIR:-${DATA_ROOT}/logs}"
 
 LOG_PATH="${STREAMINGBENCH_DOWNLOAD_LOG:-${LOG_DIR}/streamingbench_full_download.nohup.log}"

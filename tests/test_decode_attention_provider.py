@@ -5,17 +5,17 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.engine.decode_graph_contract import (
+from sparseengine.engine.decode_graph_contract import (
     DecodeGraphContract,
     DecodeGraphInputs,
 )
-from sparsevllm.kernels.external.flashinfer.decode import (
+from sparseengine.kernels.external.flashinfer.decode import (
     flashinfer_paged_decode_support,
 )
-from sparsevllm.kernels.external.sgl.fa3 import sgl_fa3_device_support
-from sparsevllm.method_registry import sparse_decode_attention_requires_scores
-from sparsevllm.models.attention_runtime import build_mha_decode_attention_spec
-from sparsevllm.operators.decode_attention import (
+from sparseengine.kernels.external.sgl.fa3 import sgl_fa3_device_support
+from sparseengine.method_registry import sparse_decode_attention_requires_scores
+from sparseengine.models.attention_runtime import build_mha_decode_attention_spec
+from sparseengine.operators.decode_attention import (
     DECODE_ATTENTION_REGISTRY,
     DeltaKVFixedGridDecodeAttentionProvider,
     DecodeAttentionRunResult,
@@ -28,8 +28,8 @@ from sparsevllm.operators.decode_attention import (
     TritonPagedDecodeAttentionProvider,
     _FlashInferPagedDecodeGraphState,
 )
-from sparsevllm.operators.registry import OpResolver
-from sparsevllm.platforms import DeviceCaps, PlatformEnum
+from sparseengine.operators.registry import OpResolver
+from sparseengine.platforms import DeviceCaps, PlatformEnum
 
 
 @pytest.mark.parametrize(
@@ -403,7 +403,7 @@ def test_flashinfer_lse_decode_accepts_cuda_graph_contract():
     )
 
     with patch(
-        "sparsevllm.operators.decode_attention.flashinfer_paged_decode_support",
+        "sparseengine.operators.decode_attention.flashinfer_paged_decode_support",
         return_value=(True, "available"),
     ) as support:
         result = FlashInferPagedDecodeAttentionProvider.supports(spec, caps)
@@ -436,7 +436,7 @@ def test_prepared_h2o_decode_applies_fixed_probability_scorer():
     )
 
     with patch(
-        "sparsevllm.kernels.triton.h2o_decode_score.h2o_probability_from_lse"
+        "sparseengine.kernels.triton.h2o_decode_score.h2o_probability_from_lse"
     ) as scorer:
         actual = PreparedDecodeAttentionOp(spec, provider).run(q, view)
 
@@ -526,7 +526,7 @@ def test_flashinfer_decode_reuses_plan_across_layers_in_one_step():
     context = SimpleNamespace(attention_validation_scope=object())
 
     with patch(
-        "sparsevllm.operators.decode_attention.get_context",
+        "sparseengine.operators.decode_attention.get_context",
         return_value=context,
     ):
         provider.run(_spec(cuda_graph=False), q, view)
@@ -561,7 +561,7 @@ def test_flashinfer_decode_replans_layer_varying_page_tables():
     spec = _spec(cuda_graph=False, layer_varying_page_table=True)
 
     with patch(
-        "sparsevllm.operators.decode_attention.get_context",
+        "sparseengine.operators.decode_attention.get_context",
         return_value=context,
     ):
         provider.run(spec, q, view)
@@ -586,7 +586,7 @@ def test_flashinfer_graph_page_pack_reuses_identical_layer_metadata():
 
     with (
         patch(
-            "sparsevllm.operators.flashinfer_decode_state."
+            "sparseengine.operators.flashinfer_decode_state."
             "pack_flashinfer_page_indices"
         ) as pack,
         patch("torch.cuda.is_current_stream_capturing", return_value=False),
@@ -648,7 +648,7 @@ def test_flashinfer_graph_page_pack_keeps_capture_separate_from_warmup():
 
     with (
         patch(
-            "sparsevllm.operators.flashinfer_decode_state."
+            "sparseengine.operators.flashinfer_decode_state."
             "pack_flashinfer_page_indices"
         ) as pack,
         patch(
@@ -741,7 +741,7 @@ def test_prepared_h2o_probability_score_matches_paged_torch(
 
     try:
         with patch(
-            "sparsevllm.operators.decode_attention.get_context",
+            "sparseengine.operators.decode_attention.get_context",
             return_value=SimpleNamespace(attention_validation_scope=object()),
         ):
             output = prepared.run(q, view)
@@ -823,7 +823,7 @@ def test_sgl_decode_provider_uses_prepared_explicit_kv_adapter():
     kernel.run_explicit.side_effect = lambda *args, **kwargs: args[6]
 
     with patch(
-        "sparsevllm.operators.decode_attention.get_context",
+        "sparseengine.operators.decode_attention.get_context",
         return_value=SimpleNamespace(attention_validation_scope=scope),
     ):
         output = provider.run(
@@ -903,7 +903,7 @@ def test_external_decode_page_size_16_matches_paged_torch_oracle(provider_type):
     provider.prepare(spec, device_index=torch.cuda.current_device())
     try:
         with patch(
-            "sparsevllm.operators.decode_attention.get_context",
+            "sparseengine.operators.decode_attention.get_context",
             return_value=SimpleNamespace(attention_validation_scope=object()),
         ):
             output = provider.run(spec, q, view)
@@ -1259,7 +1259,7 @@ def test_triton_provider_owns_launch_config_and_workspace_preparation():
     provider._backend.run_decode.return_value = output
 
     with patch(
-        "sparsevllm.operators.decode_attention.get_context",
+        "sparseengine.operators.decode_attention.get_context",
         return_value=context,
     ):
         actual = provider.run(

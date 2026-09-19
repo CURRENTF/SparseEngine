@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from sparsevllm.engine.decode_cuda_graph import DecodeCudaGraphKey
-from sparsevllm.engine.llm_engine import LLMEngine
-from sparsevllm.sampling_params import SamplingParams
+from sparseengine.engine.decode_cuda_graph import DecodeCudaGraphKey
+from sparseengine.engine.llm_engine import LLMEngine
+from sparseengine.sampling_params import SamplingParams
 
 
 def _engine(*, capacity=25, remote_capacity=None, fail_prefill=False, fail_capture=False):

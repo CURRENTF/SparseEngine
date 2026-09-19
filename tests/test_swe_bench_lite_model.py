@@ -125,7 +125,7 @@ def _load_model_module(monkeypatch, responses):
         / "model.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "_test_sparsevllm_swe_model",
+        "_test_sparseengine_swe_model",
         path,
     )
     assert spec is not None and spec.loader is not None
@@ -152,7 +152,7 @@ def test_chain_model_creates_then_resumes_one_chain(monkeypatch):
         _response("chain-a", content="done"),
     ]
     module = _load_model_module(monkeypatch, responses)
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
 
     first_messages = [{"role": "user", "content": "first"}]
@@ -204,7 +204,7 @@ def test_chain_model_fails_when_server_omits_chain_id(monkeypatch):
         monkeypatch,
         [SimpleNamespace(chain_id=None, model_extra={}, choices=[])],
     )
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "true")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "true")
     model = module.SparseVLLMLitellmModel()
 
     with pytest.raises(RuntimeError, match="without a chain_id"):
@@ -220,7 +220,7 @@ def test_chain_model_fails_when_server_omits_chain_id(monkeypatch):
 def test_chain_rejects_reasoning_removal_before_api_call(monkeypatch, source, extra_body):
     """Extra YAML and per-query overrides cannot bypass the runner's validation."""
     module = _load_model_module(monkeypatch, [])
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
     kwargs = {}
     if source == "config":
@@ -252,7 +252,7 @@ def test_chain_runner_config_matches_adapter_thinking_parameters(monkeypatch, tm
         preserve_thinking=runner.args.preserve_thinking, api_base=args.api_base,
     ))
     module = _load_model_module(monkeypatch, [_response("chain-a")])
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
     model.config.model_kwargs = config["model"]["model_kwargs"]
     model._query([{"role": "user", "content": "first"}])
@@ -265,7 +265,7 @@ def test_non_chain_model_does_not_send_chain_id(monkeypatch):
         monkeypatch,
         [SimpleNamespace(chain_id=None, choices=[])],
     )
-    monkeypatch.delenv("SPARSEVLLM_CHAIN_CACHE", raising=False)
+    monkeypatch.delenv("SPARSEENGINE_CHAIN_CACHE", raising=False)
     model = module.SparseVLLMLitellmModel()
 
     model.query([{"role": "user", "content": "first"}])
@@ -282,12 +282,12 @@ def test_non_chain_model_prunes_once_and_verifies_next_turn_reuse(
         [SimpleNamespace(chain_id=None, choices=[]), SimpleNamespace(chain_id=None, choices=[])],
     )
     events = tmp_path / "prune.jsonl"
-    monkeypatch.setenv("SPARSEVLLM_PREFIX_PRUNE_POLICY", "snapkv_global")
-    monkeypatch.setenv("SPARSEVLLM_PREFIX_PRUNE_TRIGGER_TOKENS", "4096")
-    monkeypatch.setenv("SPARSEVLLM_PREFIX_PRUNE_RANGE_START", "512")
-    monkeypatch.setenv("SPARSEVLLM_PREFIX_PRUNE_RANGE_END", "4096")
-    monkeypatch.setenv("SPARSEVLLM_PREFIX_PRUNE_KEEP_TOKENS", "1792")
-    monkeypatch.setenv("SPARSEVLLM_PREFIX_PRUNE_EVENTS", str(events))
+    monkeypatch.setenv("SPARSEENGINE_PREFIX_PRUNE_POLICY", "snapkv_global")
+    monkeypatch.setenv("SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS", "4096")
+    monkeypatch.setenv("SPARSEENGINE_PREFIX_PRUNE_RANGE_START", "512")
+    monkeypatch.setenv("SPARSEENGINE_PREFIX_PRUNE_RANGE_END", "4096")
+    monkeypatch.setenv("SPARSEENGINE_PREFIX_PRUNE_KEEP_TOKENS", "1792")
+    monkeypatch.setenv("SPARSEENGINE_PREFIX_PRUNE_EVENTS", str(events))
     model = module.SparseVLLMLitellmModel()
     matches = iter(
         [
@@ -331,7 +331,7 @@ def test_chain_model_rejects_rewritten_history(monkeypatch):
         _response("chain-a", content="invalid response"),
     ]
     module = _load_model_module(monkeypatch, responses)
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
 
     model.query([{"role": "user", "content": "first"}])
@@ -360,7 +360,7 @@ def test_chain_model_full_rerenders_after_length_finish(monkeypatch):
         _response("chain-a", chain_status="resumed"),
     ]
     module = _load_model_module(monkeypatch, responses)
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
     first_messages = [{"role": "user", "content": "first"}]
 
@@ -390,7 +390,7 @@ def test_length_format_error_retains_assistant_and_single_raw_response(
         _response("chain-a", chain_status="resumed"),
     ]
     module = _load_model_module(monkeypatch, responses)
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1" if chain_enabled else "0")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1" if chain_enabled else "0")
     model = module.SparseVLLMLitellmModel()
     messages = [{"role": "user", "content": "first"}]
 
@@ -419,7 +419,7 @@ def test_length_recovery_rejects_dropping_preserved_response(monkeypatch):
         _response("chain-a", content=None, reasoning_content="partial",
                   finish_reason="length", query_error=error),
     ])
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
     first = [{"role": "user", "content": "first"}]
     with pytest.raises(FakeFormatError):
@@ -436,7 +436,7 @@ def test_length_format_error_respects_server_invalidation(monkeypatch):
                   query_error=error),
         _response("chain-b"),
     ])
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
     first = [{"role": "user", "content": "first"}]
     with pytest.raises(FakeFormatError):
@@ -452,7 +452,7 @@ def test_length_format_error_does_not_insert_unmatched_tool_calls(monkeypatch):
                   tool_calls=[{"id": "call-1", "type": "function",
                                "function": {"name": "bash", "arguments": '{"command":'}}]),
     ])
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
     with pytest.raises(FakeFormatError):
         model.query([{"role": "user", "content": "first"}])
@@ -471,7 +471,7 @@ def test_length_format_error_records_unexecuted_tool_results(monkeypatch, chain_
                   tool_calls=calls),
         _response("chain-b", chain_status="recreated"),
     ])
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1" if chain_enabled else "0")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1" if chain_enabled else "0")
     model = module.SparseVLLMLitellmModel()
     first = [{"role": "user", "content": "first"}]
     with pytest.raises(FakeFormatError):
@@ -494,7 +494,7 @@ def test_chain_model_starts_new_chain_after_invalidation(monkeypatch):
         _response("chain-b"),
     ]
     module = _load_model_module(monkeypatch, responses)
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
     first_messages = [{"role": "user", "content": "first"}]
 
@@ -522,7 +522,7 @@ def test_chain_model_recreates_evicted_chain_from_full_history(
     if error_source == "router":
         fastapi = pytest.importorskip("fastapi")
         pytest.importorskip("uvicorn")
-        from sparsevllm.entrypoints.openai import smart_router
+        from sparseengine.entrypoints.openai import smart_router
 
         router = smart_router.SmartRouter(
             worker_urls=["http://worker-a"],
@@ -551,7 +551,7 @@ def test_chain_model_recreates_evicted_chain_from_full_history(
         _response("chain-b"),
     ]
     module = _load_model_module(monkeypatch, responses)
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
     first_messages = [{"role": "user", "content": "first"}]
 
@@ -586,7 +586,7 @@ def test_chain_model_commits_state_only_after_successful_query(monkeypatch):
         _response("chain-b", content="recovered"),
     ]
     module = _load_model_module(monkeypatch, responses)
-    monkeypatch.setenv("SPARSEVLLM_CHAIN_CACHE", "1")
+    monkeypatch.setenv("SPARSEENGINE_CHAIN_CACHE", "1")
     model = module.SparseVLLMLitellmModel()
 
     first_messages = [{"role": "user", "content": "first"}]

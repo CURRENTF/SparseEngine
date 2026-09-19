@@ -7,13 +7,13 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from sparsevllm.models.llama import LlamaForCausalLM
-from sparsevllm.models.qwen2 import Qwen2ForCausalLM
-from sparsevllm.models.qwen3 import Qwen3ForCausalLM
-from sparsevllm.models.attention_runtime import resolve_mha_head_dim
-from sparsevllm.quantization.config import QuantizationConfig
-from sparsevllm.quantization.fp8 import fp8_blockwise_linear_reference
-from sparsevllm.utils.loader import load_model
+from sparseengine.models.llama import LlamaForCausalLM
+from sparseengine.models.qwen2 import Qwen2ForCausalLM
+from sparseengine.models.qwen3 import Qwen3ForCausalLM
+from sparseengine.models.attention_runtime import resolve_mha_head_dim
+from sparseengine.quantization.config import QuantizationConfig
+from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+from sparseengine.utils.loader import load_model
 
 
 def _parallel_context() -> SimpleNamespace:
@@ -127,19 +127,19 @@ def test_dense_models_bind_all_fp8_projections_through_shared_registry(
 
     with (
         patch(
-            f"sparsevllm.models.{module_name}.get_parallel_context",
+            f"sparseengine.models.{module_name}.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.linear.get_parallel_context",
+            "sparseengine.layers.linear.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.embed_head.get_parallel_context",
+            "sparseengine.layers.embed_head.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.linear.QuantizationRegistry.resolve_linear_provider",
+            "sparseengine.layers.linear.QuantizationRegistry.resolve_linear_provider",
             return_value=provider,
         ) as resolve_provider,
     ):
@@ -183,19 +183,19 @@ def test_new_dense_fp8_models_load_shared_packed_weight_contract(
     context = _parallel_context()
     with (
         patch(
-            f"sparsevllm.models.{module_name}.get_parallel_context",
+            f"sparseengine.models.{module_name}.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.linear.get_parallel_context",
+            "sparseengine.layers.linear.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.embed_head.get_parallel_context",
+            "sparseengine.layers.embed_head.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.linear.QuantizationRegistry.resolve_linear_provider",
+            "sparseengine.layers.linear.QuantizationRegistry.resolve_linear_provider",
             return_value=Mock(side_effect=fp8_blockwise_linear_reference),
         ),
     ):
@@ -281,7 +281,7 @@ def test_dense_mha_models_build_and_bind_full_attention_provider(
     full_attention.bind.side_effect = bind_full_attention
 
     with patch(
-        f"sparsevllm.models.{module_name}.build_mha_full_attention_provider",
+        f"sparseengine.models.{module_name}.build_mha_full_attention_provider",
         return_value=full_attention,
     ) as build_full_attention:
         kwargs = model_type.build_runtime_kwargs(
@@ -304,19 +304,19 @@ def test_dense_mha_models_build_and_bind_full_attention_provider(
 
     with (
         patch(
-            f"sparsevllm.models.{module_name}.get_parallel_context",
+            f"sparseengine.models.{module_name}.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.linear.get_parallel_context",
+            "sparseengine.layers.linear.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.embed_head.get_parallel_context",
+            "sparseengine.layers.embed_head.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.linear.QuantizationRegistry.resolve_linear_provider",
+            "sparseengine.layers.linear.QuantizationRegistry.resolve_linear_provider",
             return_value=Mock(name="bound_fp8_linear"),
         ),
     ):

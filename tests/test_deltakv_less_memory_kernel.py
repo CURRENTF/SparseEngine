@@ -3,7 +3,7 @@ import unittest
 
 import torch
 
-from sparsevllm.kernels.triton.deltakv_kernels import (
+from sparseengine.kernels.triton.deltakv_kernels import (
     _validate_full_layer_kivi_decode_maps,
     deltakv_less_memory_reconstruct_writeback_quantized,
     deltakv_l2_topk_blockwise,
@@ -15,14 +15,14 @@ from sparsevllm.kernels.triton.deltakv_kernels import (
     full_layer_kivi_flash_decode_stage1_grouped,
     full_layer_kivi_flash_decode_stage1_token_map,
 )
-from sparsevllm.kernels.triton.gqa_flash_decoding_stage1 import flash_decode_stage1 as gqa_flash_decode_stage1
-from sparsevllm.kernels.triton.gqa_flash_decoding_stage1 import (
+from sparseengine.kernels.triton.gqa_flash_decoding_stage1 import flash_decode_stage1 as gqa_flash_decode_stage1
+from sparseengine.kernels.triton.gqa_flash_decoding_stage1 import (
     flash_decode_stage1_with_score as gqa_flash_decode_stage1_with_score,
 )
-from sparsevllm.kernels.triton.paged_flash_decoding import (
+from sparseengine.kernels.triton.paged_flash_decoding import (
     fixed_grid_flash_decode_stage2,
 )
-from sparsevllm.kernels.triton.quant import (
+from sparseengine.kernels.triton.quant import (
     triton_dequantize_2d_int4_grouped,
     triton_quantize_and_pack_2d_int4_grouped,
     triton_quantize_and_pack_along_last_dim,
@@ -91,10 +91,10 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         self.assertTrue(torch.allclose(got, ref, atol=1e-6, rtol=1e-6))
 
     def test_store_kvcache_chunks_large_launches(self):
-        from sparsevllm.kernels.triton.store_kvcache import store_kvcache
+        from sparseengine.kernels.triton.store_kvcache import store_kvcache
 
-        old_value = os.environ.get("SPARSEVLLM_STORE_KVCACHE_CHUNK_TOKENS")
-        os.environ["SPARSEVLLM_STORE_KVCACHE_CHUNK_TOKENS"] = "3"
+        old_value = os.environ.get("SPARSEENGINE_STORE_KVCACHE_CHUNK_TOKENS")
+        os.environ["SPARSEENGINE_STORE_KVCACHE_CHUNK_TOKENS"] = "3"
         try:
             device = "cuda"
             dtype = torch.float16
@@ -118,9 +118,9 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
             self.assertTrue(torch.equal(k_cache[3], torch.full_like(k_cache[3], -1)))
         finally:
             if old_value is None:
-                os.environ.pop("SPARSEVLLM_STORE_KVCACHE_CHUNK_TOKENS", None)
+                os.environ.pop("SPARSEENGINE_STORE_KVCACHE_CHUNK_TOKENS", None)
             else:
-                os.environ["SPARSEVLLM_STORE_KVCACHE_CHUNK_TOKENS"] = old_value
+                os.environ["SPARSEENGINE_STORE_KVCACHE_CHUNK_TOKENS"] = old_value
 
     def test_l2_topk_blockwise_accepts_dynamic_center_positions(self):
         torch.manual_seed(3)
@@ -163,7 +163,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         self.assertTrue(torch.equal(got_idx, expected_idx))
 
     def test_streaming_cluster_helper_matches_whole_block_cluster(self):
-        from sparsevllm.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
         torch.manual_seed(11)
         device = "cuda"
@@ -348,7 +348,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         self.assertTrue(torch.equal(recon_out_slot_out, recon_out_slot_ref))
 
     def test_materialize_sparse_view_writes_padded_rows(self):
-        from sparsevllm.layers.rotary_embedding import apply_rotary_emb
+        from sparseengine.layers.rotary_embedding import apply_rotary_emb
 
         torch.manual_seed(1)
         device = "cuda"
@@ -718,7 +718,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         self.assertTrue(torch.allclose(v_out[out], v_ref.to(dtype), atol=2e-3, rtol=2e-3))
 
     def test_full_layer_kivi_batched_store_matches_reference_pack(self):
-        from sparsevllm.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
         torch.manual_seed(7)
         device = "cuda"
@@ -773,7 +773,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         self.assertTrue(torch.allclose(manager.full_layer_kivi_value_mins[0, slots], mn_v))
 
     def test_full_prefill_kivi_materialize_chunks_block_store(self):
-        from sparsevllm.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
         torch.manual_seed(13)
         device = "cuda"

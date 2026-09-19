@@ -379,12 +379,12 @@ def selected_env_snapshot() -> dict[str, str]:
         "HUGGINGFACE_HUB_CACHE",
         "NCCL_DEBUG",
         "PYTHONPATH",
-        "SPARSEVLLM_MASTER_PORT",
+        "SPARSEENGINE_MASTER_PORT",
         "TOKENIZERS_PARALLELISM",
         "TRANSFORMERS_CACHE",
         "VLLM_ATTENTION_BACKEND",
     }
-    prefixes = ("CUDA_", "NCCL_", "SPARSEVLLM_")
+    prefixes = ("CUDA_", "NCCL_", "SPARSEENGINE_")
     selected = {
         key
         for key in os.environ
@@ -394,7 +394,7 @@ def selected_env_snapshot() -> dict[str, str]:
 
 
 def benchmark_output_root() -> Path:
-    env_root = os.getenv("SPARSEVLLM_PREFIX_CACHE_BENCH_ROOT")
+    env_root = os.getenv("SPARSEENGINE_PREFIX_CACHE_BENCH_ROOT")
     if env_root:
         return Path(env_root).expanduser()
     return REPO_ROOT_FOR_IMPORT / "outputs" / "prefix_cache_benchmarks"
@@ -800,7 +800,7 @@ def _run_request_batch(
     max_steps: int,
     session_chain_ids: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
-    from sparsevllm import SamplingParams
+    from sparseengine import SamplingParams
     import torch
 
     states: dict[int, RequestState] = {}
@@ -1286,10 +1286,10 @@ def _run_case_worker(case_name: str, args_dict: dict[str, Any], case_dir: str) -
     try:
         import torch
         from transformers import AutoTokenizer
-        from sparsevllm import LLM
+        from sparseengine import LLM
 
         case_index = sorted(CASE_PRESETS).index(case_name)
-        os.environ["SPARSEVLLM_MASTER_PORT"] = str(int(args.master_port_base) + case_index)
+        os.environ["SPARSEENGINE_MASTER_PORT"] = str(int(args.master_port_base) + case_index)
         if torch.cuda.is_available():
             torch.cuda.set_device(0)
             torch.cuda.empty_cache()
@@ -1491,13 +1491,13 @@ def _append_ledger(output_dir: Path, summaries: list[dict[str, Any]], args: argp
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark Sparse-vLLM prefix cache on shared-prefix and dynamic multi-turn traces.")
+    parser = argparse.ArgumentParser(description="Benchmark Sparse-Engine prefix cache on shared-prefix and dynamic multi-turn traces.")
     parser.add_argument("--model_path", required=True)
     parser.add_argument("--cases", default="baseline_full,prefix_full,prefix_omnikv,prefix_quest")
     parser.add_argument("--workloads", default="shared_prefix,multiturn", help="Comma-separated: shared_prefix,multiturn")
     parser.add_argument("--output_dir", default=None)
     parser.add_argument("--feature", default="prefix_cache")
-    parser.add_argument("--objective", default="evaluate Sparse-vLLM prefix cache on realistic multi-turn traces")
+    parser.add_argument("--objective", default="evaluate Sparse-Engine prefix cache on realistic multi-turn traces")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--continue_on_failure", action="store_true")
     parser.add_argument("--allow_short_trace", action="store_true", help="Allow cache-lifecycle smoke traces that do not enter sparse paths.")

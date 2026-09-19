@@ -81,7 +81,7 @@ def test_suite_rejects_old_batch_maximum_contract():
     errors = []
     _validate_synthetic_rows(
         [{"scenario": "fixed_batch", "status": "success"}],
-        system="svllm-vanilla", errors=errors,
+        system="sengine-vanilla", errors=errors,
     )
     assert any("request metric contract mismatch" in error for error in errors)
 

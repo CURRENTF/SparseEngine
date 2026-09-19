@@ -1,4 +1,4 @@
-"""Run a deterministic LongBench v2 subset on the native Sparse-vLLM runtime."""
+"""Run a deterministic LongBench v2 subset on the native Sparse-Engine runtime."""
 
 from __future__ import annotations
 
@@ -36,11 +36,11 @@ from benchmark.long_bench_v2.contracts import (
     render_prompt,
     select_samples,
 )
-from benchmark.model_adapters.sparsevllm import get_sparsevllm_generate_api
-from benchmark.sparsevllm_regression.manifest import validate_omnikv_benchmark_config
+from benchmark.model_adapters.sparseengine import get_sparseengine_generate_api
+from benchmark.sparseengine_regression.manifest import validate_omnikv_benchmark_config
 
 
-DEFAULT_DATA_ENV = "SPARSEVLLM_LONGBENCH_V2_DATA"
+DEFAULT_DATA_ENV = "SPARSEENGINE_LONGBENCH_V2_DATA"
 DEFAULT_PROMPT_PATH = Path(__file__).with_name("upstream") / "prompts" / "0shot.txt"
 
 
@@ -192,7 +192,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tokenizer-path", default=None)
     parser.add_argument("--deltakv-checkpoint-path", default=None)
     parser.add_argument("--sparse-method", default="vanilla")
-    parser.add_argument("--engine", choices=("sparsevllm", "vllm", "sglang-http"), default="sparsevllm")
+    parser.add_argument("--engine", choices=("sparseengine", "vllm", "sglang-http"), default="sparseengine")
     parser.add_argument("--engine-kwargs", default=None)
     parser.add_argument("--server-url", default=None)
     parser.add_argument("--official-length", choices=("short", "medium", "long"))
@@ -249,9 +249,9 @@ def main() -> int:
                 raise ValueError("official-middle requires a positive --truncate-max-tokens.")
         elif args.truncate_max_tokens is not None:
             raise ValueError("--truncate-max-tokens requires --overflow-policy official-middle.")
-        if args.engine == "sparsevllm" and (args.engine_kwargs or args.server_url):
+        if args.engine == "sparseengine" and (args.engine_kwargs or args.server_url):
             raise ValueError("Native quality does not accept external engine/server options.")
-        if args.engine != "sparsevllm" and args.hyper_param_json:
+        if args.engine != "sparseengine" and args.hyper_param_json:
             raise ValueError("External quality does not accept native --hyper-param-json.")
         infer_config = _build_infer_config(args)
         engine_kwargs = _load_json_object(args.engine_kwargs)
@@ -405,15 +405,15 @@ def main() -> int:
         phase = "model"
         eos_token_ids = _eos_token_ids(args.model_path, tokenizer)
         llm = None
-        if args.engine == "sparsevllm":
-            generate = get_sparsevllm_generate_api(
+        if args.engine == "sparseengine":
+            generate = get_sparseengine_generate_api(
                 model_path=args.model_path, infer_config=infer_config,
                 deltakv_checkpoint_path=args.deltakv_checkpoint_path,
                 sparse_method=args.sparse_method,
             )
-            llm = getattr(generate, "_sparsevllm_llm", None)
+            llm = getattr(generate, "_sparseengine_llm", None)
             if llm is None:
-                raise RuntimeError("Sparse-vLLM adapter did not expose runtime provenance.")
+                raise RuntimeError("Sparse-Engine adapter did not expose runtime provenance.")
             resolved_config["effective_runtime"] = llm.worker_info(tags=["longbench-v2-quality"])
         else:
             from benchmark.long_bench_v2.external import get_generate_api

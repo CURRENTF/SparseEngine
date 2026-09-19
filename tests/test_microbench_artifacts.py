@@ -27,7 +27,7 @@ def test_native_loop_distinguishes_unadmitted_requests_from_short_window(monkeyp
     Exercise the actual loop; collector tests cannot catch post-loop error order.
     A fully admitted but too-short output must still be a window error.
     """
-    import sparsevllm
+    import sparseengine
     from benchmark import microbench
 
     class Sequence:
@@ -78,7 +78,7 @@ def test_native_loop_distinguishes_unadmitted_requests_from_short_window(monkeyp
             self.exited = True
 
     engine = Engine()
-    monkeypatch.setitem(sparsevllm.__dict__, "LLM", lambda *a, **kw: engine)
+    monkeypatch.setitem(sparseengine.__dict__, "LLM", lambda *a, **kw: engine)
     for name in ("reset_peak_memory_stats", "empty_cache", "synchronize"):
         monkeypatch.setattr(microbench.torch.cuda, name, lambda: None)
     args = SimpleNamespace(hyper_params_dict={}, output_len=3,

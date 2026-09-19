@@ -9,30 +9,30 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.kernels.external.support import ExternalKernelFamilyError
-from sparsevllm.engine.cache_manager import (
+from sparseengine.kernels.external.support import ExternalKernelFamilyError
+from sparseengine.engine.cache_manager import (
     AttentionViewMeta,
     DecodeComputeView,
     MlaLatentPayload,
 )
-from sparsevllm.kernels.tilelang.mla.runtime import (
+from sparseengine.kernels.tilelang.mla.runtime import (
     TileMlaDecodeKernel,
     TileMlaLaunchConfig,
     TileMlaLaunchPlan,
     tilelang_mla_support,
 )
-from sparsevllm.kernels.triton.mla import MlaDecodeWorkspace
-from sparsevllm.operators.attention_capabilities import AttentionScoreKind
-from sparsevllm.operators.mla_attention import (
+from sparseengine.kernels.triton.mla import MlaDecodeWorkspace
+from sparseengine.operators.attention_capabilities import AttentionScoreKind
+from sparseengine.operators.mla_attention import (
     MLA_ATTENTION_REGISTRY,
     MlaAttentionOpSpec,
     MlaTileLangScoreProvider,
     MlaTritonProvider,
 )
-from sparsevllm.operators.registry import (
+from sparseengine.operators.registry import (
     OpResolver,
 )
-from sparsevllm.platforms import DeviceCaps, PlatformEnum
+from sparseengine.platforms import DeviceCaps, PlatformEnum
 
 
 def _spec(*, tp_size: int = 2) -> MlaAttentionOpSpec:
@@ -119,7 +119,7 @@ class RejectTileLang:
             raise ModuleNotFoundError("blocked optional tilelang import")
 
 sys.meta_path.insert(0, RejectTileLang())
-from sparsevllm.kernels.tilelang.mla.runtime import tilelang_mla_support
+from sparseengine.kernels.tilelang.mla.runtime import tilelang_mla_support
 assert "tilelang" not in sys.modules
 """
     subprocess.run([sys.executable, "-c", code], check=True)
@@ -199,12 +199,12 @@ def test_tilelang_provider_binds_rank_local_head_count(
     workspace = _cpu_workspace()
     with (
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
             return_value=workspace,
         ),
-        patch("sparsevllm.operators.mla_attention.SglFa3DecodeKernel"),
+        patch("sparseengine.operators.mla_attention.SglFa3DecodeKernel"),
         patch(
-            "sparsevllm.operators.mla_attention.TileMlaDecodeKernel"
+            "sparseengine.operators.mla_attention.TileMlaDecodeKernel"
         ) as tilelang_cls,
     ):
         MlaTileLangScoreProvider(
@@ -230,18 +230,18 @@ def test_missing_tilelang_binds_score_capable_triton_provider() -> None:
     workspace = _cpu_workspace()
     with (
         patch(
-            "sparsevllm.operators.mla_attention.sgl_fa3_device_support",
+            "sparseengine.operators.mla_attention.sgl_fa3_device_support",
             return_value=(True, "sgl test"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.tilelang_mla_support",
+            "sparseengine.operators.mla_attention.tilelang_mla_support",
             return_value=(False, "tilelang missing"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
             return_value=workspace,
         ),
-        patch("sparsevllm.operators.mla_attention.SglFa3DecodeKernel"),
+        patch("sparseengine.operators.mla_attention.SglFa3DecodeKernel"),
     ):
         resolved = OpResolver(MLA_ATTENTION_REGISTRY).resolve(
             _spec(),
@@ -266,15 +266,15 @@ def test_tilelang_mla_profile_uses_hardware_family_not_tp_or_capacity() -> None:
     workspace = _cpu_workspace()
     with (
         patch(
-            "sparsevllm.operators.mla_attention.sgl_fa3_device_support",
+            "sparseengine.operators.mla_attention.sgl_fa3_device_support",
             return_value=(True, "sgl test"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.tilelang_mla_support",
+            "sparseengine.operators.mla_attention.tilelang_mla_support",
             return_value=(True, "tilelang test"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
             return_value=workspace,
         ),
     ):
@@ -303,19 +303,19 @@ def test_tilelang_mla_h100_family_profile_overrides_default_portfolio(
     workspace = _cpu_workspace()
     with (
         patch(
-            "sparsevllm.operators.mla_attention.sgl_fa3_device_support",
+            "sparseengine.operators.mla_attention.sgl_fa3_device_support",
             return_value=(True, "sgl test"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.tilelang_mla_support",
+            "sparseengine.operators.mla_attention.tilelang_mla_support",
             return_value=(True, "tilelang test"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
             return_value=workspace,
         ),
-        patch("sparsevllm.operators.mla_attention.SglFa3DecodeKernel"),
-        patch("sparsevllm.operators.mla_attention.TileMlaDecodeKernel"),
+        patch("sparseengine.operators.mla_attention.SglFa3DecodeKernel"),
+        patch("sparseengine.operators.mla_attention.TileMlaDecodeKernel"),
     ):
         resolved = OpResolver(MLA_ATTENTION_REGISTRY).resolve(
             spec,
@@ -337,17 +337,17 @@ def test_decode_graph_score_contract_binds_static_tilelang_plan() -> None:
     workspace = _cpu_workspace()
     with (
         patch(
-            "sparsevllm.operators.mla_attention.sgl_fa3_device_support",
+            "sparseengine.operators.mla_attention.sgl_fa3_device_support",
             return_value=(True, "sgl test"),
         ),
-        patch("sparsevllm.operators.mla_attention.SglFa3DecodeKernel"),
-        patch("sparsevllm.operators.mla_attention.TileMlaDecodeKernel"),
+        patch("sparseengine.operators.mla_attention.SglFa3DecodeKernel"),
+        patch("sparseengine.operators.mla_attention.TileMlaDecodeKernel"),
         patch(
-            "sparsevllm.operators.mla_attention.tilelang_mla_support",
+            "sparseengine.operators.mla_attention.tilelang_mla_support",
             return_value=(True, "tilelang test"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
             return_value=workspace,
         ),
     ):
@@ -391,7 +391,7 @@ def test_tilelang_launch_configs_are_independent_of_context_capacity() -> None:
 
 
 def test_tilelang_bind_rejects_missing_sm_count_before_allocating() -> None:
-    with patch("sparsevllm.operators.mla_attention.allocate_mla_decode_workspace") as allocate:
+    with patch("sparseengine.operators.mla_attention.allocate_mla_decode_workspace") as allocate:
         with pytest.raises(ValueError, match="SM count"):
             MlaTileLangScoreProvider.bind(_spec(), _h100_caps(multi_processor_count=None),
                                           op_spec=_spec(), device="cpu", max_batch_size=2)
@@ -405,15 +405,15 @@ def test_decode_graph_reduced_score_contract_binds_static_triton_provider() -> N
     )
     with (
         patch(
-            "sparsevllm.operators.mla_attention.sgl_fa3_device_support",
+            "sparseengine.operators.mla_attention.sgl_fa3_device_support",
             return_value=(True, "sgl test"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.tilelang_mla_support",
+            "sparseengine.operators.mla_attention.tilelang_mla_support",
             return_value=(True, "tilelang test"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
             return_value=_cpu_workspace(),
         ),
     ):
@@ -441,15 +441,15 @@ def _provider_with_mocks() -> tuple[MlaTileLangScoreProvider, Mock, Mock]:
     }
     with (
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
             return_value=_cpu_workspace(),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.SglFa3DecodeKernel",
+            "sparseengine.operators.mla_attention.SglFa3DecodeKernel",
             return_value=fa3,
         ),
         patch(
-            "sparsevllm.operators.mla_attention.TileMlaDecodeKernel",
+            "sparseengine.operators.mla_attention.TileMlaDecodeKernel",
             return_value=tilelang,
         ),
     ):
@@ -471,7 +471,7 @@ def test_per_head_score_path_routes_to_tilelang_with_caller_owned_score() -> Non
     output = torch.empty_like(q_latent)
 
     with patch(
-        "sparsevllm.operators.mla_attention.validate_mla_decode_metadata"
+        "sparseengine.operators.mla_attention.validate_mla_decode_metadata"
     ):
         provider.run(q_latent, q_rope, view, output)
 
@@ -514,7 +514,7 @@ def test_noncontiguous_glm_queries_route_to_tilelang() -> None:
     assert not q_latent.is_contiguous()
     assert not q_rope.is_contiguous()
     with patch(
-        "sparsevllm.operators.mla_attention.validate_mla_decode_metadata"
+        "sparseengine.operators.mla_attention.validate_mla_decode_metadata"
     ):
         provider.run(q_latent, q_rope, view, output)
 
@@ -531,10 +531,10 @@ def test_runtime_kernel_stats_distinguish_cuda_graph_capture() -> None:
 
     with (
         patch(
-            "sparsevllm.operators.mla_attention.validate_mla_decode_metadata"
+            "sparseengine.operators.mla_attention.validate_mla_decode_metadata"
         ),
         patch(
-            "sparsevllm.operators.mla_attention.device_runtime.is_stream_capturing",
+            "sparseengine.operators.mla_attention.device_runtime.is_stream_capturing",
             return_value=True,
         ),
     ):
@@ -555,7 +555,7 @@ def test_no_score_path_remains_fa3() -> None:
     output = torch.empty_like(q_latent)
 
     with patch(
-        "sparsevllm.operators.mla_attention.validate_mla_decode_metadata"
+        "sparseengine.operators.mla_attention.validate_mla_decode_metadata"
     ):
         provider.run(q_latent, q_rope, view, output)
 
@@ -620,7 +620,7 @@ def test_score_capacity_may_include_padding_beyond_active_slots() -> None:
     output = torch.empty_like(q_latent)
 
     with patch(
-        "sparsevllm.operators.mla_attention.validate_mla_decode_metadata"
+        "sparseengine.operators.mla_attention.validate_mla_decode_metadata"
     ):
         provider.run(q_latent, q_rope, view, output)
 
@@ -655,7 +655,7 @@ def test_noncontiguous_per_head_score_routes_to_tilelang_staging() -> None:
     output = torch.empty_like(q_latent)
 
     with patch(
-        "sparsevllm.operators.mla_attention.validate_mla_decode_metadata"
+        "sparseengine.operators.mla_attention.validate_mla_decode_metadata"
     ):
         provider.run(q_latent, q_rope, view, output)
 

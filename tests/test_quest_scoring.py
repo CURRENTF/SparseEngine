@@ -3,8 +3,8 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.operators.quest_scoring import QuestPageScoreDispatch, QuestPageScoreSpec
-from sparsevllm.platforms.interface import DeviceCaps, PlatformEnum
+from sparseengine.operators.quest_scoring import QuestPageScoreDispatch, QuestPageScoreSpec
+from sparseengine.platforms.interface import DeviceCaps, PlatformEnum
 
 
 def _provider():
@@ -28,7 +28,7 @@ def test_quest_score_dispatch_propagates_bound_kernel_failure():
     metadata = torch.empty(1, 4, 128, dtype=torch.bfloat16)
     pages = torch.empty(1, 8320, dtype=torch.int32)
     with (
-        patch("sparsevllm.operators.quest_scoring.device_runtime.is_stream_capturing", return_value=False),
+        patch("sparseengine.operators.quest_scoring.device_runtime.is_stream_capturing", return_value=False),
         pytest.raises(RuntimeError, match="score launch failed"),
     ):
         provider.score(query, metadata, metadata, pages)
@@ -57,6 +57,6 @@ def test_quest_score_cost_estimate_cannot_override_capability_rejection():
     provider.scalar.score = Mock(return_value="scalar")
     q = torch.empty(8, 32, 128, dtype=torch.bfloat16)
     metadata = torch.empty(1, 4, 128, dtype=torch.bfloat16)
-    with patch("sparsevllm.operators.quest_scoring.device_runtime.is_stream_capturing", return_value=False):
+    with patch("sparseengine.operators.quest_scoring.device_runtime.is_stream_capturing", return_value=False):
         provider.score(q, metadata, metadata, torch.empty(8, 32768, dtype=torch.int32))
     provider.tensorcore.score.assert_not_called()

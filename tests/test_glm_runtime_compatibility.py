@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from sparsevllm.engine.cache_manager.storage import CacheLayout
+from sparseengine.engine.cache_manager.storage import CacheLayout
 from glm_test_helpers import _glm_config
 
 
@@ -189,8 +189,8 @@ def test_glm_config_rejects_startup_budget_smaller_than_batch_plan():
 
 def test_hybrid_attention_rejects_only_unimplemented_moe_tp():
     ep_size = 2
-    from sparsevllm.distributed import ParallelTopology
-    from sparsevllm.models.spec import resolve_model_spec
+    from sparseengine.distributed import ParallelTopology
+    from sparseengine.models.spec import resolve_model_spec
 
     topology = ParallelTopology(attn_tp_size=2, moe_ep_size=ep_size, attn_dp_size=2)
     with pytest.raises(ValueError, match="engine currently supports DP attention only"):
@@ -210,8 +210,8 @@ def test_glm_dense_mlp_width_uses_attention_tp_even_with_pure_ep_experts():
     ("minimax_m2", 4, 2), ("glm4_moe_lite", 3, 2),
 ])
 def test_hybrid_attention_execution_has_no_four_gpu_limit(dp_size, tp_size, model_type):
-    from sparsevllm.distributed import ParallelTopology
-    from sparsevllm.models.spec import resolve_model_spec
+    from sparseengine.distributed import ParallelTopology
+    from sparseengine.models.spec import resolve_model_spec
 
     topology = ParallelTopology(tp_size, dp_size * tp_size, dp_size)
     resolve_model_spec(model_type).validate_parallel_execution(topology)

@@ -71,7 +71,7 @@ class RecipeContracts(unittest.TestCase):
     def test_server_manifest_serializes_command_for_driver_validation(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
-            recipe.write(root / "setting.json", {"backend": "sparsevllm"})
+            recipe.write(root / "setting.json", {"backend": "sparseengine"})
             recipe.write(root / "snapkv-chain/engine.json", {
                 "sparse_method": "snapkv", "max_model_len": 1024})
             recipe.write(root / "model/config.json", {"dtype": "bfloat16"})
@@ -86,7 +86,7 @@ class RecipeContracts(unittest.TestCase):
                 recipe.serve(args)
             manifest = recipe.read(root / "snapkv-chain/smoke/server_manifest.json")
             self.assertIsInstance(manifest["command"], str)
-            self.assertIn("sparsevllm.entrypoints.openai.api_server", manifest["command"])
+            self.assertIn("sparseengine.entrypoints.openai.api_server", manifest["command"])
             for key, value in manifest["compiler_environment"].items():
                 self.assertEqual(launch.call_args.args[1][key], value)
                 self.assertTrue(Path(value).is_dir())

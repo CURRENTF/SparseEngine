@@ -6,7 +6,7 @@ import math
 import fire
 from typing import List
 
-from sparsevllm.kernels.triton.context_flashattention_nopad import context_attention_fwd
+from sparseengine.kernels.triton.context_flashattention_nopad import context_attention_fwd
 
 def get_block_m():
     return 64 if "Tesla" in torch.cuda.get_device_name(0) else 128

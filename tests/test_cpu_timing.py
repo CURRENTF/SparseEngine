@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-module = importlib.import_module("sparsevllm.utils.profiler")
+module = importlib.import_module("sparseengine.utils.profiler")
 
 
 def test_disabled_timing_does_not_wrap_or_read_clocks(monkeypatch):

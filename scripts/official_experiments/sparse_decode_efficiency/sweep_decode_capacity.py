@@ -55,7 +55,7 @@ def resolve_lane(config, lane):
     if external:
         return external["engine"], external["method"], external
     engine, method = (("vllm", "vanilla") if lane == "vllm-vanilla"
-                      else ("sparsevllm", lane.removeprefix("svllm-")))
+                      else ("sparseengine", lane.removeprefix("sengine-")))
     return engine, method, None
 
 
@@ -160,7 +160,7 @@ def main():
                         help="Export non-smoke measurements, including partial campaigns; smoke stays in its run directory")
     parser.add_argument("--model", required=True)
     parser.add_argument("--gpus", required=True)
-    parser.add_argument("--lanes", default="svllm-vanilla,svllm-snapkv,svllm-quest,svllm-omnikv,vllm-vanilla")
+    parser.add_argument("--lanes", default="sengine-vanilla,sengine-snapkv,sengine-quest,sengine-omnikv,vllm-vanilla")
     parser.add_argument("--wait-for-release", action="store_true")
     parser.add_argument("--attempt", default="initial")
     parser.add_argument("--hold-reservation-seconds", type=int, default=0,
@@ -205,7 +205,7 @@ def main():
     window_mode = protocol == "boundary_sync_v2"
     if window_mode and args.reuse_smoke_from:
         raise ValueError("Boundary-sync resumes require a fresh smoke")
-    if window_mode and (args.reuse_cases_from or args.reuse_additional_cases_from) and args.lanes != "svllm-snapkv":
+    if window_mode and (args.reuse_cases_from or args.reuse_additional_cases_from) and args.lanes != "sengine-snapkv":
         raise ValueError("Boundary-sync reuse currently validates native SnapKV only")
     for key in ("output_root", "scratch_root", "conda", "native_env", "vllm_env"):
         if not Path(config[key]).is_absolute():
@@ -295,7 +295,7 @@ def main():
         if external:
             chunk = external.get("max_num_batched_tokens", 8192)
             hp.update(max_num_batched_tokens=chunk, engine_prefill_chunk_size=chunk)
-        if engine == "sparsevllm":
+        if engine == "sparseengine":
             hp["decode_graph_capture_sizes"] = [batch]
             if method in config["methods"]:
                 hp.update(config["methods"][method])
@@ -346,7 +346,7 @@ def main():
         case.mkdir(parents=True)
         write(case / "hyper_params.json", hp)
         command = [config["conda"], "run", "--no-capture-output", "-p",
-                   external["env"] if external else native_env if engine == "sparsevllm" else config["vllm_env"],
+                   external["env"] if external else native_env if engine == "sparseengine" else config["vllm_env"],
                    "python", "-u", "benchmark/microbench.py", "--engine", engine,
                    "--model_path", model["path"], "--lengths", str(length),
                    "--output_len", str(output), "--batch_sizes", str(batch),
@@ -381,7 +381,7 @@ def main():
                         "--backend-label" if window_mode else "--backend_label", external["backend_label"]]
         admission = config.get("native_admission", {}).get(method,
             {"wave_size": 1, "decode_gap_steps": 1} if method == "snapkv" else {})
-        if engine == "sparsevllm" and admission.get("wave_size", 0):
+        if engine == "sparseengine" and admission.get("wave_size", 0):
             command += ["--prefill-wave-size" if window_mode else "--admission_wave_size", str(admission["wave_size"]),
                         "--wave-decode-gap-steps" if window_mode else "--wave_decode_gap_steps", str(admission.get("decode_gap_steps", 0))]
         if available and not smoke and window_mode:
@@ -411,10 +411,10 @@ def main():
             return result
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
-            env["SPARSEVLLM_MASTER_PORT"] = str(listener.getsockname()[1])
+            env["SPARSEENGINE_MASTER_PORT"] = str(listener.getsockname()[1])
         from benchmark.efficiency.paper import source_version, without_source_fingerprints
         version = source_version(REPO)
-        write(case / "identity.json", {"command": command, "env": {key: env[key] for key in ("CUDA_VISIBLE_DEVICES", "PYTHONPATH", "VLLM_ENABLE_V1_MULTIPROCESSING", "SPARSEVLLM_MASTER_PORT")},
+        write(case / "identity.json", {"command": command, "env": {key: env[key] for key in ("CUDA_VISIBLE_DEVICES", "PYTHONPATH", "VLLM_ENABLE_V1_MULTIPROCESSING", "SPARSEENGINE_MASTER_PORT")},
               "git_commit": version["git_head"], "git_dirty": version["git_dirty"],
               "model_config_sha256": hashlib.sha256((Path(model["path"]) / "config.json").read_bytes()).hexdigest()})
         status(str(case.relative_to(root)), "running")
@@ -623,7 +623,7 @@ def main():
                     upper = batch
                     break
                 lower = batch
-                if batch == 1 and lane in ("svllm-vanilla", "svllm-quest", "svllm-omnikv", "vllm-vanilla", "vortex-quest"):
+                if batch == 1 and lane in ("sengine-vanilla", "sengine-quest", "sengine-omnikv", "vllm-vanilla", "vortex-quest"):
                     hint = full_kv_capacity_hint(root / lane / "bs1", config["input_len"] + config["output_len"])
                     if hint and hint >= lower:
                         status(lane, "capacity_hint", concurrency=hint,

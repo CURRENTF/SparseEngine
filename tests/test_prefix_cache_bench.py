@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from sparsevllm.config import Config
+from sparseengine.config import Config
 from scripts.benchmarks import bench_prefix_cache as bench
 
 
@@ -233,7 +233,7 @@ def test_prefix_cache_bench_token_plan_uses_max_bounds():
     assert plan["shared_prefix_max_prompt"] == 59
 
 
-def test_prefix_cache_bench_engine_kwargs_are_sparsevllm_config_fields():
+def test_prefix_cache_bench_engine_kwargs_are_sparseengine_config_fields():
     args = types.SimpleNamespace(
         gpu_memory_utilization=0.65,
         tensor_parallel_size=1,

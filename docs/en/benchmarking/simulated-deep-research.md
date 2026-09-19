@@ -40,11 +40,11 @@ tokens.
 
 The runner calls the smart router's `/v1/completions` endpoint.
 
-- Subagents send `svllm_method_preference=snapkv`.
+- Subagents send `sengine_method_preference=snapkv`.
 - Main-agent requests send
-  `svllm_method_preference=omnikv,vanilla`.
+  `sengine_method_preference=omnikv,vanilla`.
 - Optional `--subagent-required-tags` and `--main-agent-required-tags` values
-  are forwarded as `svllm_required_tags`. They allow two workers using the same
+  are forwarded as `sengine_required_tags`. They allow two workers using the same
   method, such as a two-worker vanilla baseline, to remain assigned to separate
   roles.
 - The preflight requires at least two healthy workers for the selected model
@@ -90,7 +90,7 @@ python -m benchmark.simulated_deep_research.run \
 
 The client timeout must exceed the router's upstream timeout by at least
 `--router-timeout-margin-s`. The defaults use a 930-second client timeout, a
-30-second margin, and `SPARSEVLLM_ROUTER_REQUEST_TIMEOUT_S=900` for the
+30-second margin, and `SPARSEENGINE_ROUTER_REQUEST_TIMEOUT_S=900` for the
 systemd router. Keep the separate router control-plane timeout short; its
 default is 5 seconds.
 The worker serves internal routing-load and prefix-match probes from immutable
@@ -160,8 +160,8 @@ the original fixed-count behavior. Preflight sizes the main-agent context
 requirement from the configured maximum so every sampled round is valid.
 
 For a fair two-worker vanilla baseline, tag the workers through
-`SPARSEVLLM_WORKER_TAGS=subagent` and
-`SPARSEVLLM_WORKER_TAGS=main-agent`, enable prefix caching on the main-agent
+`SPARSEENGINE_WORKER_TAGS=subagent` and
+`SPARSEENGINE_WORKER_TAGS=main-agent`, enable prefix caching on the main-agent
 worker, and run:
 
 ```bash

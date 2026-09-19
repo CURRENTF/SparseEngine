@@ -128,9 +128,9 @@ YaRN 的有效上下文长度为 `original_max_position_embeddings × factor`；
 
 ## Benchmark adapter
 
-文本 benchmark 共用 `benchmark/model_adapters/sparsevllm.py`。它接收相同的
+文本 benchmark 共用 `benchmark/model_adapters/sparseengine.py`。它接收相同的
 public 参数，构造原生 engine，并为 LongBench、MathBench、NIAH 和 RULER core
-提供轻量 generation callable。SCBench 使用原生 `sparsevllm` attention
+提供轻量 generation callable。SCBench 使用原生 `sparseengine` attention
 type，不存在 `--backend hf` 选项。
 
 ## Decode 预留窗口

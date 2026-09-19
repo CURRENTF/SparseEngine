@@ -6,15 +6,15 @@ import pytest
 import torch
 from torch import nn
 
-from sparsevllm.layers.attention import Attention
-from sparsevllm.operators.attention_capabilities import AttentionScoreKind
-from sparsevllm.operators.decode_attention import DecodeAttentionOpSpec
-from sparsevllm.operators.full_attention import (
+from sparseengine.layers.attention import Attention
+from sparseengine.operators.attention_capabilities import AttentionScoreKind
+from sparseengine.operators.decode_attention import DecodeAttentionOpSpec
+from sparseengine.operators.full_attention import (
     FullAttentionOpSpec,
     FullAttentionProvider,
     prepare_full_attention_provider,
 )
-from sparsevllm.operators.prefill_attention import PrefillAttentionOpSpec
+from sparseengine.operators.prefill_attention import PrefillAttentionOpSpec
 
 
 def _specs(**decode_overrides) -> tuple[PrefillAttentionOpSpec, DecodeAttentionOpSpec]:
@@ -188,11 +188,11 @@ def test_full_attention_prepare_cleans_prefill_when_decode_prepare_fails():
 
     with (
         patch(
-            "sparsevllm.operators.full_attention.prepare_prefill_attention_op",
+            "sparseengine.operators.full_attention.prepare_prefill_attention_op",
             return_value=prefill_op,
         ),
         patch(
-            "sparsevllm.operators.full_attention.prepare_decode_attention_op",
+            "sparseengine.operators.full_attention.prepare_decode_attention_op",
             side_effect=RuntimeError("decode prepare failed"),
         ),
         pytest.raises(RuntimeError, match="decode prepare failed"),
@@ -218,11 +218,11 @@ def test_full_attention_prepare_cleans_both_phases_when_composition_fails():
 
     with (
         patch(
-            "sparsevllm.operators.full_attention.prepare_prefill_attention_op",
+            "sparseengine.operators.full_attention.prepare_prefill_attention_op",
             return_value=prefill_op,
         ),
         patch(
-            "sparsevllm.operators.full_attention.prepare_decode_attention_op",
+            "sparseengine.operators.full_attention.prepare_decode_attention_op",
             return_value=incompatible_decode,
         ),
         pytest.raises(ValueError, match="Prepared decode operator"),

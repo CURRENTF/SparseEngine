@@ -6,8 +6,8 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MODEL_ROOT = Path(os.getenv("SPARSEVLLM_MODEL_ROOT", PROJECT_ROOT / "models"))
-DEFAULT_OUTPUT_ROOT = Path(os.getenv("SPARSEVLLM_OUTPUT_DIR", PROJECT_ROOT / "outputs"))
+DEFAULT_MODEL_ROOT = Path(os.getenv("SPARSEENGINE_MODEL_ROOT", PROJECT_ROOT / "models"))
+DEFAULT_OUTPUT_ROOT = Path(os.getenv("SPARSEENGINE_OUTPUT_DIR", PROJECT_ROOT / "outputs"))
 
 DEFAULT_OUTPUT_DIR = DEFAULT_OUTPUT_ROOT / "multimodal" / "streamingbench_livevlm_table4_7b_vanilla"
 DEFAULT_EXPECTED_MODEL_PATH = DEFAULT_MODEL_ROOT / "llava-onevision-qwen2-7b-ov-hf"

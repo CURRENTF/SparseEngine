@@ -584,7 +584,7 @@ def _validate_method_trigger(evidence: dict[str, Any]) -> None:
 
 def _same_provider_eager_model_runner(*args, **kwargs):
     """Spawn-safe diagnostic adapter: bind Graph providers, execute eagerly."""
-    from sparsevllm.engine.model_runner import ModelRunner
+    from sparseengine.engine.model_runner import ModelRunner
 
     original_run = ModelRunner.run
 
@@ -611,7 +611,7 @@ def _run_decode_logits(
     same_provider_eager: bool = False,
     trace_selection: bool = False,
 ) -> tuple[torch.Tensor, list[dict[str, Any]], dict[str, Any]]:
-    from sparsevllm import LLM, SamplingParams
+    from sparseengine import LLM, SamplingParams
 
     rounds = [
         [lengths] * batch_size if isinstance(lengths, int) else lengths
@@ -623,10 +623,10 @@ def _run_decode_logits(
     ):
         raise ValueError("Each prompt-length round must contain one positive length per request.")
     construct_with_graph = bool(use_graph or same_provider_eager)
-    if os.getenv("SPARSEVLLM_DEBUG_SKIP_ENGINE_WARMUP", "0") == "1":
+    if os.getenv("SPARSEENGINE_DEBUG_SKIP_ENGINE_WARMUP", "0") == "1":
         LLM._warmup = lambda self: None
     elif same_provider_eager and not use_graph:
-        import sparsevllm.engine.llm_engine as engine_module
+        import sparseengine.engine.llm_engine as engine_module
 
         engine_module.ModelRunner = _same_provider_eager_model_runner
         original_warmup = LLM._warmup
@@ -692,7 +692,7 @@ def _run_decode_logits(
         def wrapped_run_model(input_ids, positions, is_prefill):
             logits = original_run_model(input_ids, positions, is_prefill)
             if not is_prefill:
-                from sparsevllm.utils.context import get_context
+                from sparseengine.utils.context import get_context
 
                 # Eager-static invokes this hook before trimming its padded
                 # model output; token events contain only live request rows.

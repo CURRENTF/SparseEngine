@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 GPUS="${1:-6,7}"
-SYSTEMS="${2:-svllm-vanilla,svllm-snapkv,vllm-vanilla}"
+SYSTEMS="${2:-sengine-vanilla,sengine-snapkv,vllm-vanilla}"
 MODEL_NAME="${3:-qwen3_30b}"
 PROMPT_LENS="${PROMPT_LENS:-8192,16384,32768}"
 OUTPUT_LENS="${OUTPUT_LENS:-512}"
@@ -25,9 +25,9 @@ OMNIKV_FULL_ATTENTION_LAYERS="${OMNIKV_FULL_ATTENTION_LAYERS:-}"
 MANIFEST_MODEL_ID="${BENCH_MANIFEST_MODEL_ID:-}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
-DATA_ROOT="${SPARSEVLLM_LONGBENCH_DATA_DIR:-${SPARSEVLLM_DATA_DIR:-data/LongBench}}"
-BASE_OUT="${SPARSEVLLM_OUTPUT_DIR:-outputs}/unified_efficiency_$(date +%Y%m%d_%H%M%S)"
-MANIFEST_PATH="${SPARSEVLLM_REGRESSION_MANIFEST:-${REPO_ROOT}/benchmark/sparsevllm_regression/manifest.json}"
+DATA_ROOT="${SPARSEENGINE_LONGBENCH_DATA_DIR:-${SPARSEENGINE_DATA_DIR:-data/LongBench}}"
+BASE_OUT="${SPARSEENGINE_OUTPUT_DIR:-outputs}/unified_efficiency_$(date +%Y%m%d_%H%M%S)"
+MANIFEST_PATH="${SPARSEENGINE_REGRESSION_MANIFEST:-${REPO_ROOT}/benchmark/sparseengine_regression/manifest.json}"
 TASKS="qasper,hotpotqa,multi_news,trec,passage_retrieval_en,lcc"
 
 export PYTHONPATH="${REPO_ROOT}:${REPO_ROOT}/src:${PYTHONPATH:-}"
@@ -68,27 +68,27 @@ resolve_system() {
   SYSTEM_METHOD=""
   SYSTEM_LONG_BENCH_ARGS=()
   case "${system}" in
-    svllm-vanilla)
-      SYSTEM_ENGINE=sparsevllm
+    sengine-vanilla)
+      SYSTEM_ENGINE=sparseengine
       SYSTEM_METHOD=vanilla
       ;;
-    svllm-snapkv)
-      SYSTEM_ENGINE=sparsevllm
+    sengine-snapkv)
+      SYSTEM_ENGINE=sparseengine
       SYSTEM_METHOD=snapkv
       ;;
-    svllm-h2o)
-      SYSTEM_ENGINE=sparsevllm
+    sengine-h2o)
+      SYSTEM_ENGINE=sparseengine
       SYSTEM_METHOD=h2o
       ;;
-    svllm-omnikv)
-      SYSTEM_ENGINE=sparsevllm
+    sengine-omnikv)
+      SYSTEM_ENGINE=sparseengine
       SYSTEM_METHOD=omnikv
       ;;
-    svllm-deltakv)
-      SYSTEM_ENGINE=sparsevllm
+    sengine-deltakv)
+      SYSTEM_ENGINE=sparseengine
       SYSTEM_METHOD=deltakv
       if [ -z "${DELTAKV_COMPRESSOR_PATH}" ]; then
-        echo "ERROR: svllm-deltakv requires DELTAKV_COMPRESSOR_PATH." >&2
+        echo "ERROR: sengine-deltakv requires DELTAKV_COMPRESSOR_PATH." >&2
         return 2
       fi
       if [ ! -e "${DELTAKV_COMPRESSOR_PATH}" ]; then
@@ -123,7 +123,7 @@ print(json.dumps(params, separators=(",", ":")))
 
   local -a config_args
   config_args=(
-    -m benchmark.sparsevllm_regression.manifest
+    -m benchmark.sparseengine_regression.manifest
     --manifest "${MANIFEST_PATH}"
     --method "${SYSTEM_METHOD}"
     --overrides-json "${overrides_json}"
@@ -169,8 +169,8 @@ export CUDA_VISIBLE_DEVICES="${GPUS}"
 export CUDA_HOME
 export PATH="${CUDA_HOME}/bin:${PATH}"
 export TOKENIZERS_PARALLELISM=false
-export SPARSEVLLM_DATA_DIR="${DATA_ROOT}"
-export SPARSEVLLM_LONGBENCH_DATA_DIR="${DATA_ROOT}"
+export SPARSEENGINE_DATA_DIR="${DATA_ROOT}"
+export SPARSEENGINE_LONGBENCH_DATA_DIR="${DATA_ROOT}"
 
 MON_PID=""
 stop_monitor() {

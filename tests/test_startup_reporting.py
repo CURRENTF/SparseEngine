@@ -1,6 +1,6 @@
 import pytest
 
-from sparsevllm.engine.startup import (
+from sparseengine.engine.startup import (
     CacheRuntimeBuildMeasurement,
     DeviceMemorySnapshot,
     MemoryProfileMeasurement,

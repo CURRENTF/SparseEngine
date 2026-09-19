@@ -4,9 +4,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from sparsevllm.engine.cache_manager.decode_reservation import DecodeReservations
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.sampling_params import SamplingParams
+from sparseengine.engine.cache_manager.decode_reservation import DecodeReservations
+from sparseengine.engine.sequence import Sequence
+from sparseengine.sampling_params import SamplingParams
 
 
 class Pools:
@@ -26,7 +26,7 @@ class Pools:
 ])
 def test_streamingllm_window_matches_append_and_compact_peak(resident, tokens, budget):
     # Catch linear-growth reservations for a cache that repeatedly compacts.
-    from sparsevllm.engine.cache_manager.methods.streamingllm import StreamingLLMCacheManager
+    from sparseengine.engine.cache_manager.methods.streamingllm import StreamingLLMCacheManager
     manager = object.__new__(StreamingLLMCacheManager)
     manager.config = SimpleNamespace(sink_keep_tokens=0, recent_keep_tokens=budget)
     manager.kv_transformer_layer_indices = lambda: [0, 2]
@@ -167,7 +167,7 @@ def test_batch_failure_propagates_without_committing_failing_request():
 def test_runtime_reuses_live_windows_without_querying_prefix_capacity():
     # The ledger's early return alone did not prevent its caller from scanning
     # the radix tree first. Exercise that caller and renewal safety together.
-    from sparsevllm.engine.runtime_state import RuntimeState
+    from sparseengine.engine.runtime_state import RuntimeState
 
     pools = Pools(slots=12)
     pools.prompt_admission_budgets = Mock(return_value={"slots": 9})
@@ -206,7 +206,7 @@ def test_runtime_reuses_live_windows_without_querying_prefix_capacity():
 
 
 def test_runtime_finished_and_replay_rows_need_no_new_window_budget():
-    from sparsevllm.engine.runtime_state import RuntimeState
+    from sparseengine.engine.runtime_state import RuntimeState
 
     pools = Pools(slots=0)
     pools.decode_window_budgets = Mock(side_effect=AssertionError("unused capacity query"))
@@ -253,7 +253,7 @@ def test_window_does_not_schedule_or_reset_eviction(window):
 
 @pytest.mark.parametrize('tokens', [1, 3, 16, 257])
 def test_snapkv_window_cost_ignores_output_limit(tokens):
-    from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+    from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
     manager = object.__new__(SnapKVCacheManager)
     manager.config = SimpleNamespace(sparse_method='snapkv', sink_keep_tokens=2,
                                      decode_keep_tokens=4, recent_keep_tokens=2,
@@ -273,7 +273,7 @@ def test_snapkv_window_cost_ignores_output_limit(tokens):
 def test_h2o_window_covers_append_before_eviction(tokens, eviction):
     # Include rows before/at/past the eviction trigger, uneven residency, and
     # non-contiguous layer IDs: the direct cost path must retain physical peaks.
-    from sparsevllm.engine.cache_manager.methods.h2o import H2OCacheManager
+    from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
     manager = object.__new__(H2OCacheManager)
     manager.config = SimpleNamespace(sparse_method='h2o', h2o_decode_budget=4,
                                      h2o_decode_eviction_interval=3, h2o_prefill_budget=4,
@@ -300,7 +300,7 @@ def test_h2o_window_covers_append_before_eviction(tokens, eviction):
 def test_pyramidkv_window_starts_from_actual_residency(resident, tokens):
     # A decode window does not perform final-prefill compaction. Existing
     # SnapKV/H2O tests use different retention policies and miss this regression.
-    from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+    from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
 
     manager = object.__new__(SnapKVCacheManager)
     manager.config = SimpleNamespace(
@@ -322,7 +322,7 @@ def test_pyramidkv_window_starts_from_actual_residency(resident, tokens):
 
 
 def make_kivi_manager(seqs, *, sink=8, residual=32, group=32):
-    from sparsevllm.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+    from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
     manager = object.__new__(DeltaKVLessMemoryCacheManager)
     manager.config = SimpleNamespace(
@@ -406,8 +406,8 @@ def test_kivi_bounded_raw_pool_keeps_two_decode_windows_reserved():
 def test_deltakv_latent_reservation_does_not_consume_prefill_raw_slots():
     # A block compression needs many latent slots but only one raw append.
     # Ledger-only tests miss RuntimeState collapsing these distinct pools.
-    from sparsevllm.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager
-    from sparsevllm.engine.runtime_state import RuntimeState
+    from sparseengine.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager
+    from sparseengine.engine.runtime_state import RuntimeState
 
     seq = Sequence([1] * 263, SamplingParams(max_tokens=10))
     seq.num_prefilled_tokens = seq.num_prompt_tokens
@@ -446,7 +446,7 @@ def test_deltakv_latent_reservation_does_not_consume_prefill_raw_slots():
 def test_kivi_prefill_subtracts_each_raw_pool_before_taking_minimum():
     # KIVI bounds full-layer raw growth while sparse raw growth uses a different
     # pool. Subtracting the largest raw reservation from the smallest pool fails.
-    from sparsevllm.engine.runtime_state import RuntimeState
+    from sparseengine.engine.runtime_state import RuntimeState
 
     seq = request(limit=2050)
     manager = make_kivi_manager([seq])

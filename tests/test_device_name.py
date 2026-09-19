@@ -1,6 +1,6 @@
 import pytest
 
-from sparsevllm.utils.device_name import device_name_contains
+from sparseengine.utils.device_name import device_name_contains
 
 
 @pytest.mark.parametrize(

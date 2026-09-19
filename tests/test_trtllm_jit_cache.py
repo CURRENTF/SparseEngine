@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from sparsevllm.kernels.external.flashinfer import jit_cache
+from sparseengine.kernels.external.flashinfer import jit_cache
 
 
 @pytest.fixture(autouse=True)
@@ -17,7 +17,7 @@ def isolated_cache_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(jit_cache, "_configured_cache", None)
     monkeypatch.setattr(jit_cache, "_cache_lease", None)
     monkeypatch.setattr(jit_cache, "_cache_namespace", lambda: "test-toolchain")
-    for variable in ("SPARSEVLLM_TRTLLM_DG_CACHE_ROOT", "TRTLLM_DG_CACHE_DIR"):
+    for variable in ("SPARSEENGINE_TRTLLM_DG_CACHE_ROOT", "TRTLLM_DG_CACHE_DIR"):
         monkeypatch.setenv(variable, "")
         monkeypatch.delenv(variable)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
@@ -38,7 +38,7 @@ def test_worker_uses_selected_root_without_overwriting_shared_artifacts(
     selected = shared
     if explicit_root:
         selected = tmp_path / "override"
-        monkeypatch.setenv("SPARSEVLLM_TRTLLM_DG_CACHE_ROOT", str(selected))
+        monkeypatch.setenv("SPARSEENGINE_TRTLLM_DG_CACHE_ROOT", str(selected))
 
     path = jit_cache.configure_trtllm_cache(rank=0)
     assert path.parent == selected
@@ -64,7 +64,7 @@ def test_sequential_engines_reuse_process_static_cache_without_nesting():
     assert (first / "kernel.cubin").read_bytes() == b"compiled"
 
 
-@pytest.mark.parametrize("variable", ["TRTLLM_DG_CACHE_DIR", "SPARSEVLLM_TRTLLM_DG_CACHE_ROOT"])
+@pytest.mark.parametrize("variable", ["TRTLLM_DG_CACHE_DIR", "SPARSEENGINE_TRTLLM_DG_CACHE_ROOT"])
 def test_root_change_fails_before_new_workers_can_be_launched(monkeypatch, tmp_path, variable):
     first = jit_cache.configure_trtllm_cache(rank=0)
     changed = tmp_path / "changed"
@@ -87,7 +87,7 @@ def test_bad_root_does_not_publish_partial_configuration(tmp_path):
     assert jit_cache._configured_cache is None
 
 
-@pytest.mark.parametrize("variable", ["TRTLLM_DG_CACHE_DIR", "SPARSEVLLM_TRTLLM_DG_CACHE_ROOT"])
+@pytest.mark.parametrize("variable", ["TRTLLM_DG_CACHE_DIR", "SPARSEENGINE_TRTLLM_DG_CACHE_ROOT"])
 def test_empty_explicit_root_is_not_silently_ignored(monkeypatch, variable):
     monkeypatch.setenv(variable, "")
     with pytest.raises(ValueError, match="non-empty"):
@@ -101,7 +101,7 @@ def test_spawned_instances_and_ranks_write_same_cache_key_independently():
     parent_cache = jit_cache.configure_trtllm_cache(rank=0)
     script = """
 import json, os, sys
-from sparsevllm.kernels.external.flashinfer.jit_cache import configure_trtllm_cache
+from sparseengine.kernels.external.flashinfer.jit_cache import configure_trtllm_cache
 path = configure_trtllm_cache(rank=int(sys.argv[2]), root=sys.argv[1])
 with (path / 'kernel.cubin').open('x') as artifact:
     artifact.write(str(os.getpid()))
@@ -139,7 +139,7 @@ input()
 def test_restart_reuses_exclusive_cache_artifact(tmp_path):
     script = """
 import sys
-from sparsevllm.kernels.external.flashinfer.jit_cache import configure_trtllm_cache
+from sparseengine.kernels.external.flashinfer.jit_cache import configure_trtllm_cache
 path = configure_trtllm_cache(0, sys.argv[1])
 artifact = path / 'test-artifact'
 if sys.argv[2] == 'write':

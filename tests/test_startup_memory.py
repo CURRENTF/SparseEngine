@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import torch
 
-from sparsevllm.engine.startup import (
+from sparseengine.engine.startup import (
     CacheRuntimeBuildMeasurement,
     DeviceMemorySnapshot,
     MemoryProfileMeasurement,
     release_unused_device_memory,
 )
-from sparsevllm.platforms.interface import AllocatorStats, Platform
+from sparseengine.platforms.interface import AllocatorStats, Platform
 
 
 class _RecordingPlatform(Platform):
@@ -37,7 +37,7 @@ def test_release_unused_device_memory_synchronizes_around_empty_cache(monkeypatc
     platform = _RecordingPlatform()
     collected = []
     monkeypatch.setattr(
-        "sparsevllm.engine.startup.memory.gc.collect",
+        "sparseengine.engine.startup.memory.gc.collect",
         lambda: collected.append(True),
     )
 

@@ -27,7 +27,7 @@ def make_window_case(root):
         artifact = root / f"repeat{index}" / "performance.jsonl"
         case = artifact.parent / "vanilla-10-2"
         case.mkdir(parents=True)
-        row = dict(engine="sparsevllm", method="vanilla", length=10, output_len=6, batch_size=2,
+        row = dict(engine="sparseengine", method="vanilla", length=10, output_len=6, batch_size=2,
             status="success", actual_decode_peak=2, completed_requests=2, scheduler_preemptions=0,
             decode_warmup_steps_after_full=1, resolved_parallel_topology={"tensor_parallel_size": 1},
             **decode_window_fields(window.require_result()))
@@ -95,14 +95,14 @@ def test_window_export_rejects_falsely_successful_artifacts(tmp_path, corruption
         validate_measurement(artifact, 2, config)
 
 
-def make_case(tmp_path, engine="sparsevllm"):
+def make_case(tmp_path, engine="sparseengine"):
     config = {"input_len": 128, "output_len": 4}
     row = dict(engine=engine, method="vanilla", length=128, output_len=4,
                status="success", stage_metrics_status="success",
                measurement_scope="full_batch_pure_decode_steps", actual_decode_peak=2,
                completed_requests=2, scheduler_preemptions=0, synchronize_step_timing=True,
                decode_stage_tokens=4, decode_stage_elapsed_s=0.5, decode_stage_throughput_tps=8.0)
-    steps = [{"tokens": -2 if engine == "sparsevllm" else 2, "elapsed_s": dt,
+    steps = [{"tokens": -2 if engine == "sparseengine" else 2, "elapsed_s": dt,
               "measured": True, "pure_decode": True} for dt in (0.2, 0.3)]
     case = tmp_path / "vanilla-128-2"
     case.mkdir()
@@ -118,7 +118,7 @@ def persist(tmp_path, row, steps, outputs, case):
     return artifact
 
 
-@pytest.mark.parametrize("engine", ["sparsevllm", "vllm", "hisparse"])
+@pytest.mark.parametrize("engine", ["sparseengine", "vllm", "hisparse"])
 def test_reconstruct_stage_rate_from_independent_token_work(tmp_path, engine):
     config, row, steps, outputs, case = make_case(tmp_path, engine)
     artifact = persist(tmp_path, row, steps, outputs, case)
@@ -189,7 +189,7 @@ def test_boundary_resume_rejects_changed_workload_identity(tmp_path, monkeypatch
     model = tmp_path / "model"
     model.mkdir()
     (model / "config.json").write_text("{}")
-    previous = tmp_path / "old" / "svllm-snapkv" / "bs2"
+    previous = tmp_path / "old" / "sengine-snapkv" / "bs2"
     previous.mkdir(parents=True)
     config = {"measurement_protocol": "boundary_sync_v2"}
     (previous.parent.parent / "campaign.json").write_text(json.dumps(config))
@@ -331,12 +331,12 @@ def test_grid_preserves_per_panel_protocol_and_explicit_missing_curve(tmp_path, 
         source.write_text(json.dumps(dict(models={"fixture": {}}, input_len=length,
             output_len=4, output_root=str(tmp_path), measurement_protocol="boundary_sync_v2")))
         panels.append(dict(config=source.name, model="fixture", curves={
-            "svllm-snapkv": dict(capacity_artifact="missing.json", allow_partial=True,
+            "sengine-snapkv": dict(capacity_artifact="missing.json", allow_partial=True,
                                   reason="not measured yet; do not invent a result")}))
     def collect(config):
         seen.append(config)
         return [dict(model="fixture", lane=lane, points=[dict(concurrency=1), dict(concurrency=2)])
-                for lane in ("svllm-vanilla", "vllm-vanilla")]
+                for lane in ("sengine-vanilla", "vllm-vanilla")]
     monkeypatch.setattr(plot, "load_campaign", collect)
     monkeypatch.setattr(plot, "validate_grid_identity", lambda *args: None)
     manifest = tmp_path / "grid.json"
@@ -344,12 +344,12 @@ def test_grid_preserves_per_panel_protocol_and_explicit_missing_curve(tmp_path, 
     config, curves = plot.load_grid(manifest)
     assert [c["input_len"] for c in seen] == [128, 32]
     assert {c["model"] for c in curves} == set(config["panel_protocols"])
-    assert seen[0]["omitted_curves"]["fixture"]["svllm-snapkv"]["source_status"] == "not_measured"
-    panels[0]["curves"]["svllm-snapkv"]["allow_partial"] = False
+    assert seen[0]["omitted_curves"]["fixture"]["sengine-snapkv"]["source_status"] == "not_measured"
+    panels[0]["curves"]["sengine-snapkv"]["allow_partial"] = False
     manifest.write_text(json.dumps(dict(shape=[2, 1], panels=panels)))
     with pytest.raises(ValueError, match="requires a completed"):
         plot.load_grid(manifest)
-    panels[0]["curves"]["svllm-snapkv"]["allow_partial"] = True
+    panels[0]["curves"]["sengine-snapkv"]["allow_partial"] = True
     manifest.write_text(json.dumps(dict(shape=[2, 1], panels=panels)))
     (tmp_path / "missing.json").write_text("not valid json")
     with pytest.raises(json.JSONDecodeError):
@@ -395,11 +395,11 @@ def test_relative_delta_uses_baseline_denominator_and_exact_batches():
     curves = [dict(model='m', lane='vllm-vanilla', points=[
         dict(concurrency=1, decode_throughput_tps=100),
         dict(concurrency=4, decode_throughput_tps=200)]),
-        dict(model='m', lane='svllm-snapkv', points=[
+        dict(model='m', lane='sengine-snapkv', points=[
             dict(concurrency=1, decode_throughput_tps=150),
             dict(concurrency=2, decode_throughput_tps=180),
             dict(concurrency=4, decode_throughput_tps=150)])]
-    rows = [r for r in relative_vllm_points(curves, config) if r['lane'] == 'svllm-snapkv']
+    rows = [r for r in relative_vllm_points(curves, config) if r['lane'] == 'sengine-snapkv']
     assert rows[0]['delta_percent'] == pytest.approx(50)
     assert rows[1]['status'] == 'skipped_by_policy'
     assert rows[1]['delta_percent'] is None
@@ -410,9 +410,9 @@ def test_relative_delta_excludes_changed_input_output_protocol():
     """Same batch and total span do not make adjusted contexts a matched pair."""
     from scripts.official_experiments.sparse_decode_efficiency.plot_decode_capacity import relative_vllm_points
     config = dict(models={'m': {}}, input_len=100, output_len=10,
-                  curve_protocols={'m': {'svllm-snapkv': dict(input_len=90, output_len=20)}})
+                  curve_protocols={'m': {'sengine-snapkv': dict(input_len=90, output_len=20)}})
     curves = [dict(model='m', lane=lane, points=[dict(concurrency=1, decode_throughput_tps=100)])
-              for lane in ('vllm-vanilla', 'svllm-snapkv')]
+              for lane in ('vllm-vanilla', 'sengine-snapkv')]
     row = relative_vllm_points(curves, config)[1]
     assert row['reason'] == 'protocol_mismatch' and row['delta_percent'] is None
 

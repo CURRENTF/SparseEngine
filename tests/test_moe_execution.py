@@ -4,8 +4,8 @@ import pytest
 import torch
 from torch import nn
 
-from sparsevllm.distributed.moe_communication import AllReduceMoeCommunication
-from sparsevllm.operators.moe_execution import MoeExecutionPlan, prepare_model_moe_execution
+from sparseengine.distributed.moe_communication import AllReduceMoeCommunication
+from sparseengine.operators.moe_execution import MoeExecutionPlan, prepare_model_moe_execution
 
 
 def test_fused_execution_does_not_execute_shared_twice():
@@ -126,7 +126,7 @@ def test_finish_receives_chunked_routing_metadata_and_local_shared_branch():
 
 @pytest.mark.parametrize("has_independent_decode", [False, True])
 def test_model_prepares_only_reachable_parallel_branches(monkeypatch, has_independent_decode):
-    from sparsevllm.operators import moe_execution
+    from sparseengine.operators import moe_execution
 
     runtime = moe_execution.device_runtime
     new_stream, new_event, bind_lane = Mock(), Mock(), Mock()

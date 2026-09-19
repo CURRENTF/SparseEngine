@@ -11,8 +11,8 @@ import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RUNNER = REPO_ROOT / "benchmark" / "claw_eval" / "run_sparsevllm_claw_eval.sh"
-CONFIG = REPO_ROOT / "benchmark" / "claw_eval" / "sparsevllm_config.yaml"
+RUNNER = REPO_ROOT / "benchmark" / "claw_eval" / "run_sparseengine_claw_eval.sh"
+CONFIG = REPO_ROOT / "benchmark" / "claw_eval" / "sparseengine_config.yaml"
 
 
 class ClawEvalRunnerTest(unittest.TestCase):
@@ -56,10 +56,10 @@ class ClawEvalRunnerTest(unittest.TestCase):
     def test_config_routes_model_and_sandbox_without_secrets_in_runner(self):
         rendered = Template(CONFIG.read_text(encoding="utf-8")).substitute(
             {
-                "SPARSEVLLM_OPENAI_API_KEY": "local-test-key",
-                "SPARSEVLLM_OPENAI_BASE_URL": "http://127.0.0.1:18000/v1",
-                "SPARSEVLLM_CLAW_MODEL_ID": "test-model",
-                "SPARSEVLLM_CONTEXT_WINDOW": "32768",
+                "SPARSEENGINE_OPENAI_API_KEY": "local-test-key",
+                "SPARSEENGINE_OPENAI_BASE_URL": "http://127.0.0.1:18000/v1",
+                "SPARSEENGINE_CLAW_MODEL_ID": "test-model",
+                "SPARSEENGINE_CONTEXT_WINDOW": "32768",
                 "OPENROUTER_API_KEY": "judge-test-key",
                 "CLAW_EVAL_JUDGE_BASE_URL": "https://openrouter.ai/api/v1",
                 "CLAW_EVAL_JUDGE_MODEL": "judge-model",
@@ -80,13 +80,13 @@ class ClawEvalRunnerTest(unittest.TestCase):
 
         for field in (
             '"claw_eval_commit"',
-            '"start_sparsevllm_server"',
+            '"start_sparseengine_server"',
             '"server_health_url"',
             '"sandbox_image_id"',
             '"sandbox_image_size_bytes"',
         ):
             self.assertIn(field, script)
-        self.assertIn('START_SPARSEVLLM_SERVER="${START_SPARSEVLLM_SERVER:-1}"', script)
+        self.assertIn('START_SPARSEENGINE_SERVER="${START_SPARSEENGINE_SERVER:-1}"', script)
         self.assertIn("Starting sandbox preflight container", script)
         self.assertIn("Set CLAW_EVAL_BUILD_SANDBOX_IMAGE=1", script)
         self.assertIn("require_clean_claw_eval_checkout", script)
@@ -143,7 +143,7 @@ class ClawEvalRunnerTest(unittest.TestCase):
                         {"max_num_seqs_in_batch": 4, "max_decoding_seqs": 99}
                     ),
                     "CLAW_EVAL_ARGS": "batch --parallel 24",
-                    "SPARSEVLLM_DATA_PARALLEL_SIZE": "2",
+                    "SPARSEENGINE_DATA_PARALLEL_SIZE": "2",
                 }
             )
 
@@ -177,7 +177,7 @@ class ClawEvalRunnerTest(unittest.TestCase):
                     "CLAW_EVAL_CONDA_ENV": str(env_dir),
                     "ENGINE_KWARGS": "{}",
                     "CLAW_EVAL_ARGS": "batch --parallel 7",
-                    "SPARSEVLLM_DATA_PARALLEL_SIZE": "2",
+                    "SPARSEENGINE_DATA_PARALLEL_SIZE": "2",
                 }
             )
 

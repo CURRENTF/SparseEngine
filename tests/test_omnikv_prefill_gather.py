@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from sparsevllm.operators.indexed_host_copy import (
+from sparseengine.operators.indexed_host_copy import (
     gather_prefill_rows, gather_prefill_history, scatter_prefill_current,
 )
 

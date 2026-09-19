@@ -45,7 +45,7 @@ DATASETS = {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Download small image QA benchmark parquet datasets.")
     parser.add_argument("--benchmark", default="all", choices=["all", *sorted(DATASETS)])
-    parser.add_argument("--data_root", default=os.getenv("SPARSEVLLM_DATA_DIR", DEFAULT_DATA_ROOT))
+    parser.add_argument("--data_root", default=os.getenv("SPARSEENGINE_DATA_DIR", DEFAULT_DATA_ROOT))
     parser.add_argument("--cache_dir", default=DEFAULT_HF_CACHE)
     parser.add_argument("--max_workers", type=int, default=4)
     parser.add_argument("--local_dir", default="", help="Override local dir for a single benchmark.")

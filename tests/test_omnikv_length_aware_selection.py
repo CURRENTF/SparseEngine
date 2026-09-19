@@ -4,7 +4,7 @@ import os
 import pytest
 import torch
 
-from sparsevllm.operators.omnikv_selection import (
+from sparseengine.operators.omnikv_selection import (
     OmniKVSelectionSpec, TorchCPUOmniKVSelection, TritonOmniKVSelection,
     prepare_omnikv_selection,
 )
@@ -53,7 +53,7 @@ def test_history_selection_ignores_short_row_scores_and_poisoned_tails(k, capaci
 def test_selection_score_pipeline_preserves_unread_storage():
     # Unwritten short rows/tails deliberately contain NaNs, including on reuse.
     device = kernel_device()
-    from sparsevllm.kernels.triton.omnikv_score import launch_omnikv_decode_scores
+    from sparseengine.kernels.triton.omnikv_score import launch_omnikv_decode_scores
     sink, recent, k, capacity = 3, 2, 7, 137
     raw = torch.randn(4, 3, capacity, device=device)
     lengths = torch.tensor([0, 12, 13, capacity], dtype=torch.int32, device=device)
@@ -86,7 +86,7 @@ def test_selection_score_pipeline_preserves_unread_storage():
 def test_prepared_selection_graph_replays_ragged_lengths(k):
     # Exercise the resolved upstream/portable provider, score skips, then repeated
     # short/long transitions without changing input/output addresses or graph.
-    from sparsevllm.operators.omnikv_score import OmniKVScoreSpec, prepare_omnikv_score_provider
+    from sparseengine.operators.omnikv_score import OmniKVScoreSpec, prepare_omnikv_score_provider
     sink, recent, capacity = 64, 512, 131072
     raw = torch.randn(4, 3, capacity, device='cuda')
     lengths = torch.full((4,), capacity, dtype=torch.int32, device='cuda')

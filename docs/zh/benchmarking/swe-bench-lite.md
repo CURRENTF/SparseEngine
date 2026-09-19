@@ -32,8 +32,8 @@ adapter 默认使用 cached/offline Hugging Face access，并要求所选 Docker
 不必因此降低并发。
 
 可选的内存保护要求 Linux cgroup v2、本地 Docker daemon，以及已启用的可写层保护。
-导出 `SPARSEVLLM_DOCKER_MEMORY_LIMIT_BYTES`、`SPARSEVLLM_DOCKER_MEMORY_PARENT`
-和 `SPARSEVLLM_DOCKER_MEMORY_EVENTS`（OOM JSONL 路径）。在 MiniSWE 附加配置的
+导出 `SPARSEENGINE_DOCKER_MEMORY_LIMIT_BYTES`、`SPARSEENGINE_DOCKER_MEMORY_PARENT`
+和 `SPARSEENGINE_DOCKER_MEMORY_EVENTS`（OOM JSONL 路径）。在 MiniSWE 附加配置的
 `environment.run_args` 中设置匹配的 `--memory`、`--memory-swap` 和
 `--cgroup-parent`；memory 与 memory-swap 相等表示容器不使用 swap。
 不要加 `--rm`：检测失败前需要保留 Docker OOM 元数据，之后由保护逻辑显式清理容器。
@@ -43,16 +43,16 @@ adapter 默认使用 cached/offline Hugging Face access，并要求所选 Docker
 也不从评测分母中排除。官方评分容器同样施加内存上限，失败仍由上游评分器报告。
 内存限制会影响资源失败率，必须随实验记录。
 
-## Sparse-vLLM Server
+## Sparse-Engine Server
 
-以独立 long-running process 启动 `sparsevllm.entrypoints.openai.api_server`。典型命令：
+以独立 long-running process 启动 `sparseengine.entrypoints.openai.api_server`。典型命令：
 
 ```bash
 CUDA_VISIBLE_DEVICES=2 \
 PYTHONPATH=$PWD/src \
-python -m sparsevllm.entrypoints.openai.api_server \
+python -m sparseengine.entrypoints.openai.api_server \
   --model <MODEL_PATH> \
-  --served-model-name sparsevllm-swe \
+  --served-model-name sparseengine-swe \
   --host 127.0.0.1 \
   --port 18000 \
   --engine-kwargs /path/to/engine_kwargs.json \
@@ -75,9 +75,9 @@ python -m sparsevllm.entrypoints.openai.api_server \
 
 ```json
 {
-  "command": "python -m sparsevllm.entrypoints.openai.api_server --model <MODEL_PATH> --served-model-name sparsevllm-swe --host 127.0.0.1 --port 18000 --engine-kwargs /path/to/engine_kwargs.json",
+  "command": "python -m sparseengine.entrypoints.openai.api_server --model <MODEL_PATH> --served-model-name sparseengine-swe --host 127.0.0.1 --port 18000 --engine-kwargs /path/to/engine_kwargs.json",
   "model_path": "<MODEL_PATH>",
-  "served_model_name": "sparsevllm-swe",
+  "served_model_name": "sparseengine-swe",
   "cuda_visible_devices": "2",
   "server_port": 18000,
   "engine_kwargs": {
@@ -94,19 +94,19 @@ python -m sparsevllm.entrypoints.openai.api_server \
 
 ## 单 Instance Smoke Test
 
-运行全部 300 个 instance 前，先运行一个。`openai/` 是 LiteLLM provider prefix；`sparsevllm-swe` 是 server 广告的准确 model name。Sparse-vLLM 不要求认证，但 LiteLLM 需要非空 OpenAI key，因此使用本地 dummy value。
+运行全部 300 个 instance 前，先运行一个。`openai/` 是 LiteLLM provider prefix；`sparseengine-swe` 是 server 广告的准确 model name。Sparse-Engine 不要求认证，但 LiteLLM 需要非空 OpenAI key，因此使用本地 dummy value。
 
 ```bash
-export OPENAI_API_KEY=local-sparsevllm
+export OPENAI_API_KEY=local-sparseengine
 
 SWE_BENCH_PYTHON=/path/to/swebench-env/bin/python \
 bash scripts/benchmarks/run_swe_bench_lite.sh \
   --stage all \
   --swe-bench-dir ../SWE-bench \
-  --run-dir /path/to/outputs/swe-bench-lite/sparsevllm-smoke \
-  --model openai/sparsevllm-swe \
+  --run-dir /path/to/outputs/swe-bench-lite/sparseengine-smoke \
+  --model openai/sparseengine-swe \
   --api-base http://127.0.0.1:18000/v1 \
-  --served-model-name sparsevllm-swe \
+  --served-model-name sparseengine-swe \
   --server-manifest /path/to/server_manifest.json \
   --slice 0:1 \
   --batch-size 1 \
@@ -124,16 +124,16 @@ bash scripts/benchmarks/run_swe_bench_lite.sh \
 使用新的 run directory 并移除 `--slice 0:1`。模型、API、prompt、decode、dataset 和 server 设置应与 smoke run 相同。先使用保守的 generation concurrency，只有在 server 处理 concurrent tool-calling request 稳定后再提高 `--mini-workers`。
 
 ```bash
-export OPENAI_API_KEY=local-sparsevllm
+export OPENAI_API_KEY=local-sparseengine
 
 SWE_BENCH_PYTHON=/path/to/swebench-env/bin/python \
 bash scripts/benchmarks/run_swe_bench_lite.sh \
   --stage all \
   --swe-bench-dir ../SWE-bench \
-  --run-dir /path/to/outputs/swe-bench-lite/sparsevllm-lite300 \
-  --model openai/sparsevllm-swe \
+  --run-dir /path/to/outputs/swe-bench-lite/sparseengine-lite300 \
+  --model openai/sparseengine-swe \
   --api-base http://127.0.0.1:18000/v1 \
-  --served-model-name sparsevllm-swe \
+  --served-model-name sparseengine-swe \
   --server-manifest /path/to/server_manifest.json \
   --batch-size 50 \
   --mini-workers 1 \
@@ -152,10 +152,10 @@ bash scripts/benchmarks/run_swe_bench_lite.sh \
 ```bash
 COMMON_ARGS=(
   --swe-bench-dir ../SWE-bench
-  --run-dir /path/to/outputs/swe-bench-lite/sparsevllm-lite300
-  --model openai/sparsevllm-swe
+  --run-dir /path/to/outputs/swe-bench-lite/sparseengine-lite300
+  --model openai/sparseengine-swe
   --api-base http://127.0.0.1:18000/v1
-  --served-model-name sparsevllm-swe
+  --served-model-name sparseengine-swe
   --server-manifest /path/to/server_manifest.json
   --batch-size 50
   --step-limit 80
@@ -174,7 +174,7 @@ bash scripts/benchmarks/run_swe_bench_lite.sh \
 # Requires only completed artifacts in the run directory.
 bash scripts/benchmarks/run_swe_bench_lite.sh \
   --stage summarize \
-  --run-dir /path/to/outputs/swe-bench-lite/sparsevllm-lite300
+  --run-dir /path/to/outputs/swe-bench-lite/sparseengine-lite300
 ```
 
 adapter 拒绝在已有 run directory 中改变 semantic config。改变模型、dataset selection、step limit、decode setting、API endpoint 或 server config 时应使用新 run directory。对于所有非 `summarize` stage，它还会将当前 adapter source、SWE-bench source、Python executable 和 package version 与 `run_manifest.json` 对比；source 或 toolchain drift 要求使用新 run directory。
@@ -213,7 +213,7 @@ model:
         type: disabled
 ```
 
-DeepSeek thinking control 等 provider-specific request field 不属于共享 adapter config。通过 provider-specific `--mini-extra-config` 传入；adapter 会 hash 并 snapshot 该文件。不要为 Sparse-vLLM 复用此类 config，也不要在其中保存 credential。Config 和 server-manifest validation 会在 snapshot 前拒绝敏感 field name、常见 provider token format、authorization header 和 URL credential。
+DeepSeek thinking control 等 provider-specific request field 不属于共享 adapter config。通过 provider-specific `--mini-extra-config` 传入；adapter 会 hash 并 snapshot 该文件。不要为 Sparse-Engine 复用此类 config，也不要在其中保存 credential。Config 和 server-manifest validation 会在 snapshot 前拒绝敏感 field name、常见 provider token format、authorization header 和 URL credential。
 
 ## 输出
 
@@ -223,7 +223,7 @@ DeepSeek thinking control 等 provider-specific request field 不属于共享 ad
 | --- | --- |
 | `run_config.json` | Immutable semantic experiment config 和 selected instance ID。 |
 | `run_manifest.json` | Code revision、package version、Python、credential variable name 和 runtime policy。 |
-| `server_manifest.json` | 适用时，本地 Sparse-vLLM server config 的 snapshot。 |
+| `server_manifest.json` | 适用时，本地 Sparse-Engine server config 的 snapshot。 |
 | `evaluation_identity.json` | 用于 cache ownership 的 prediction hash、official run ID 和 runtime-provenance hash。 |
 | `invocations.jsonl` | Stage invocation 和 operational concurrency setting。 |
 | `status.jsonl` | Append-only stage 和 batch status event。 |

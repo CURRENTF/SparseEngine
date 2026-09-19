@@ -32,15 +32,15 @@ def _get_guard(executable: str) -> DockerWritableLayerGuard:
             _GUARD = DockerWritableLayerGuard(
                 executable=executable,
                 limit_bytes=int(
-                    _required_env("SPARSEVLLM_DOCKER_WRITABLE_LAYER_LIMIT_BYTES")
+                    _required_env("SPARSEENGINE_DOCKER_WRITABLE_LAYER_LIMIT_BYTES")
                 ),
                 poll_seconds=float(
-                    _required_env("SPARSEVLLM_DOCKER_WRITABLE_LAYER_POLL_SECONDS")
+                    _required_env("SPARSEENGINE_DOCKER_WRITABLE_LAYER_POLL_SECONDS")
                 ),
                 events_path=Path(
-                    _required_env("SPARSEVLLM_DOCKER_WRITABLE_LAYER_EVENTS")
+                    _required_env("SPARSEENGINE_DOCKER_WRITABLE_LAYER_EVENTS")
                 ),
-                run_id=_required_env("SPARSEVLLM_SWE_RUN_ID"),
+                run_id=_required_env("SPARSEENGINE_SWE_RUN_ID"),
             )
         return _GUARD
 
@@ -52,7 +52,7 @@ class GuardedDockerEnvironment(DockerEnvironment):
         self._writable_guard: DockerWritableLayerGuard | None = None
         self._writable_guard_state: GuardState | None = None
         self._memory_guard: DockerMemoryGuard | None = None
-        self._memory_enabled = int(os.getenv("SPARSEVLLM_DOCKER_MEMORY_LIMIT_BYTES", "0")) > 0
+        self._memory_enabled = int(os.getenv("SPARSEENGINE_DOCKER_MEMORY_LIMIT_BYTES", "0")) > 0
         super().__init__(**kwargs)
 
     def _start_container(self) -> None:

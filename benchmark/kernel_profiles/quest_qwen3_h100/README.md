@@ -142,5 +142,5 @@ The inspected Vortex revision is
 `gqaquestsparseattention_4a629439_subgraph_0_kernel` tiles64 pages and8 grouped
 query heads, reusing queries across pages and metadata across grouped heads.
 Its BF16 product/max/single-sum arithmetic and per-KV-head Top-K differ from
-Sparse-vLLM's separately rounded positive/negative sums and shared-head pages.
+Sparse-Engine's separately rounded positive/negative sums and shared-head pages.
 The scheduling idea is reusable; these methods do not imply equal selection.

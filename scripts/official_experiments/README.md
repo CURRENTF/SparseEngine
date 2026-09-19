@@ -8,7 +8,7 @@ Large logs, token outputs, and checkpoints remain outside Git.
 
 - [128K input / 2K output decode capacity](sparse_decode_efficiency/README.md):
   two models, five methods, exact concurrency boundaries, linear/log-y figures.
-- [Sparse-vLLM vs Vortex](sparsevllm_vs_vortex/README.md): guarded single-card
+- [Sparse-Engine vs Vortex](sparseengine_vs_vortex/README.md): guarded single-card
   QuEST and H2O-like comparisons, full-residency decode timing, configs,
   recorded JSON data and plots.
 - [AIME 2024](aime/README.md): pass@1 across all 11 methods without auxiliary

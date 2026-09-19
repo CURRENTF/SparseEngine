@@ -7,18 +7,18 @@ import numpy as np
 import pytest
 import torch
 
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.configs.groups import SparseMethodConfig
-from sparsevllm.engine.cache_manager.methods.h2o import H2OCacheManager
-from sparsevllm.engine.cache_manager.methods.rkv import RKVCacheManager
-from sparsevllm.engine.cache_manager.methods.skipkv import (
+from sparseengine.config import RuntimeLayout
+from sparseengine.configs.groups import SparseMethodConfig
+from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
+from sparseengine.engine.cache_manager.methods.rkv import RKVCacheManager
+from sparseengine.engine.cache_manager.methods.skipkv import (
     SkipKVCacheManager,
     SkipKVSentence,
     SkipKVSequenceState,
 )
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.sparse_controller import SparseController
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.sparse_controller import SparseController
 
 
 def _sequences(lengths: list[int]) -> list[Sequence]:

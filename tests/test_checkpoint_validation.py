@@ -3,9 +3,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.distributed.topology import ParallelTopology
-from sparsevllm.models.checkpoint import validate_checkpoint
-from sparsevllm.quantization.config import QuantizationConfig
+from sparseengine.distributed.topology import ParallelTopology
+from sparseengine.models.checkpoint import validate_checkpoint
+from sparseengine.quantization.config import QuantizationConfig
 
 
 def _fp8_quantization(model_name: str) -> QuantizationConfig:

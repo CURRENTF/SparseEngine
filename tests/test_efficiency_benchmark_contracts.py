@@ -136,7 +136,7 @@ def test_fixed_probe_sets_engine_capacity_from_largest_batch_size(
     expected_batch,
     expected_resident,
 ):
-    import sparsevllm
+    import sparseengine
 
     captured = {}
 
@@ -147,7 +147,7 @@ def test_fixed_probe_sets_engine_capacity_from_largest_batch_size(
         captured.update(kwargs)
         raise StopAfterEngineInit(model_path)
 
-    monkeypatch.setattr(sparsevllm, "LLM", capture_engine_kwargs)
+    monkeypatch.setattr(sparseengine, "LLM", capture_engine_kwargs)
     args = SimpleNamespace(
         scenario="fixed",
         output_dir=str(tmp_path),
@@ -166,7 +166,7 @@ def test_fixed_probe_sets_engine_capacity_from_largest_batch_size(
     )
 
     with pytest.raises(StopAfterEngineInit):
-        bench_probe.run_sparsevllm_probe(args, SimpleNamespace())
+        bench_probe.run_sparseengine_probe(args, SimpleNamespace())
 
     assert captured["max_num_seqs_in_batch"] == expected_batch
     assert captured["max_decoding_seqs"] == expected_batch
@@ -496,9 +496,9 @@ def test_markdown_report_shows_tpot_without_saturation_metrics():
     report = bench_probe._format_markdown_report(
         [
             {
-                "engine": "sparsevllm",
+                "engine": "sparseengine",
                 "sparse_method": "quest",
-                "protocol_label": "sparsevllm-quest",
+                "protocol_label": "sparseengine-quest",
                 "scenario": "fixed_batch",
                 "prompt_len_min": 100,
                 "prompt_len_max": 120,
@@ -710,7 +710,7 @@ def test_omnikv_probe_requires_explicit_calibrated_layers():
 
     assert hyper["full_attention_layers"] == "0,2,4,11,16,22"
     assert budget is None
-    assert label == "sparsevllm-omnikv"
+    assert label == "sparseengine-omnikv"
 
 
 def test_random_trace_is_matched_reproducible_and_variable_length():
@@ -833,9 +833,9 @@ def test_actual_hardware_metrics_do_not_fall_back_to_estimates():
 def test_churn_summary_is_compared_to_matched_fixed_batch():
     rows = [
         {
-            "engine": "sparsevllm",
+            "engine": "sparseengine",
             "sparse_method": "vanilla",
-            "protocol_label": "sparsevllm-vanilla",
+            "protocol_label": "sparseengine-vanilla",
             "scenario": "fixed_batch",
             "prompt_len": 100,
             "output_len": 16,
@@ -845,9 +845,9 @@ def test_churn_summary_is_compared_to_matched_fixed_batch():
             "ttft_ms_p99": 20.0,
         },
         {
-            "engine": "sparsevllm",
+            "engine": "sparseengine",
             "sparse_method": "vanilla",
-            "protocol_label": "sparsevllm-vanilla",
+            "protocol_label": "sparseengine-vanilla",
             "scenario": "oversubscribed_churn",
             "prompt_len": 100,
             "output_len": 16,
@@ -868,9 +868,9 @@ def test_churn_summary_is_compared_to_matched_fixed_batch():
 def test_decode_comparisons_skip_ttft_only_workload():
     rows = [
         {
-            "engine": "sparsevllm",
+            "engine": "sparseengine",
             "sparse_method": "vanilla",
-            "protocol_label": "sparsevllm-vanilla",
+            "protocol_label": "sparseengine-vanilla",
             "scenario": scenario,
             "prompt_len": 100,
             "output_len": 1,
@@ -917,11 +917,11 @@ def test_longbench_scorer_rejects_missing_status(tmp_path):
 
 def _write_valid_suite_fixture(root: Path, systems: list[str]) -> None:
     protocols = {
-        "svllm-vanilla": ("sparsevllm", "vanilla"),
-        "svllm-snapkv": ("sparsevllm", "snapkv"),
-        "svllm-h2o": ("sparsevllm", "h2o"),
-        "svllm-omnikv": ("sparsevllm", "omnikv"),
-        "svllm-deltakv": ("sparsevllm", "deltakv"),
+        "sengine-vanilla": ("sparseengine", "vanilla"),
+        "sengine-snapkv": ("sparseengine", "snapkv"),
+        "sengine-h2o": ("sparseengine", "h2o"),
+        "sengine-omnikv": ("sparseengine", "omnikv"),
+        "sengine-deltakv": ("sparseengine", "deltakv"),
         "vllm-vanilla": ("vllm", "vanilla"),
         "vllm": ("vllm", "vanilla"),
     }
@@ -1016,7 +1016,7 @@ def _write_valid_suite_fixture(root: Path, systems: list[str]) -> None:
                     )
                     + "\n"
                 )
-                if engine == "sparsevllm":
+                if engine == "sparseengine":
                     (system_dir / "operator_runtime_stats.json").write_text(
                         json.dumps(
                             {
@@ -1067,7 +1067,7 @@ def _write_valid_suite_fixture(root: Path, systems: list[str]) -> None:
                         "enable_prefix_caching": False,
                     },
                 }
-                if engine == "sparsevllm":
+                if engine == "sparseengine":
                     resolved["sparse_method"] = method
                     resolved["effective_runtime"] = {
                         "prefix_cache_enabled": False,
@@ -1085,7 +1085,7 @@ def _write_valid_suite_fixture(root: Path, systems: list[str]) -> None:
                 (system_dir / "resolved_config.json").write_text(
                     json.dumps(resolved) + "\n"
                 )
-                if engine == "sparsevllm":
+                if engine == "sparseengine":
                     (system_dir / "operator_runtime_stats.json").write_text(
                         json.dumps(
                             {
@@ -1109,7 +1109,7 @@ def _write_valid_suite_fixture(root: Path, systems: list[str]) -> None:
 
 
 def test_unified_suite_validator_rejects_any_failed_system(tmp_path):
-    systems = ["svllm-vanilla", "vllm-vanilla"]
+    systems = ["sengine-vanilla", "vllm-vanilla"]
     _write_valid_suite_fixture(tmp_path, systems)
     failed = tmp_path / "scenario_a_synthetic/vllm-vanilla/stage_status.json"
     failed.write_text(json.dumps({"status": "failed", "task_exit_code": 3}) + "\n")
@@ -1121,9 +1121,9 @@ def test_unified_suite_validator_rejects_any_failed_system(tmp_path):
 
 
 def test_unified_suite_validator_accepts_ttft_only_probe(tmp_path):
-    systems = ["svllm-vanilla"]
+    systems = ["sengine-vanilla"]
     _write_valid_suite_fixture(tmp_path, systems)
-    system_dir = tmp_path / "scenario_a_synthetic/svllm-vanilla"
+    system_dir = tmp_path / "scenario_a_synthetic/sengine-vanilla"
     summary_path = system_dir / "summary.json"
     summary = json.loads(summary_path.read_text())
     for row in summary["summary"]:
@@ -1187,11 +1187,11 @@ def test_longbench_worker_outputs_merge_without_shared_append(tmp_path):
 
 
 def test_unified_suite_validator_requires_longbench_structured_artifacts(tmp_path):
-    systems = ["svllm-vanilla"]
+    systems = ["sengine-vanilla"]
     _write_valid_suite_fixture(tmp_path, systems)
     missing = (
         tmp_path
-        / "scenario_b_longbench/svllm-vanilla/raw_outputs.jsonl"
+        / "scenario_b_longbench/sengine-vanilla/raw_outputs.jsonl"
     )
     missing.unlink()
 
@@ -1202,7 +1202,7 @@ def test_unified_suite_validator_requires_longbench_structured_artifacts(tmp_pat
 
 
 def test_unified_suite_validator_requires_matched_source_ids(tmp_path):
-    systems = ["svllm-vanilla", "vllm-vanilla"]
+    systems = ["sengine-vanilla", "vllm-vanilla"]
     _write_valid_suite_fixture(tmp_path, systems)
     mismatched = tmp_path / "scenario_b_longbench/vllm-vanilla/task.jsonl"
     mismatched.write_text(json.dumps({"status": "success", "source_idx": 7}) + "\n")
@@ -1214,11 +1214,11 @@ def test_unified_suite_validator_requires_matched_source_ids(tmp_path):
 
 
 def test_unified_suite_validator_rejects_method_label_mismatch(tmp_path):
-    systems = ["svllm-omnikv"]
+    systems = ["sengine-omnikv"]
     _write_valid_suite_fixture(tmp_path, systems)
-    resolved = tmp_path / "scenario_b_longbench/svllm-omnikv/resolved_config.json"
+    resolved = tmp_path / "scenario_b_longbench/sengine-omnikv/resolved_config.json"
     resolved.write_text(
-        json.dumps({"backend": "sparsevllm", "sparse_method": "vanilla"}) + "\n"
+        json.dumps({"backend": "sparseengine", "sparse_method": "vanilla"}) + "\n"
     )
 
     report = validate_suite(tmp_path, systems, ["task"], 1)
@@ -1228,9 +1228,9 @@ def test_unified_suite_validator_rejects_method_label_mismatch(tmp_path):
 
 
 def test_unified_suite_validator_rejects_single_layer_omnikv_runtime(tmp_path):
-    systems = ["svllm-omnikv"]
+    systems = ["sengine-omnikv"]
     _write_valid_suite_fixture(tmp_path, systems)
-    resolved_path = tmp_path / "scenario_b_longbench/svllm-omnikv/resolved_config.json"
+    resolved_path = tmp_path / "scenario_b_longbench/sengine-omnikv/resolved_config.json"
     resolved = json.loads(resolved_path.read_text())
     resolved["effective_runtime"]["benchmark_config"]["full_attention_layers"] = [0]
     resolved_path.write_text(json.dumps(resolved) + "\n")
@@ -1244,9 +1244,9 @@ def test_unified_suite_validator_rejects_single_layer_omnikv_runtime(tmp_path):
 def test_unified_suite_validator_rejects_omnikv_requested_effective_mismatch(
     tmp_path,
 ):
-    systems = ["svllm-omnikv"]
+    systems = ["sengine-omnikv"]
     _write_valid_suite_fixture(tmp_path, systems)
-    resolved_path = tmp_path / "scenario_b_longbench/svllm-omnikv/resolved_config.json"
+    resolved_path = tmp_path / "scenario_b_longbench/sengine-omnikv/resolved_config.json"
     resolved = json.loads(resolved_path.read_text())
     resolved["effective_runtime"]["benchmark_config"]["full_attention_layers"] = [
         0,
@@ -1262,11 +1262,11 @@ def test_unified_suite_validator_rejects_omnikv_requested_effective_mismatch(
 
 
 def test_unified_suite_validator_requires_sparse_operator_bindings(tmp_path):
-    systems = ["svllm-vanilla"]
+    systems = ["sengine-vanilla"]
     _write_valid_suite_fixture(tmp_path, systems)
     stats_path = (
         tmp_path
-        / "scenario_a_synthetic/svllm-vanilla/operator_runtime_stats.json"
+        / "scenario_a_synthetic/sengine-vanilla/operator_runtime_stats.json"
     )
     stats_path.write_text(
         json.dumps({"status": "success", "world_ranks": []}) + "\n"
@@ -1279,7 +1279,7 @@ def test_unified_suite_validator_requires_sparse_operator_bindings(tmp_path):
 
 
 def test_unified_suite_validator_requires_identical_random_traces(tmp_path):
-    systems = ["svllm-vanilla", "vllm-vanilla"]
+    systems = ["sengine-vanilla", "vllm-vanilla"]
     _write_valid_suite_fixture(tmp_path, systems)
     path = tmp_path / "scenario_a_synthetic/vllm-vanilla/raw_samples.jsonl"
     rows = [json.loads(line) for line in path.read_text().splitlines()]
@@ -1293,9 +1293,9 @@ def test_unified_suite_validator_requires_identical_random_traces(tmp_path):
 
 
 def test_unified_suite_validator_rejects_repeated_prompts_across_iterations(tmp_path):
-    systems = ["svllm-vanilla"]
+    systems = ["sengine-vanilla"]
     _write_valid_suite_fixture(tmp_path, systems)
-    path = tmp_path / "scenario_a_synthetic/svllm-vanilla/raw_samples.jsonl"
+    path = tmp_path / "scenario_a_synthetic/sengine-vanilla/raw_samples.jsonl"
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     rows[1]["trace"]["prompt_digests"] = rows[0]["trace"]["prompt_digests"]
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -1307,7 +1307,7 @@ def test_unified_suite_validator_rejects_repeated_prompts_across_iterations(tmp_
 
 
 def test_unified_suite_validator_requires_identical_output_length_trace(tmp_path):
-    systems = ["svllm-vanilla", "vllm-vanilla"]
+    systems = ["sengine-vanilla", "vllm-vanilla"]
     _write_valid_suite_fixture(tmp_path, systems)
     path = tmp_path / "scenario_a_synthetic/vllm-vanilla/raw_samples.jsonl"
     rows = [json.loads(line) for line in path.read_text().splitlines()]

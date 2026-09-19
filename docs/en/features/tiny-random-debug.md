@@ -7,7 +7,7 @@ prefill/decode, and numerical-alignment debugging. Its outputs do not represent
 model quality.
 
 The implementation lives in the opt-in
-`sparsevllm.debug.tiny_random` module. Normal inference does not import this
+`sparseengine.debug.tiny_random` module. Normal inference does not import this
 module. The only core integration points are model configuration and
 startup-time weight initialization; scheduler, attention, cache, and model
 forward hot paths are unchanged.
@@ -17,9 +17,9 @@ forward hot paths are unchanged.
 Enable the mode with these environment variables:
 
 ```bash
-export SPARSEVLLM_TINY_RANDOM=1
-export SPARSEVLLM_TINY_RANDOM_CONFIG="$PWD/configs/debug/qwen3_tiny_random.json"
-export SPARSEVLLM_TINY_RANDOM_SEED=17
+export SPARSEENGINE_TINY_RANDOM=1
+export SPARSEENGINE_TINY_RANDOM_CONFIG="$PWD/configs/debug/qwen3_tiny_random.json"
+export SPARSEENGINE_TINY_RANDOM_SEED=17
 ```
 
 The JSON override file accepts only:
@@ -46,7 +46,7 @@ Use the project-root uv environment:
 ```bash
 CUDA_VISIBLE_DEVICES=5,6 \
 PYTHONPATH="$PWD:$PWD/src" \
-.venv/bin/python scripts/benchmarks/bench_sparse_vllm.py \
+.venv/bin/python scripts/benchmarks/bench_sparse_engine.py \
   --model_path /data2/pretrain_models/Qwen3-8B \
   --lengths 128 \
   --batch_sizes 1 \

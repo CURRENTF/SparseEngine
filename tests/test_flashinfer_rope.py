@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from sparsevllm.layers.rotary_embedding import (
+from sparseengine.layers.rotary_embedding import (
     RotaryEmbedding,
     apply_partial_rotary_emb,
     apply_rotary_emb,

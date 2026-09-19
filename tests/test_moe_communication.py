@@ -7,15 +7,15 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from sparsevllm.distributed import ParallelTopology
-from sparsevllm.distributed.moe_communication import (
+from sparseengine.distributed import ParallelTopology
+from sparseengine.distributed.moe_communication import (
     AllGatherReduceScatterMoeCommunication,
 )
-from sparsevllm.distributed.parallel_context import (
+from sparseengine.distributed.parallel_context import (
     init_parallel_context,
     reset_parallel_context,
 )
-from sparsevllm.distributed.topology import parallel_group_ranks
+from sparseengine.distributed.topology import parallel_group_ranks
 
 
 def test_dp_attention_groups_share_experts_without_replicating_attention():
@@ -95,10 +95,10 @@ def test_agrs_uneven_idle_and_graph_replay(tmp_path: Path):
 def _prepared_agrs_worker(
     rank, rendezvous, force_torch, world_size, hidden_size, dtype
 ):
-    from sparsevllm.distributed.collective_runtime import ParallelCollectiveRuntime
-    from sparsevllm.operators.agrs import FlashInferMixedAgRsProvider
-    from sparsevllm.operators.registry import SupportResult
-    from sparsevllm.utils.context import get_context, reset_context, set_context
+    from sparseengine.distributed.collective_runtime import ParallelCollectiveRuntime
+    from sparseengine.operators.agrs import FlashInferMixedAgRsProvider
+    from sparseengine.operators.registry import SupportResult
+    from sparseengine.utils.context import get_context, reset_context, set_context
 
     if force_torch:
         FlashInferMixedAgRsProvider.supports = classmethod(
@@ -235,8 +235,8 @@ def test_prepared_agrs_rank_order_idle_and_replaced_graphs(
 def test_shared_expert_execution_uses_the_agreed_step_capacity(monkeypatch, step_capacity, expected):
     from unittest.mock import Mock
 
-    from sparsevllm.distributed.moe_communication import MoeCommunication
-    from sparsevllm.utils.context import get_context
+    from sparseengine.distributed.moe_communication import MoeCommunication
+    from sparseengine.utils.context import get_context
 
     # A replica's local row count must not override the capacity agreed with peers.
     monkeypatch.setattr(get_context(), "moe_token_capacity", step_capacity)
@@ -248,8 +248,8 @@ def test_shared_expert_execution_uses_the_agreed_step_capacity(monkeypatch, step
 
 
 def _hybrid_agrs_worker(rank, rendezvous, cuda):
-    from sparsevllm.distributed.collective_runtime import ParallelCollectiveRuntime
-    from sparsevllm.utils.context import get_context, reset_context, set_context
+    from sparseengine.distributed.collective_runtime import ParallelCollectiveRuntime
+    from sparseengine.utils.context import get_context, reset_context, set_context
 
     device = torch.device("cuda", rank) if cuda else torch.device("cpu")
     if cuda:
@@ -326,7 +326,7 @@ def _hybrid_agrs_worker(rank, rendezvous, cuda):
 
 
 def test_hybrid_agrs_preserves_replica_ownership_and_sums_shared_shards(tmp_path, monkeypatch):
-    monkeypatch.setenv("SPARSEVLLM_PLATFORM", "cpu")
+    monkeypatch.setenv("SPARSEENGINE_PLATFORM", "cpu")
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     mp.spawn(_hybrid_agrs_worker,
              args=(f"file://{tmp_path / 'hybrid'}", False), nprocs=4, join=True)

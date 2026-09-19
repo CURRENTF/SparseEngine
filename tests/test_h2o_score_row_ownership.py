@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.methods.h2o import H2OCacheManager
+from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
 
 
 def manager_rows():
@@ -23,7 +23,7 @@ def test_score_rows_survive_batch_churn_and_only_replaced_rows_rebuild():
     manager = manager_rows()
     pointers = {}
     expected = {k: v.clone() for k, v in manager._h2o_scores.items()}
-    with patch('sparsevllm.kernels.triton.h2o_score.h2o_headwise_softmax_accumulate_rows'):
+    with patch('sparseengine.kernels.triton.h2o_score.h2o_headwise_softmax_accumulate_rows'):
         for step, ids in enumerate(([0, 1, 2], [2, 0], [1], [1, 2, 0])):
             replaced = (1, 2) if step == 3 else None
             if replaced:
@@ -68,7 +68,7 @@ def test_score_row_error_does_not_publish_partial_batch():
 @pytest.mark.parametrize('normalize', [True, False])
 def test_indirect_score_kernel_matches_torch_and_graph_replay(heads, normalize):
     """Catch row-pointer/stride errors, inactive dereferences and masked padding."""
-    from sparsevllm.kernels.triton.h2o_score import h2o_headwise_softmax_accumulate_rows
+    from sparseengine.kernels.triton.h2o_score import h2o_headwise_softmax_accumulate_rows
     torch.manual_seed(412)
     logits = torch.randn(2, 4, heads, 258, device='cuda')[:, :3, :, ::2]
     rows = [torch.randn(140, device='cuda') for _ in range(6)]
@@ -118,7 +118,7 @@ def test_score_metadata_reuse_respects_pin_memory_capability(pin_memory):
                 manager.row_seq_lens[layer][seq_id] = length
                 expected[layer, seq_id] = torch.cat((previous, previous.new_zeros(1)))
                 expected[layer, seq_id] += (logits[layer, index, :, :length] * .25).softmax(-1).sum(0)
-        with patch('sparsevllm.platforms.device_runtime.supports_pin_memory', return_value=pin_memory):
+        with patch('sparseengine.platforms.device_runtime.supports_pin_memory', return_value=pin_memory):
             manager.accumulate_decode_headwise_logits(
                 [0, 1], [SimpleNamespace(seq_id=i) for i in ids], logits, softmax_scale=.25,
             )

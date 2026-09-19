@@ -6,7 +6,7 @@ import torch
 from safetensors.torch import save_file
 
 from benchmark.model_adapters.quantization import build_model_load_kwargs, restore_modules_to_dtype
-from sparsevllm.utils.loader import load_model
+from sparseengine.utils.loader import load_model
 
 
 class _DummyModel(torch.nn.Module):

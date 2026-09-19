@@ -4,36 +4,36 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from sparsevllm.configs.cuda_graph import (
+from sparseengine.configs.cuda_graph import (
     build_decode_cuda_graph_startup_plan,
 )
-from sparsevllm.engine.decode_cuda_graph import DecodeCudaGraphRunner
-from sparsevllm.engine.decode_graph_contract import (
+from sparseengine.engine.decode_cuda_graph import DecodeCudaGraphRunner
+from sparseengine.engine.decode_graph_contract import (
     DecodeGraphContract,
     DecodeGraphInputs,
     DecodeGraphState,
 )
-from sparsevllm.engine.runtime_state import RuntimeState
-from sparsevllm.kernels.triton.paged_flash_decoding import (
+from sparseengine.engine.runtime_state import RuntimeState
+from sparseengine.kernels.triton.paged_flash_decoding import (
     paged_flash_decode,
 )
-from sparsevllm.kernels.triton.sglang_gemma4_decode_attention import (
+from sparseengine.kernels.triton.sglang_gemma4_decode_attention import (
     sglang_gemma4_decode,
 )
-from sparsevllm.operators.decode_attention import (
+from sparseengine.operators.decode_attention import (
     FixedGridTritonPagedDecodeAttentionProvider,
     DECODE_ATTENTION_REGISTRY,
     DecodeAttentionOpSpec,
     TritonPagedDecodeAttentionProvider,
     build_graph_stable_decode_launch_plan,
 )
-from sparsevllm.operators.registry import OpResolver
-from sparsevllm.operators.gemma4 import Gemma4OpSpec, TritonGemma4OperatorProvider
-from sparsevllm.operators.mla_attention import (
+from sparseengine.operators.registry import OpResolver
+from sparseengine.operators.gemma4 import Gemma4OpSpec, TritonGemma4OperatorProvider
+from sparseengine.operators.mla_attention import (
     MlaAttentionOpSpec,
     MlaTritonProvider,
 )
-from sparsevllm.platforms.interface import DeviceCaps, PlatformEnum
+from sparseengine.platforms.interface import DeviceCaps, PlatformEnum
 
 
 def test_decode_graph_runner_blocks_replay_until_collectives_are_ready() -> None:
@@ -285,7 +285,7 @@ def test_mha_resolver_prefers_sgl_fa3_for_decode_graph_on_supported_sm90() -> No
     from unittest.mock import patch
 
     with patch(
-        "sparsevllm.operators.decode_attention.sgl_fa3_device_support",
+        "sparseengine.operators.decode_attention.sgl_fa3_device_support",
         return_value=(True, "available"),
     ):
         resolved = OpResolver(DECODE_ATTENTION_REGISTRY).resolve(spec, caps)
@@ -312,7 +312,7 @@ def test_mha_resolver_falls_back_to_fixed_grid_when_upstream_is_ineligible() -> 
     from unittest.mock import patch
 
     with patch(
-        "sparsevllm.operators.decode_attention.flashinfer_paged_decode_support",
+        "sparseengine.operators.decode_attention.flashinfer_paged_decode_support",
         return_value=(False, "unavailable"),
     ):
         resolved = OpResolver(DECODE_ATTENTION_REGISTRY).resolve(spec, caps)

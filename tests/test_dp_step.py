@@ -5,8 +5,8 @@ from unittest.mock import Mock, patch
 
 import torch
 
-from sparsevllm.engine.dp_step import coordinate_dp_step
-from sparsevllm.utils.context import get_context, reset_context
+from sparseengine.engine.dp_step import coordinate_dp_step
+from sparseengine.utils.context import get_context, reset_context
 
 
 def test_mixed_prefill_uses_common_transport_capacity_without_padding_attention_to_prefill():
@@ -26,7 +26,7 @@ def test_mixed_prefill_uses_common_transport_capacity_without_padding_attention_
         control.copy_(torch.tensor([4, 37, 1]))
 
     try:
-        with patch("sparsevllm.engine.dp_step.dist.all_reduce", side_effect=reduce):
+        with patch("sparseengine.engine.dp_step.dist.all_reduce", side_effect=reduce):
             assert coordinate_dp_step(runner, [object()], False)
         assert get_context().moe_token_capacity == 37
         assert get_context().moe_token_sizes == (4, 37)
@@ -51,7 +51,7 @@ def test_idle_replica_joins_active_graph_without_consulting_stale_cache_eager_fl
         control.copy_(torch.tensor([0, 4, 0]))
 
     try:
-        with patch("sparsevllm.engine.dp_step.dist.all_reduce", side_effect=reduce):
+        with patch("sparseengine.engine.dp_step.dist.all_reduce", side_effect=reduce):
             assert not coordinate_dp_step(runner, [], False)
         assert graph.dp_batch_capacity == get_context().moe_token_capacity == 4
         assert get_context().moe_token_sizes is None

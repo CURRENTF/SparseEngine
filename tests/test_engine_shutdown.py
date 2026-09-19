@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import weakref
 
-from sparsevllm.engine.llm_engine import LLMEngine
+from sparseengine.engine.llm_engine import LLMEngine
 
 
 def test_explicit_exit_unregisters_hook_and_releases_runtime_references():
@@ -41,8 +41,8 @@ def test_explicit_exit_unregisters_hook_and_releases_runtime_references():
     del resource, runner
 
     with (
-        patch("sparsevllm.engine.llm_engine.atexit.unregister") as unregister,
-        patch("sparsevllm.engine.llm_engine.gc.collect", wraps=gc.collect) as collect,
+        patch("sparseengine.engine.llm_engine.atexit.unregister") as unregister,
+        patch("sparseengine.engine.llm_engine.gc.collect", wraps=gc.collect) as collect,
     ):
         engine.exit()
 
@@ -109,8 +109,8 @@ def test_engine_exit_timeout_still_terminates_workers():
     with patch.dict(
         os.environ,
         {
-            "SPARSEVLLM_ENGINE_EXIT_TIMEOUT_S": "0.05",
-            "SPARSEVLLM_WORKER_JOIN_TIMEOUT_S": "0.05",
+            "SPARSEENGINE_ENGINE_EXIT_TIMEOUT_S": "0.05",
+            "SPARSEENGINE_WORKER_JOIN_TIMEOUT_S": "0.05",
         },
     ):
         started = time.perf_counter()
@@ -161,8 +161,8 @@ def test_engine_exit_joins_graceful_worker_before_terminate():
     with patch.dict(
         os.environ,
         {
-            "SPARSEVLLM_ENGINE_EXIT_TIMEOUT_S": "0.05",
-            "SPARSEVLLM_WORKER_JOIN_TIMEOUT_S": "0.05",
+            "SPARSEENGINE_ENGINE_EXIT_TIMEOUT_S": "0.05",
+            "SPARSEENGINE_WORKER_JOIN_TIMEOUT_S": "0.05",
         },
     ):
         engine.exit()

@@ -2,7 +2,7 @@
 import pytest
 import torch
 
-from sparsevllm.kernels.triton.mla import (
+from sparseengine.kernels.triton.mla import (
     allocate_mla_decode_workspace, run_mla_decode, select_glm_mla_decode_config,
 )
 

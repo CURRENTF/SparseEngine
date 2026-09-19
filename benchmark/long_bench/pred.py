@@ -22,15 +22,15 @@ import torch.multiprocessing as mp
 import torch
 from transformers import AutoConfig, AutoTokenizer, GenerationConfig
 import torch.distributed as dist
-from benchmark.model_adapters.sparsevllm import get_sparsevllm_generate_api
+from benchmark.model_adapters.sparseengine import get_sparseengine_generate_api
 from benchmark.long_bench.prompt_budget import encode_prompt_with_generation_budget
-from benchmark.sparsevllm_regression.manifest import (
+from benchmark.sparseengine_regression.manifest import (
     validate_omnikv_benchmark_config,
 )
 from datetime import datetime
 
-BASE_PATH = os.getenv("SPARSEVLLM_OUTPUT_DIR", str(REPO_ROOT / "outputs"))
-DATA_PREFIX_PATH = os.getenv("SPARSEVLLM_LONGBENCH_DATA_DIR") or os.getenv("SPARSEVLLM_DATA_DIR")
+BASE_PATH = os.getenv("SPARSEENGINE_OUTPUT_DIR", str(REPO_ROOT / "outputs"))
+DATA_PREFIX_PATH = os.getenv("SPARSEENGINE_LONGBENCH_DATA_DIR") or os.getenv("SPARSEENGINE_DATA_DIR")
 DEFAULT_MAX_MODEL_LEN = 121_000
 NO_CHAT_TEMPLATE_DATASETS = {"trec", "triviaqa", "samsum", "lsht", "lcc", "repobench-p"}
 SAMPLE_STATUSES = {
@@ -47,7 +47,7 @@ def get_longbench_data_path(dataset, use_longbench_e):
     if not DATA_PREFIX_PATH:
         raise FileNotFoundError(
             "LongBench data root is not configured.\n"
-            "Set SPARSEVLLM_LONGBENCH_DATA_DIR or SPARSEVLLM_DATA_DIR to the LongBench "
+            "Set SPARSEENGINE_LONGBENCH_DATA_DIR or SPARSEENGINE_DATA_DIR to the LongBench "
             "root directory that contains data/*.jsonl."
         )
     suffix = "_e" if use_longbench_e else ""
@@ -58,14 +58,14 @@ def validate_longbench_data_paths(datasets, use_longbench_e):
     if not DATA_PREFIX_PATH:
         raise FileNotFoundError(
             "LongBench data root is not configured.\n"
-            "Set SPARSEVLLM_LONGBENCH_DATA_DIR or SPARSEVLLM_DATA_DIR to the LongBench "
+            "Set SPARSEENGINE_LONGBENCH_DATA_DIR or SPARSEENGINE_DATA_DIR to the LongBench "
             "root directory that contains data/*.jsonl."
         )
     if not os.path.isdir(DATA_PREFIX_PATH):
         raise FileNotFoundError(
             "LongBench data root does not exist: "
             f"{DATA_PREFIX_PATH}\n"
-            "Set SPARSEVLLM_LONGBENCH_DATA_DIR or SPARSEVLLM_DATA_DIR to the LongBench root "
+            "Set SPARSEENGINE_LONGBENCH_DATA_DIR or SPARSEENGINE_DATA_DIR to the LongBench root "
             "directory that contains data/*.jsonl."
         )
 
@@ -74,7 +74,7 @@ def validate_longbench_data_paths(datasets, use_longbench_e):
         raise FileNotFoundError(
             "LongBench data directory does not exist: "
             f"{data_dir}\n"
-            "Set SPARSEVLLM_LONGBENCH_DATA_DIR or SPARSEVLLM_DATA_DIR to the LongBench root "
+            "Set SPARSEENGINE_LONGBENCH_DATA_DIR or SPARSEENGINE_DATA_DIR to the LongBench root "
             "directory that contains a data/ subdirectory."
         )
 
@@ -87,7 +87,7 @@ def validate_longbench_data_paths(datasets, use_longbench_e):
         raise FileNotFoundError(
             "Missing LongBench dataset files:\n"
             + "\n".join(missing_paths)
-            + "\nCheck SPARSEVLLM_LONGBENCH_DATA_DIR / SPARSEVLLM_DATA_DIR."
+            + "\nCheck SPARSEENGINE_LONGBENCH_DATA_DIR / SPARSEENGINE_DATA_DIR."
         )
 
 def seed_everything(seed):
@@ -212,10 +212,10 @@ def _record_effective_runtime_config(
     generate_fn,
     out_root: str,
 ) -> None:
-    llm = getattr(generate_fn, "_sparsevllm_llm", None)
+    llm = getattr(generate_fn, "_sparseengine_llm", None)
     if llm is None:
         raise RuntimeError(
-            "SparseVLLM LongBench generation did not expose _sparsevllm_llm; "
+            "SparseVLLM LongBench generation did not expose _sparseengine_llm; "
             "cannot record the effective runtime config."
         )
     runtime_info = llm.worker_info(tags=["longbench-quality"])
@@ -223,7 +223,7 @@ def _record_effective_runtime_config(
     resolved = (
         json.loads(resolved_path.read_text(encoding="utf-8"))
         if resolved_path.is_file()
-        else {"backend": "sparsevllm"}
+        else {"backend": "sparseengine"}
     )
     resolved["effective_runtime"] = runtime_info
     temporary_path = resolved_path.with_name(
@@ -362,10 +362,10 @@ def _merge_worker_outputs(
 
 
 def _write_operator_runtime_stats(*, generate_fn, out_root: str, rank: int) -> None:
-    llm = getattr(generate_fn, "_sparsevllm_llm", None)
+    llm = getattr(generate_fn, "_sparseengine_llm", None)
     if llm is None:
         raise RuntimeError(
-            "SparseVLLM LongBench generation did not expose _sparsevllm_llm; "
+            "SparseVLLM LongBench generation did not expose _sparseengine_llm; "
             "cannot record operator runtime stats."
         )
     _write_json(
@@ -379,10 +379,10 @@ def _write_operator_runtime_stats(*, generate_fn, out_root: str, rank: int) -> N
 
 
 def _write_worker_load_stats(*, generate_fn, out_root: str, rank: int) -> None:
-    llm = getattr(generate_fn, "_sparsevllm_llm", None)
+    llm = getattr(generate_fn, "_sparseengine_llm", None)
     if llm is None:
         raise RuntimeError(
-            "SparseVLLM LongBench generation did not expose _sparsevllm_llm; "
+            "SparseVLLM LongBench generation did not expose _sparseengine_llm; "
             "cannot record final cache statistics."
         )
     _write_json(
@@ -448,10 +448,10 @@ def _decode_cuda_graph_status(
     generate_fn,
     rank: int,
 ) -> dict[str, Any]:
-    llm = getattr(generate_fn, "_sparsevllm_llm", None)
+    llm = getattr(generate_fn, "_sparseengine_llm", None)
     if llm is None:
         raise RuntimeError(
-            "SparseVLLM LongBench generation did not expose _sparsevllm_llm; "
+            "SparseVLLM LongBench generation did not expose _sparseengine_llm; "
             "cannot verify decode CUDA graph execution."
         )
 
@@ -595,7 +595,7 @@ def _write_sample_record(
 
 def load_model_and_tokenizer(rank, args, infer_config):
 
-    generate_fn = get_sparsevllm_generate_api(
+    generate_fn = get_sparseengine_generate_api(
         model_path=args.model_path,
         infer_config=infer_config,
         deltakv_checkpoint_path=args.deltakv_checkpoint_path,
@@ -833,7 +833,7 @@ def worker(
             data = data[:args.num_samples]
 
         if args.min_prompt_tokens is not None:
-            from benchmark.sparsevllm_regression.longbench_mini import select_longbench_mini_samples
+            from benchmark.sparseengine_regression.longbench_mini import select_longbench_mini_samples
 
             selected, selection_meta = select_longbench_mini_samples(
                 data=data,
@@ -909,7 +909,7 @@ def worker(
         torch.cuda.empty_cache()
 
     try:
-        from sparsevllm.utils.profiler import profiler
+        from sparseengine.utils.profiler import profiler
         snap = profiler.snapshot()
         if snap:
             with open(os.path.join(out_root, f"profiler_snapshot_rank{rank}.json"), "w", encoding="utf-8") as f:
@@ -947,7 +947,7 @@ def launch_single_gpu_workers(args, out_root):
             f"Requested ws={args.ws}, but only {len(gpu_ids)} visible GPUs are available: {gpu_ids}"
         )
 
-    base_master_port = int(os.environ.get("SPARSEVLLM_MASTER_PORT", "2333"))
+    base_master_port = int(os.environ.get("SPARSEENGINE_MASTER_PORT", "2333"))
     if base_master_port <= 0 or base_master_port + args.ws - 1 > 65535:
         raise ValueError(
             "LongBench worker master-port range is invalid: "
@@ -960,7 +960,7 @@ def launch_single_gpu_workers(args, out_root):
     for rank in range(args.ws):
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = gpu_ids[rank]
-        env["SPARSEVLLM_MASTER_PORT"] = str(base_master_port + rank)
+        env["SPARSEENGINE_MASTER_PORT"] = str(base_master_port + rank)
         cmd = [
             sys.executable,
             "-u",
@@ -1111,7 +1111,7 @@ def main() -> None:
                 "model": args.model,
                 "model_path": args.model_path,
                 "tokenizer_path": args.tokenizer_path or args.model_path,
-                "backend": "sparsevllm",
+                "backend": "sparseengine",
                 "sparse_method": args.sparse_method,
                 "deltakv_checkpoint_path": args.deltakv_checkpoint_path,
                 "datasets": datasets,

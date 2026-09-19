@@ -9,9 +9,9 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 
-from sparsevllm.distributed import ParallelTopology
-from sparsevllm.distributed.collective_runtime import ParallelCollectiveRuntime
-from sparsevllm.distributed.parallel_context import (
+from sparseengine.distributed import ParallelTopology
+from sparseengine.distributed.collective_runtime import ParallelCollectiveRuntime
+from sparseengine.distributed.parallel_context import (
     init_parallel_context,
     reset_parallel_context,
 )
@@ -109,7 +109,7 @@ def _check_real_experts(comm, parallel):
     # The linear transport oracle cannot catch a mismatch with real expert
     # alignment, nonlinear activation or route weighting. Use GLM dimensions
     # and an independent FP32 Torch expert sum with fixed routes.
-    from sparsevllm.operators.moe import MoeOpSpec, resolve_moe_provider
+    from sparseengine.operators.moe import MoeOpSpec, resolve_moe_provider
 
     rank = parallel.moe_ep.rank
     spec = MoeOpSpec(

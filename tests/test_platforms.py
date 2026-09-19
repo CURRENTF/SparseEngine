@@ -5,8 +5,8 @@ import pytest
 import torch
 
 def test_explicit_cpu_platform_is_lazy_and_available(monkeypatch):
-    monkeypatch.setenv("SPARSEVLLM_PLATFORM", "cpu")
-    platforms = importlib.import_module("sparsevllm.platforms")
+    monkeypatch.setenv("SPARSEENGINE_PLATFORM", "cpu")
+    platforms = importlib.import_module("sparseengine.platforms")
     platforms._set_current_platform_for_tests(None)
 
     platform = platforms.get_current_platform()
@@ -28,7 +28,7 @@ def test_explicit_cpu_platform_is_lazy_and_available(monkeypatch):
 
 
 def test_cuda_device_caps_are_the_capability_source(monkeypatch):
-    from sparsevllm.platforms.cuda import CudaPlatform
+    from sparseengine.platforms.cuda import CudaPlatform
 
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _: (9, 0))
     monkeypatch.setattr(torch.cuda, "get_device_name", lambda _: "Test H100")
@@ -51,21 +51,21 @@ def test_cuda_device_caps_are_the_capability_source(monkeypatch):
 
 
 def test_unknown_explicit_platform_fails_fast(monkeypatch):
-    monkeypatch.setenv("SPARSEVLLM_PLATFORM", "missing_test_platform")
-    platforms = importlib.import_module("sparsevllm.platforms")
+    monkeypatch.setenv("SPARSEENGINE_PLATFORM", "missing_test_platform")
+    platforms = importlib.import_module("sparseengine.platforms")
     platforms._set_current_platform_for_tests(None)
 
-    with pytest.raises(RuntimeError, match="SPARSEVLLM_PLATFORM"):
+    with pytest.raises(RuntimeError, match="SPARSEENGINE_PLATFORM"):
         platforms.get_current_platform()
 
     platforms._set_current_platform_for_tests(None)
 
 
 def test_rocm_detection_fails_fast_until_backend_exists(monkeypatch):
-    monkeypatch.setenv("SPARSEVLLM_PLATFORM", "rocm")
+    monkeypatch.setenv("SPARSEENGINE_PLATFORM", "rocm")
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.version, "hip", "6.0.0", raising=False)
-    platforms = importlib.import_module("sparsevllm.platforms")
+    platforms = importlib.import_module("sparseengine.platforms")
     platforms._set_current_platform_for_tests(None)
 
     with pytest.raises(RuntimeError, match="ROCm.*not supported"):

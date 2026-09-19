@@ -4,16 +4,16 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager import (
+from sparseengine.engine.cache_manager import (
     AttentionViewMeta,
     DecodeComputeView,
     ExplicitKVPayload,
 )
-from sparsevllm.kernels.external.sgl.fa3 import sgl_fa3_support
-from sparsevllm.kernels.triton.flash_decoding_stage2 import flash_decode_stage2
-from sparsevllm.kernels.triton.gqa_flash_decoding_stage1 import flash_decode_stage1
-from sparsevllm.kernels.triton.store_kvcache import store_kvcache
-from sparsevllm.operators.decode_attention import (
+from sparseengine.kernels.external.sgl.fa3 import sgl_fa3_support
+from sparseengine.kernels.triton.flash_decoding_stage2 import flash_decode_stage2
+from sparseengine.kernels.triton.gqa_flash_decoding_stage1 import flash_decode_stage1
+from sparseengine.kernels.triton.store_kvcache import store_kvcache
+from sparseengine.operators.decode_attention import (
     DecodeAttentionOpSpec,
     SglFa3PagedDecodeAttentionProvider,
     prepare_decode_attention_op,
@@ -201,7 +201,7 @@ def test_minimax_m2_production_provider_replays_across_32k_boundary():
     launch_profile = Mock(name="context_dependent_launch_profile")
     validation_scope = object()
     with patch(
-        "sparsevllm.operators.decode_attention.get_context",
+        "sparseengine.operators.decode_attention.get_context",
         return_value=SimpleNamespace(attention_validation_scope=validation_scope),
     ):
         prepared.run(q, view, decode_launch_op=launch_profile)

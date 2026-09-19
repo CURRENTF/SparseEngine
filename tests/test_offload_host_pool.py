@@ -6,9 +6,9 @@ import weakref
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.offload.allocation import plan_host_allocation
-from sparsevllm.engine.cache_manager.offload.host_pool import HostTensorPool
-from sparsevllm.operators.indexed_host_copy import make_pointer_table
+from sparseengine.engine.cache_manager.offload.allocation import plan_host_allocation
+from sparseengine.engine.cache_manager.offload.host_pool import HostTensorPool
+from sparseengine.operators.indexed_host_copy import make_pointer_table
 
 
 def test_invalid_shapes_fail_before_allocating(monkeypatch):

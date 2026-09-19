@@ -26,7 +26,7 @@ This request-mode smoke checks functionality, not paper performance:
 ```bash
 CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$PWD:$PWD/src" python3 \
   benchmark/efficiency/bench_probe.py \
-  --engine sparsevllm --sparse-method vanilla --model-path "<MODEL_PATH>" \
+  --engine sparseengine --sparse-method vanilla --model-path "<MODEL_PATH>" \
   --tensor-parallel-size 1 --monitor-gpus 0 \
   --scenario fixed --prompt-lens 4096 --output-lens 32 --batch-sizes 1 \
   --num-warmups 0 --num-iters 1 --output-dir "<NEW_RUN_DIR>"
@@ -35,7 +35,7 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$PWD:$PWD/src" python3 \
 See `python3 benchmark/efficiency/bench_probe.py --help` for all arguments.
 `--monitor-gpus` uses physical IDs aligned with `CUDA_VISIBLE_DEVICES`.
 The probe defaults to `max_num_batched_tokens=65536` per scheduler.
-Sparse-vLLM independently defaults to `engine_prefill_chunk_size=8192`; override
+Sparse-Engine independently defaults to `engine_prefill_chunk_size=8192`; override
 it through `--hyper-params`. The scheduler token budget and prefill chunk size
 are separate controls. vLLM has no equivalent independent chunk-size option in
 these adapters; its chunking follows the available scheduler token budget.
@@ -58,13 +58,13 @@ Additional entrypoints:
   `SYSTEMS MODEL_NAME_OR_PATH PHYSICAL_GPU_IDS`; consult the script for variables
   and model aliases. Aliases fix TP; arbitrary model paths default to TP2.
   Use the Python CLI for explicit topology. Sparse settings come from the
-  [regression manifest](../../../benchmark/sparsevllm_regression/manifest.json).
+  [regression manifest](../../../benchmark/sparseengine_regression/manifest.json).
   OmniKV requires calibrated layers; set `BENCH_MANIFEST_MODEL_ID` or
   `OMNIKV_FULL_ATTENTION_LAYERS` explicitly for custom calibration.
   Single-layer configurations require an explicit ablation option.
 - [Unified suite](../../../scripts/benchmarks/run_unified_efficiency_suite.sh):
   argument order is `GPUS SYSTEMS MODEL_NAME`; runs synthetic and LongBench.
-  Set `SPARSEVLLM_LONGBENCH_DATA_DIR` and check final `suite_status.json`.
+  Set `SPARSEENGINE_LONGBENCH_DATA_DIR` and check final `suite_status.json`.
 - [Nsight diagnostic](../../../scripts/benchmarks/run_efficiency_profile.sh):
   use after a standard run identifies a suspicious case;
   arguments are `SYSTEM MODEL_PATH GPUS`. The wrapper currently supports native
@@ -130,7 +130,7 @@ and `decode_token_throughput_tps` are compatibility aliases.
 The `per_request_distribution_v3` contract pools measured requests across
 iterations for mean/P50/P95/P99; the old mean of batch TTFT maxima is
 `batch_max_ttft_ms_mean`. Native token observations occur at step return without
-extra step synchronization (`sparsevllm_step_token_publication_no_extra_sync_v1`).
+extra step synchronization (`sparseengine_step_token_publication_no_extra_sync_v1`).
 vLLM legacy finished_time and V1 last_token_ts have distinct `timing_source`
 values. These are engine events, not HTTP client latency; compare matching boundaries.
 
@@ -161,7 +161,7 @@ target combination before measuring performance; implementation alone is not evi
 
 | Mode | Current scope and limits |
 | --- | --- |
-| Default request probe | Sparse-vLLM / vLLM, fixed/churn, explicit TP; model capabilities still apply |
+| Default request probe | Sparse-Engine / vLLM, fixed/churn, explicit TP; model capabilities still apply |
 | Native continuous decode | Per-rank boundary synchronization implemented, not permanently TP1-only; current orchestration uses DP1, TP/EP depend on model/engine capabilities |
 | vLLM / Tangram continuous decode | Async queue boundary draining implemented; smoke-test each external version/model; no wave admission |
 | HiSparse QuEST continuous decode | TP1 overlap queue boundary draining implemented; not an MLA adapter, no wave admission |

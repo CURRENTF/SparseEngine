@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import torch
 
-from sparsevllm.config import Config
-from sparsevllm.distributed import ParallelContext, ParallelGroup
+from sparseengine.config import Config
+from sparseengine.distributed import ParallelContext, ParallelGroup
 
 
 def _glm_hf_config(**overrides):
@@ -57,7 +57,7 @@ def _glm_config(*, hf_overrides=None, **overrides) -> Config:
     }
     kwargs.update(overrides)
     with patch(
-        "sparsevllm.configs.runtime.AutoConfig.from_pretrained",
+        "sparseengine.configs.runtime.AutoConfig.from_pretrained",
         return_value=_glm_hf_config(**(hf_overrides or {})),
     ):
         return Config(**kwargs)

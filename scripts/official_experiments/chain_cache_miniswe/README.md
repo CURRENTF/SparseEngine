@@ -64,7 +64,7 @@ are exceptions. These are useful operating points, not equal-quality algorithms.
 
 ### Upstream vLLM baseline
 
-`vanilla-prefix` normally means **Sparse-vLLM dense attention**, not upstream
+`vanilla-prefix` normally means **Sparse-Engine dense attention**, not upstream
 vLLM. For an upstream comparison, prepare a separate root with
 `prepare --backend vllm --concurrency C --engine-concurrency S` and a setting
 copy containing the requested TP/DP/EP topology. Then use the same `serve`,
@@ -74,7 +74,7 @@ the backend, installed version, exact command, and effective engine settings.
 
 For TP1/DP2/EP2 with 16 client agents, `--engine-concurrency 8` maps to
 vLLM `max_num_seqs=8` per replica. vLLM uses its native prefix cache, chunked
-prefill, and CUDA Graph scheduling. Sparse-vLLM resident rows, decode reservation,
+prefill, and CUDA Graph scheduling. Sparse-Engine resident rows, decode reservation,
 fixed prefill chunk size, and explicit decode Graph buckets are not vLLM knobs
 and are omitted from its effective config. Batch token budget, context limit,
 memory fraction, model dtype, and all client sampling settings remain explicit.
@@ -84,7 +84,7 @@ The vLLM launcher enables prompt token details and an ASGI middleware that saves
 unaltered non-streaming requests/responses for `collect`. Request time includes
 server queueing and response delivery; it is not isolated GPU execution time.
 Probe `/v1/models` for readiness and `/metrics` for vLLM queue, cache, and
-preemption diagnostics. Sparse-vLLM `/v1/worker/load` does not exist on vLLM.
+preemption diagnostics. Sparse-Engine `/v1/worker/load` does not exist on vLLM.
 
 ### Shared workflow
 
@@ -360,7 +360,7 @@ Both token rates use the entire wall-clock interval, including other stages and
 idle periods; they are not isolated prefill/decode execution throughput.
 
 `engine.enable_profiler=true` adds aggregate host-observed section timings.
-Keep `SPARSEVLLM_SYNC_DEVICE` and `CUDA_SYNC_SVLLM` disabled for ordinary serving
+Keep `SPARSEENGINE_SYNC_DEVICE` and `CUDA_SYNC_SENGINE` disabled for ordinary serving
 measurements. Nested profiler sections overlap and asynchronous CUDA work is not
 fully attributed by host timings. Correlate these diagnostics with timestamped
 GPU activity/power, worker load, request logs and task timing; use a separate GPU

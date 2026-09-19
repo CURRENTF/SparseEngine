@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from benchmark.ruler_vt import pred as ruler_pred
-from benchmark.sparsevllm_regression import run_suite
-from benchmark.sparsevllm_regression.grading import grade_ruler_quality
+from benchmark.sparseengine_regression import run_suite
+from benchmark.sparseengine_regression.grading import grade_ruler_quality
 
 
 def _ruler_args(**overrides):
@@ -117,12 +117,12 @@ def test_ruler_prefix_cache_replay_records_hits_and_output_equivalence(
         outputs = ["AAAAA BBBBB" for _ in prompts]
         return outputs[0] if isinstance(prompt, str) else outputs
 
-    generate._sparsevllm_llm = SimpleNamespace(
+    generate._sparseengine_llm = SimpleNamespace(
         model_runner=SimpleNamespace(runtime_state=runtime)
     )
     monkeypatch.setattr(
         ruler_pred,
-        "get_sparsevllm_generate_api",
+        "get_sparseengine_generate_api",
         lambda **_kwargs: generate,
     )
     args = _ruler_args(

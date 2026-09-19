@@ -2,7 +2,7 @@
 import pytest
 import torch
 
-from sparsevllm.kernels.tilelang.mla.runtime import TileMlaDecodeKernel, TileMlaLaunchConfig
+from sparseengine.kernels.tilelang.mla.runtime import TileMlaDecodeKernel, TileMlaLaunchConfig
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 
@@ -23,7 +23,7 @@ def test_eager_shape_changes_reuse_kernel_and_old_graph(mode, heads, split, monk
         compiles.append(1)
         return original(self, *args, **kwargs)
     monkeypatch.setattr(JITKernel, "_compile_and_create_adapter", compile_adapter)
-    from sparsevllm.utils.compilation_guard import RuntimeCompilationGuard
+    from sparseengine.utils.compilation_guard import RuntimeCompilationGuard
     guard = RuntimeCompilationGuard(limit=0, rank=0)
     request.addfinalizer(guard.close)
     initial_compiles = None

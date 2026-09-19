@@ -4,29 +4,29 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.kernels.external.support import (
+from sparseengine.kernels.external.support import (
     ExternalKernelFamilyError,
     KernelFamilyHealth,
     KernelFamilyState,
     RequiredExternalKernelFamilyError,
 )
-from sparsevllm.operators.activation import (
+from sparseengine.operators.activation import (
     SILU_AND_MUL_REGISTRY,
     SiluAndMulSpec,
     TorchSiluAndMulProvider,
     TritonSiluAndMulProvider,
 )
-from sparsevllm.operators.fp8_linear import (
+from sparseengine.operators.fp8_linear import (
     FP8_LINEAR_REGISTRY,
     FlashInferGroupwiseSm120Fp8LinearProvider,
     FlashInferSm90Fp8LinearProvider,
     Fp8LinearSpec,
 )
-from sparsevllm.operators.gate_up_swiglu import (
+from sparseengine.operators.gate_up_swiglu import (
     GateUpSwiGLUOpSpec,
     NativeGateUpSwiGLUProvider,
 )
-from sparsevllm.operators.moe import (
+from sparseengine.operators.moe import (
     FlashInferCutlassFp8MoeProvider,
     MOE_REGISTRY,
     MoeOpSpec,
@@ -35,40 +35,40 @@ from sparsevllm.operators.moe import (
     SglTritonGlmMoeProvider,
     resolve_moe_provider,
 )
-from sparsevllm.operators.quest_selection import (
+from sparseengine.operators.quest_selection import (
     H100ExactQuestPagedViewDispatch,
     QUEST_PAGE_SELECTION_REGISTRY,
     FlashInferQuestPageSelectionProvider,
     QuestPageSelectionOpSpec,
     TritonExactQuestPageSelectionProvider,
 )
-from sparsevllm.operators.registry import NoProviderError, OpResolver
-from sparsevllm.platforms import DeviceCaps, PlatformEnum
-from sparsevllm.quantization.config import QuantizationConfig
-from sparsevllm.quantization.registry import QuantizationRegistry
+from sparseengine.operators.registry import NoProviderError, OpResolver
+from sparseengine.platforms import DeviceCaps, PlatformEnum
+from sparseengine.quantization.config import QuantizationConfig
+from sparseengine.quantization.registry import QuantizationRegistry
 
 
 @pytest.fixture(autouse=True)
 def _mock_sgl_fp8_quantization_contract():
     with (
         patch(
-            "sparsevllm.kernels.external.sgl.moe.sgl_fp8_group_quantization_support",
+            "sparseengine.kernels.external.sgl.moe.sgl_fp8_group_quantization_support",
             return_value=(True, "sgl quant available"),
         ),
         patch(
-            "sparsevllm.kernels.external.flashinfer.fp8_linear.flashinfer_sm90_fp8_linear_support",
+            "sparseengine.kernels.external.flashinfer.fp8_linear.flashinfer_sm90_fp8_linear_support",
             return_value=(True, "flashinfer sm90 available"),
         ),
         patch(
-            "sparsevllm.kernels.external.flashinfer.fp8_linear.flashinfer_sm120_groupwise_fp8_linear_support",
+            "sparseengine.kernels.external.flashinfer.fp8_linear.flashinfer_sm120_groupwise_fp8_linear_support",
             return_value=(True, "flashinfer sm120 available"),
         ),
         patch(
-            "sparsevllm.kernels.external.flashinfer.moe.flashinfer_cutlass_fp8_moe_support",
+            "sparseengine.kernels.external.flashinfer.moe.flashinfer_cutlass_fp8_moe_support",
             return_value=(True, "flashinfer moe available"),
         ),
         patch(
-            "sparsevllm.kernels.external.flashinfer.support.flashinfer_kernel_health",
+            "sparseengine.kernels.external.flashinfer.support.flashinfer_kernel_health",
             return_value=KernelFamilyHealth(
                 family="flashinfer-python",
                 state=KernelFamilyState.READY,
@@ -77,7 +77,7 @@ def _mock_sgl_fp8_quantization_contract():
             ),
         ),
         patch(
-            "sparsevllm.kernels.external.sgl.support.sgl_kernel_health",
+            "sparseengine.kernels.external.sgl.support.sgl_kernel_health",
             return_value=KernelFamilyHealth(
                 family="sglang-kernel",
                 state=KernelFamilyState.READY,
@@ -184,7 +184,7 @@ def test_quest_fused_paged_view_is_the_default_h100_profile(
         cuda_graph=True,
     )
     with patch(
-        "sparsevllm.operators.quest_selection."
+        "sparseengine.operators.quest_selection."
         "flashinfer_top_k_page_table_transform_support",
         return_value=(True, "available"),
     ):
@@ -387,7 +387,7 @@ def test_quantization_registry_preserves_model_activation_dtype(
     )
 
     with patch(
-        "sparsevllm.operators.fp8_linear.platforms",
+        "sparseengine.operators.fp8_linear.platforms",
         SimpleNamespace(current_platform=platform),
     ):
         provider = QuantizationRegistry.resolve_linear_provider(
@@ -418,7 +418,7 @@ def test_fp8_linear_does_not_hide_broken_flashinfer_family_on_sm90():
     error = _broken_flashinfer_family("SM90 block-scale FP8 Linear")
     with (
         patch(
-            "sparsevllm.kernels.external.flashinfer.fp8_linear.flashinfer_sm90_fp8_linear_support",
+            "sparseengine.kernels.external.flashinfer.fp8_linear.flashinfer_sm90_fp8_linear_support",
             side_effect=error,
         ),
         pytest.raises(ExternalKernelFamilyError, match="undefined symbol"),
@@ -442,7 +442,7 @@ def test_flashinfer_linear_does_not_mask_missing_jit_artifact():
 
     with (
         patch(
-            "sparsevllm.kernels.external.flashinfer.fp8_linear.flashinfer_fp8_blockscale_gemm_sm90",
+            "sparseengine.kernels.external.flashinfer.fp8_linear.flashinfer_fp8_blockscale_gemm_sm90",
             flashinfer_call,
         ),
         pytest.raises(RuntimeError, match="cubin.empty"),
@@ -461,7 +461,7 @@ def test_flashinfer_linear_does_not_mask_other_runtime_failures():
 
     with (
         patch(
-            "sparsevllm.kernels.external.flashinfer.fp8_linear.flashinfer_fp8_blockscale_gemm_sm90",
+            "sparseengine.kernels.external.flashinfer.fp8_linear.flashinfer_fp8_blockscale_gemm_sm90",
             flashinfer_call,
         ),
         pytest.raises(RuntimeError, match="invalid scale layout"),
@@ -479,11 +479,11 @@ def test_flashinfer_sm120_linear_composes_quantizer_and_gemm():
 
     with (
         patch(
-            "sparsevllm.kernels.external.sgl.moe.sgl_per_token_group_quant_8bit",
+            "sparseengine.kernels.external.sgl.moe.sgl_per_token_group_quant_8bit",
             quantize_call,
         ),
         patch(
-            "sparsevllm.kernels.external.flashinfer.fp8_linear.flashinfer_fp8_nt_groupwise_sm120",
+            "sparseengine.kernels.external.flashinfer.fp8_linear.flashinfer_fp8_nt_groupwise_sm120",
             gemm_call,
         ),
     ):
@@ -528,7 +528,7 @@ def test_fp8_linear_rejects_cuda_without_triton_or_flashinfer_feature():
     caps = DeviceCaps(**{**caps.__dict__, "supports_triton": False})
     with (
         patch(
-            "sparsevllm.kernels.external.flashinfer.fp8_linear.flashinfer_sm90_fp8_linear_support",
+            "sparseengine.kernels.external.flashinfer.fp8_linear.flashinfer_sm90_fp8_linear_support",
             return_value=(False, "SM90 feature unavailable"),
         ),
         pytest.raises(RuntimeError, match="does not support Triton"),
@@ -554,7 +554,7 @@ def test_sgl_triton_moe_does_not_hide_broken_alignment() -> None:
     )
 
     with patch(
-        "sparsevllm.kernels.external.sgl.moe.sgl_moe_alignment_support",
+        "sparseengine.kernels.external.sgl.moe.sgl_moe_alignment_support",
         side_effect=_broken_sgl_family("MoE alignment"),
     ):
         with pytest.raises(ExternalKernelFamilyError, match="undefined symbol"):
@@ -584,7 +584,7 @@ def test_sgl_triton_moe_fails_when_required_alignment_is_missing() -> None:
 
     with (
         patch(
-            "sparsevllm.kernels.external.sgl.moe.sgl_moe_alignment_support",
+            "sparseengine.kernels.external.sgl.moe.sgl_moe_alignment_support",
             side_effect=_missing_sgl_family("MoE alignment"),
         ),
         pytest.raises(
@@ -769,7 +769,7 @@ def test_moe_benchmark_provider_override_is_wired() -> None:
     caps = _cuda_caps((9, 0))
 
     with patch(
-        "sparsevllm.operators.moe.platforms.current_platform.get_device_caps",
+        "sparseengine.operators.moe.platforms.current_platform.get_device_caps",
         return_value=caps,
     ):
         provider = resolve_moe_provider(
@@ -837,7 +837,7 @@ def test_minimax_mixed_ep_fails_when_flashinfer_missing(
 
     with (
         patch(
-            "sparsevllm.kernels.external.flashinfer.moe."
+            "sparseengine.kernels.external.flashinfer.moe."
             "flashinfer_cutlass_fp8_moe_support",
             side_effect=_missing_flashinfer_family("SM90 CUTLASS FP8 MoE"),
         ),
@@ -942,7 +942,7 @@ def test_hopper_fused_moe_falls_back_for_missing_graph_support():
 
 def test_triton_fp8_moe_does_not_hide_broken_sgl_quantization() -> None:
     with patch(
-        "sparsevllm.kernels.external.sgl.moe.sgl_fp8_group_quantization_support",
+        "sparseengine.kernels.external.sgl.moe.sgl_fp8_group_quantization_support",
         side_effect=_broken_sgl_family("per-token FP8 group quantization"),
     ):
         with pytest.raises(ExternalKernelFamilyError, match="undefined symbol"):
@@ -952,7 +952,7 @@ def test_triton_fp8_moe_does_not_hide_broken_sgl_quantization() -> None:
 def test_fp8_moe_fails_when_flashinfer_is_missing():
     with (
         patch(
-            "sparsevllm.kernels.external.flashinfer.moe."
+            "sparseengine.kernels.external.flashinfer.moe."
             "flashinfer_cutlass_fp8_moe_support",
             side_effect=_missing_flashinfer_family("SM90 CUTLASS FP8 MoE"),
         ),
@@ -998,7 +998,7 @@ def test_fp8_moe_uses_flashinfer_for_all_tp_ep_topologies(
     num_local_experts: int,
 ):
     with patch(
-        "sparsevllm.kernels.external.flashinfer.moe."
+        "sparseengine.kernels.external.flashinfer.moe."
         "flashinfer_cutlass_fp8_moe_support",
         return_value=(True, "available"),
     ):
@@ -1029,12 +1029,12 @@ def test_flashinfer_moe_prepare_reserves_shared_topology_workspace() -> None:
 
     with (
         patch(
-            "sparsevllm.kernels.external.flashinfer.moe."
+            "sparseengine.kernels.external.flashinfer.moe."
             "flashinfer_cutlass_fused_moe_workspace_size",
             return_value=8192,
         ) as workspace_size,
         patch(
-            "sparsevllm.operators.workspace.get_workspace_manager",
+            "sparseengine.operators.workspace.get_workspace_manager",
             return_value=manager,
         ),
     ):
@@ -1074,12 +1074,12 @@ def test_moe_dispatch_prepares_flashinfer_for_its_route_capacity() -> None:
 
     with (
         patch(
-            "sparsevllm.kernels.external.flashinfer.moe."
+            "sparseengine.kernels.external.flashinfer.moe."
             "flashinfer_cutlass_fused_moe_workspace_size",
             return_value=8192,
         ) as workspace_size,
         patch(
-            "sparsevllm.operators.workspace.get_workspace_manager",
+            "sparseengine.operators.workspace.get_workspace_manager",
             return_value=manager,
         ),
     ):
@@ -1118,7 +1118,7 @@ def test_provider_owns_packed_gate_up_layout():
     ).provider
     flashinfer_spec = _moe_spec()
     with patch(
-        "sparsevllm.kernels.external.flashinfer.moe."
+        "sparseengine.kernels.external.flashinfer.moe."
         "flashinfer_cutlass_fp8_moe_support",
         return_value=(True, "available"),
     ):

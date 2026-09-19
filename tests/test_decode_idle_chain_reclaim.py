@@ -4,12 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from sparsevllm.engine.chain_cache import ChainBusyError, ChainCacheCoordinator, ChainGoneError, ChainOwnerMismatchError
-from sparsevllm.engine.llm_engine import LLMEngine
-from sparsevllm.engine.model_runner import ModelRunner
-from sparsevllm.engine.runtime_state import RuntimeState
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.sampling_params import SamplingParams
+from sparseengine.engine.chain_cache import ChainBusyError, ChainCacheCoordinator, ChainGoneError, ChainOwnerMismatchError
+from sparseengine.engine.llm_engine import LLMEngine
+from sparseengine.engine.model_runner import ModelRunner
+from sparseengine.engine.runtime_state import RuntimeState
+from sparseengine.engine.sequence import Sequence
+from sparseengine.sampling_params import SamplingParams
 from test_chain_offload import make_manager
 from test_prefill_schedule_policy import FakeMemoryOracle, make_scheduler_with_oracle, PREFILL_POLICY_ALL_CHUNKED
 

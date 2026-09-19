@@ -12,8 +12,8 @@ GPUS="${3:-0,1}"
 
 # 1. Environment & Python Setup
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-DATA_ROOT="${SPARSEVLLM_LONGBENCH_DATA_DIR:-${SPARSEVLLM_DATA_DIR:-data/LongBench}}"
-OUTPUT_ROOT="${SPARSEVLLM_OUTPUT_DIR:-outputs}/vllm_longbench_quality_$(date +%Y%m%d_%H%M%S)"
+DATA_ROOT="${SPARSEENGINE_LONGBENCH_DATA_DIR:-${SPARSEENGINE_DATA_DIR:-data/LongBench}}"
+OUTPUT_ROOT="${SPARSEENGINE_OUTPUT_DIR:-outputs}/vllm_longbench_quality_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "${OUTPUT_ROOT}/vllm"
 
 # 2. Model & TP Configuration
@@ -66,8 +66,8 @@ export PYTHONPATH="${REPO_ROOT}:${REPO_ROOT}/src"
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 export TMPDIR="${TMPDIR:-/tmp}"
 export PATH="${CUDA_HOME}/bin:${PATH}"
-export SPARSEVLLM_DATA_DIR="${DATA_ROOT}"
-export SPARSEVLLM_LONGBENCH_DATA_DIR="${DATA_ROOT}"
+export SPARSEENGINE_DATA_DIR="${DATA_ROOT}"
+export SPARSEENGINE_LONGBENCH_DATA_DIR="${DATA_ROOT}"
 export TOKENIZERS_PARALLELISM="false"
 export VLLM_LOGGING_LEVEL="INFO"
 

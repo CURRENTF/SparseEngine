@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from benchmark.swe_bench_lite.agent_trace import AgentTrace, CURRENT_TRACE, install_http_recorder
-from benchmark.sparsevllm_regression.agent_trace import (
+from benchmark.sparseengine_regression.agent_trace import (
     export_legacy, grade, load_trace, parse_recording, replay_agent, replay_body,
     run_replay, write,
 )
@@ -209,7 +209,7 @@ def test_real_http_replay_writes_results_and_detects_regression(tmp_path):
         assert run_replay(args) == 0
     finally:
         server.shutdown(); thread.join(); server.server_close()
-    result = json.loads((tmp_path / "sparsevllm_regression/replay/agent_trace.json").read_text())
+    result = json.loads((tmp_path / "sparseengine_regression/replay/agent_trace.json").read_text())
     assert result["status"] == "success" and result["request_count"] == 2
     assert result["elapsed_s"] >= 1.5
     assert all(body["model"] == "target" and body["ignore_eos"] for body in requests)

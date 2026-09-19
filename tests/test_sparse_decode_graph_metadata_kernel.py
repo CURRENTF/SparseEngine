@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from sparsevllm.kernels.triton.sparse_decode_graph_metadata import (
+from sparseengine.kernels.triton.sparse_decode_graph_metadata import (
     publish_uniform_sparse_decode_graph_slots,
 )
 

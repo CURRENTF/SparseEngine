@@ -6,13 +6,13 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.methods.omnikv.manager import OmniKVCacheManager
-from sparsevllm.engine.cache_manager.methods.omnikv.capacity import (
+from sparseengine.engine.cache_manager.methods.omnikv.manager import OmniKVCacheManager
+from sparseengine.engine.cache_manager.methods.omnikv.capacity import (
     fit_omnikv_host_slots,
     omnikv_host_pool_bytes,
 )
-from sparsevllm.engine.cache_manager.methods.omnikv.storage import OmniKVStorage
-from sparsevllm.engine.cache_manager.storage import ExplicitKVStorage, MlaLatentStorage
+from sparseengine.engine.cache_manager.methods.omnikv.storage import OmniKVStorage
+from sparseengine.engine.cache_manager.storage import ExplicitKVStorage, MlaLatentStorage
 
 
 @pytest.mark.parametrize("gpu_bytes,host_kib", [(1, 100000), (1000000, 0)])
@@ -44,7 +44,7 @@ def test_insufficient_pool_budget_does_not_publish_capacity(gpu_bytes, host_kib)
     with (
         patch("pathlib.Path.read_text", return_value=f"MemAvailable: {host_kib} kB\n"),
         patch(
-            "sparsevllm.engine.cache_manager.methods.omnikv.manager.OmniKVStorage.__init__"
+            "sparseengine.engine.cache_manager.methods.omnikv.manager.OmniKVStorage.__init__"
         ) as allocate,
     ):
         with pytest.raises(MemoryError, match="pools cannot fit"):
@@ -87,7 +87,7 @@ def test_history_preallocation_is_bounded_by_request_capacity(prefix_caching):
     with (
         patch("pathlib.Path.read_text", return_value="MemAvailable: 1048576 kB\n"),
         patch(
-            "sparsevllm.engine.cache_manager.methods.omnikv.manager.OmniKVStorage.__init__",
+            "sparseengine.engine.cache_manager.methods.omnikv.manager.OmniKVStorage.__init__",
             side_effect=AllocationReached,
         ) as allocate,
         pytest.raises(AllocationReached),
@@ -196,7 +196,7 @@ def _reject_exhausted_peer(rank, init_file):
         with (
             patch("pathlib.Path.read_text", return_value="MemAvailable: 100000 kB\n"),
             patch(
-                "sparsevllm.engine.cache_manager.methods.omnikv.manager.OmniKVStorage.__init__"
+                "sparseengine.engine.cache_manager.methods.omnikv.manager.OmniKVStorage.__init__"
             ) as allocate,
         ):
             with pytest.raises(MemoryError, match="pools cannot fit"):

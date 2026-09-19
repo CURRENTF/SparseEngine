@@ -39,10 +39,10 @@ VALID_STATUSES = {
     "skipped_by_policy",
 }
 ROUTE_HEADERS = {
-    "worker": "x-sparsevllm-worker",
-    "reason": "x-sparsevllm-route-reason",
-    "method": "x-sparsevllm-sparse-method",
-    "prefix_matched_tokens": "x-sparsevllm-prefix-matched-tokens",
+    "worker": "x-sparseengine-worker",
+    "reason": "x-sparseengine-route-reason",
+    "method": "x-sparseengine-sparse-method",
+    "prefix_matched_tokens": "x-sparseengine-prefix-matched-tokens",
 }
 DEFAULT_ARTICLE_TOKEN_BUCKETS = (
     (60, 1_000, 8_000),
@@ -642,10 +642,10 @@ async def preflight(
             )
     healthy_workers = health.get("healthy_workers")
     if config.require_router:
-        if model_card.get("owned_by") != "sparsevllm-router":
+        if model_card.get("owned_by") != "sparseengine-router":
             raise ValueError(
                 "--require-router was set, but /v1/models did not identify the "
-                "Sparse-vLLM smart router."
+                "Sparse-Engine smart router."
             )
         if not isinstance(healthy_workers, list):
             raise PreflightParseError(
@@ -1094,9 +1094,9 @@ def build_payload(spec: RequestSpec, config: BenchmarkConfig) -> dict[str, Any]:
         "stream": False,
     }
     if config.require_router:
-        payload["svllm_method_preference"] = ",".join(spec.method_preferences)
+        payload["sengine_method_preference"] = ",".join(spec.method_preferences)
         if spec.required_tags:
-            payload["svllm_required_tags"] = list(spec.required_tags)
+            payload["sengine_required_tags"] = list(spec.required_tags)
     return payload
 
 
@@ -2661,7 +2661,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run one or more synthetic Deep Research jobs through the "
-            "Sparse-vLLM smart router."
+            "Sparse-Engine smart router."
         )
     )
     parser.add_argument(

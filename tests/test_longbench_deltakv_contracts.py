@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from benchmark.long_bench import pred as longbench_pred
 from benchmark.long_bench.metrics import classification_score, qa_f1_score
-from benchmark.sparsevllm_regression.manifest import load_manifest, resolve_method_config
+from benchmark.sparseengine_regression.manifest import load_manifest, resolve_method_config
 
 
 class LongBenchDeltaKVContractsTest(unittest.TestCase):
@@ -58,14 +58,14 @@ class LongBenchDeltaKVContractsTest(unittest.TestCase):
             "full_attention_layers": requested_layers,
         }
         generate_fn = SimpleNamespace(
-            _sparsevllm_llm=SimpleNamespace(
+            _sparseengine_llm=SimpleNamespace(
                 worker_info=lambda **_kwargs: runtime_info,
             )
         )
         with tempfile.TemporaryDirectory() as tmp:
             resolved = Path(tmp) / "resolved_config.json"
             resolved.write_text(
-                json.dumps({"backend": "sparsevllm", "requested": requested}),
+                json.dumps({"backend": "sparseengine", "requested": requested}),
                 encoding="utf-8",
             )
             longbench_pred._record_effective_runtime_config(
@@ -83,7 +83,7 @@ class LongBenchDeltaKVContractsTest(unittest.TestCase):
 
     def test_longbench_records_final_prefix_cache_statistics(self):
         generate_fn = SimpleNamespace(
-            _sparsevllm_llm=SimpleNamespace(
+            _sparseengine_llm=SimpleNamespace(
                 worker_load=lambda: {
                     "active_requests": 0,
                     "cache": {
@@ -154,12 +154,12 @@ class LongBenchDeltaKVContractsTest(unittest.TestCase):
         old_root = longbench_pred.DATA_PREFIX_PATH
         longbench_pred.DATA_PREFIX_PATH = None
         try:
-            with self.assertRaisesRegex(FileNotFoundError, "SPARSEVLLM_LONGBENCH_DATA_DIR"):
+            with self.assertRaisesRegex(FileNotFoundError, "SPARSEENGINE_LONGBENCH_DATA_DIR"):
                 longbench_pred.validate_longbench_data_paths(["hotpotqa"], use_longbench_e=False)
         finally:
             longbench_pred.DATA_PREFIX_PATH = old_root
 
-    def test_sparsevllm_data_workers_receive_distinct_master_ports(self):
+    def test_sparseengine_data_workers_receive_distinct_master_ports(self):
         launched = []
 
         class Process:
@@ -176,7 +176,7 @@ class LongBenchDeltaKVContractsTest(unittest.TestCase):
                 "os.environ",
                 {
                     "CUDA_VISIBLE_DEVICES": "0,1,2,3",
-                    "SPARSEVLLM_MASTER_PORT": "24300",
+                    "SPARSEENGINE_MASTER_PORT": "24300",
                 },
                 clear=False,
             ),
@@ -189,7 +189,7 @@ class LongBenchDeltaKVContractsTest(unittest.TestCase):
             ["0", "1", "2", "3"],
         )
         self.assertEqual(
-            [env["SPARSEVLLM_MASTER_PORT"] for _command, env, _cwd in launched],
+            [env["SPARSEENGINE_MASTER_PORT"] for _command, env, _cwd in launched],
             ["24300", "24301", "24302", "24303"],
         )
 
@@ -206,7 +206,7 @@ class LongBenchDeltaKVContractsTest(unittest.TestCase):
             force_eager_count=0,
         )
         generate_fn = SimpleNamespace(
-            _sparsevllm_llm=SimpleNamespace(
+            _sparseengine_llm=SimpleNamespace(
                 config=SimpleNamespace(decode_graph=True),
                 model_runner=SimpleNamespace(
                     decode_graph_runner=graph_runner,
@@ -246,7 +246,7 @@ class LongBenchDeltaKVContractsTest(unittest.TestCase):
             force_eager_count=0,
         )
         generate_fn = SimpleNamespace(
-            _sparsevllm_llm=SimpleNamespace(
+            _sparseengine_llm=SimpleNamespace(
                 config=SimpleNamespace(decode_graph=True),
                 model_runner=SimpleNamespace(
                     decode_graph_runner=graph_runner,
@@ -273,9 +273,9 @@ class LongBenchDeltaKVContractsTest(unittest.TestCase):
         self.assertEqual(status["counter_delta"]["eager_static_count"], 0)
         self.assertEqual(status["counter_delta"]["force_eager_count"], 0)
 
-    def test_longbench_fails_if_sparsevllm_graph_state_is_unavailable(self):
+    def test_longbench_fails_if_sparseengine_graph_state_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(RuntimeError, "_sparsevllm_llm"):
+            with self.assertRaisesRegex(RuntimeError, "_sparseengine_llm"):
                 longbench_pred._write_decode_cuda_graph_status(
                     generate_fn=object(),
                     out_root=tmp,

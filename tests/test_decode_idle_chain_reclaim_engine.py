@@ -6,23 +6,23 @@ import socket
 import pytest
 import torch
 
-from sparsevllm import LLM, SamplingParams
-from sparsevllm.engine.chain_cache import ChainGoneError
+from sparseengine import LLM, SamplingParams
+from sparseengine.engine.chain_cache import ChainGoneError
 
 
 @pytest.mark.parametrize("offload", [False, True])
 def test_idle_reclaim_rpc_preserves_other_chain_and_graph_execution(offload, tmp_path, monkeypatch):
-    model = os.getenv("SPARSEVLLM_DECODE_WINDOW_MODEL")
+    model = os.getenv("SPARSEENGINE_DECODE_WINDOW_MODEL")
     if not model or not torch.cuda.is_available():
-        pytest.skip("set SPARSEVLLM_DECODE_WINDOW_MODEL and expose idle CUDA devices")
-    tp = int(os.getenv("SPARSEVLLM_DECODE_WINDOW_TP", "1"))
+        pytest.skip("set SPARSEENGINE_DECODE_WINDOW_MODEL and expose idle CUDA devices")
+    tp = int(os.getenv("SPARSEENGINE_DECODE_WINDOW_TP", "1"))
     tiny = tmp_path / "tiny.json"
     tiny.write_text(json.dumps(dict(num_hidden_layers=2, hidden_size=256,
         intermediate_size=512, num_attention_heads=4, num_key_value_heads=2, head_dim=64)))
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    monkeypatch.setenv("SPARSEVLLM_MASTER_PORT", str(port))
+    monkeypatch.setenv("SPARSEENGINE_MASTER_PORT", str(port))
     llm = LLM(model, tiny_random=True, tiny_random_config=str(tiny),
         tensor_parallel_size=tp, sparse_method="snapkv", enable_prefix_caching=True,
         enable_prefix_cache_offload=offload, prefix_cache_host_size_gb=0.25,

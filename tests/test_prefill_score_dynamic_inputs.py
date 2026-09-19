@@ -7,7 +7,7 @@ import torch
 def _build_score_case(name, i):
     torch.manual_seed(314)
     if name.startswith("score_"):
-        from sparsevllm.kernels.triton.prefill_score import (
+        from sparseengine.kernels.triton.prefill_score import (
             PrefillScoreWorkspace,
             prefill_score_from_lse_fwd,
             prefill_score_fwd,
@@ -75,7 +75,7 @@ def _build_score_case(name, i):
 
         return call, check
     if name == "mla_latent_stride":
-        from sparsevllm.kernels.triton.mla.prefill_score import score_block
+        from sparseengine.kernels.triton.mla.prefill_score import score_block
 
         qn, kn, h = 32 + i * 16, 512, 2
         q = (

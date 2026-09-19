@@ -7,8 +7,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from sparsevllm.engine.cache_manager.standard import StandardCacheManager
-from sparsevllm.engine.chain_cache import (
+from sparseengine.engine.cache_manager.standard import StandardCacheManager
+from sparseengine.engine.chain_cache import (
     ChainCacheCoordinator, ChainCapacityError, ChainFingerprintMismatchError,
     build_chain_cache_fingerprint,
 )

@@ -1,0 +1,20 @@
+[Unit]
+Description=Sparse-Engine worker %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+UMask=0077
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=%h/.config/sparseengine/worker-%i.env
+ExecStart=/bin/bash -c 'cd "$SPARSEENGINE_REPO" && exec env PYTHONPATH="$SPARSEENGINE_REPO/src" "$SPARSEENGINE_PYTHON" -m sparseengine.entrypoints.openai.api_server --model "$SPARSEENGINE_MODEL" --served-model-name "$SPARSEENGINE_SERVED_MODEL_NAME" --host 127.0.0.1 --port "$SPARSEENGINE_PORT" --engine-kwargs "$SPARSEENGINE_ENGINE_KWARGS" --request-log-dir "$SPARSEENGINE_REQUEST_LOG_DIR"'
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

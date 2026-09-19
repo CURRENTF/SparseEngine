@@ -16,8 +16,8 @@ from dataclasses import fields
 
 import torch
 
-from sparsevllm import LLM, SamplingParams
-from sparsevllm.engine.async_scheduling.scheduler import AsyncScheduler
+from sparseengine import LLM, SamplingParams
+from sparseengine.engine.async_scheduling.scheduler import AsyncScheduler
 
 
 def run_case(llm, prompts, params, *, asynchronous, cancel_first=False, append_prompt=None,

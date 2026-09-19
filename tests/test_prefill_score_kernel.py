@@ -108,7 +108,7 @@ def _raw_qk_score_baseline(
 
     def test_tilelang_prefill_wrapper_rejects_per_head_score_tensor(self):
         try:
-            from sparsevllm.kernels.tilelang.gqa.prefill import (
+            from sparseengine.kernels.tilelang.gqa.prefill import (
                 gqa_paged_prefill_attention_tilelang,
             )
         except ImportError as exc:
@@ -130,7 +130,7 @@ def _raw_qk_score_baseline(
 
     def test_tilelang_prefill_launch_uses_query_length_not_page_table_capacity(self):
         try:
-            from sparsevllm.kernels.tilelang.gqa import prefill as tilelang_prefill
+            from sparseengine.kernels.tilelang.gqa import prefill as tilelang_prefill
         except ImportError as exc:
             self.skipTest(str(exc))
 
@@ -159,7 +159,7 @@ def _raw_qk_score_baseline(
 class PrefillScoreKernelTest(unittest.TestCase):
     def test_shared_scorer_matches_torch_for_mha_reconstruction(self):
         """MLA prefill reconstructs one explicit K head per query head."""
-        from sparsevllm.kernels.triton.prefill_score import prefill_score_fwd
+        from sparseengine.kernels.triton.prefill_score import prefill_score_fwd
 
         torch.manual_seed(19)
         device = "cuda"
@@ -237,7 +237,7 @@ class PrefillScoreKernelTest(unittest.TestCase):
                 )
 
     def test_logits_score_matches_torch(self):
-        from sparsevllm.kernels.triton.prefill_score import prefill_score_fwd
+        from sparseengine.kernels.triton.prefill_score import prefill_score_fwd
 
         torch.manual_seed(23)
         device = "cuda"
@@ -298,7 +298,7 @@ class PrefillScoreKernelTest(unittest.TestCase):
         torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
 
     def test_logit_score_supports_query_windows_larger_than_128(self):
-        from sparsevllm.kernels.triton.prefill_score import prefill_score_fwd
+        from sparseengine.kernels.triton.prefill_score import prefill_score_fwd
 
         torch.manual_seed(29)
         device = "cuda"
@@ -360,7 +360,7 @@ class PrefillScoreKernelTest(unittest.TestCase):
         torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
 
     def test_probability_score_supports_full_query_larger_than_128(self):
-        from sparsevllm.kernels.triton.prefill_score import prefill_score_fwd
+        from sparseengine.kernels.triton.prefill_score import prefill_score_fwd
 
         torch.manual_seed(37)
         device = "cuda"
@@ -421,7 +421,7 @@ class PrefillScoreKernelTest(unittest.TestCase):
         torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
 
     def test_probability_score_reuses_fa3_lse(self):
-        from sparsevllm.kernels.triton.prefill_score import (
+        from sparseengine.kernels.triton.prefill_score import (
             prefill_score_from_lse_fwd,
         )
 
@@ -498,7 +498,7 @@ class PrefillScoreKernelTest(unittest.TestCase):
         torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-2)
 
     def test_score_batch_indices_pack_active_rows(self):
-        from sparsevllm.kernels.triton.prefill_score import prefill_score_fwd
+        from sparseengine.kernels.triton.prefill_score import prefill_score_fwd
 
         torch.manual_seed(31)
         device = "cuda"
@@ -555,7 +555,7 @@ class PrefillScoreKernelTest(unittest.TestCase):
                 torch.testing.assert_close(packed[0], full[1], rtol=2e-2, atol=2e-2)
 
     def test_prefill_score_matches_torch_for_query_range(self):
-        from sparsevllm.kernels.triton.prefill_score import prefill_score_fwd
+        from sparseengine.kernels.triton.prefill_score import prefill_score_fwd
 
         torch.manual_seed(7)
         device = "cuda"
@@ -615,7 +615,7 @@ class PrefillScoreKernelTest(unittest.TestCase):
         torch.testing.assert_close(attn_score, expected, rtol=2e-2, atol=2e-2)
 
     def test_prefill_score_handles_offset_query_window(self):
-        from sparsevllm.kernels.triton.prefill_score import prefill_score_fwd
+        from sparseengine.kernels.triton.prefill_score import prefill_score_fwd
 
         torch.manual_seed(11)
         device = "cuda"
@@ -673,7 +673,7 @@ class PrefillScoreKernelTest(unittest.TestCase):
         torch.testing.assert_close(acc, expected, rtol=2e-2, atol=2e-2)
 
     def test_prefill_score_matches_torch_for_gqa_seven_heads(self):
-        from sparsevllm.kernels.triton.prefill_score import prefill_score_fwd
+        from sparseengine.kernels.triton.prefill_score import prefill_score_fwd
 
         torch.manual_seed(17)
         device = "cuda"

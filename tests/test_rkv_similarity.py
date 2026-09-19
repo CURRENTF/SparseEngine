@@ -2,7 +2,7 @@
 import pytest
 import torch
 
-from sparsevllm.operators.rkv_similarity import (
+from sparseengine.operators.rkv_similarity import (
     RKV_SIMILARITY_REGISTRY,
     RKVSimilaritySpec,
     TorchRKVSimilarityProvider,
@@ -62,8 +62,8 @@ def test_invalid_row_domain_and_layout_fail_before_launch():
 def test_unavailable_gpu_backend_does_not_silently_select_torch():
     # An unsupported GPU must fail at binding instead of unexpectedly doing
     # quadratic Torch work; CPU fixtures remain independently supported.
-    from sparsevllm.operators.registry import NoProviderError, OpResolver
-    from sparsevllm.platforms.interface import DeviceCaps, PlatformEnum
+    from sparseengine.operators.registry import NoProviderError, OpResolver
+    from sparseengine.platforms.interface import DeviceCaps, PlatformEnum
     caps = DeviceCaps(platform=PlatformEnum.CUDA, device_type="cuda", device_index=0,
                       device_name="unavailable-backend", supports_triton=False)
     spec = RKVSimilaritySpec(torch.float32)
@@ -84,7 +84,7 @@ def test_selected_kernel_failure_propagates_without_fallback(monkeypatch):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 def test_fused_complete_scores_and_global_selection_match_reference(dtype):
-    from sparsevllm.engine.cache_manager.methods.rkv_scoring import rkv_head_scores
+    from sparseengine.engine.cache_manager.methods.rkv_scoring import rkv_head_scores
     from tests.test_rkv_vllm import reference_scores
     torch.manual_seed(93)
     # Batch interpreted as layers here, exercising the serving head-mean /
@@ -118,7 +118,7 @@ def test_row_tiles_reconstruct_full_domain_and_preserve_nonfinite_failures():
 def test_changing_resident_lengths_does_not_recompile_after_warmup():
     # Agent contexts vary on every compression; exact lengths must not create
     # new compiler keys or consume the post-startup compilation budget.
-    from sparsevllm.utils.compilation_guard import RuntimeCompilationGuard
+    from sparseengine.utils.compilation_guard import RuntimeCompilationGuard
     provider = prepare_rkv_similarity_provider(torch.bfloat16, device=torch.device("cuda", 0))
     provider.column_sums(torch.zeros(1, 131, 5003, device="cuda", dtype=torch.bfloat16), 19)
     torch.cuda.synchronize()

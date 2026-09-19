@@ -15,36 +15,36 @@ from minisweagent.models.litellm_model import LitellmModel
 
 
 class SparseVLLMLitellmModel(LitellmModel):
-    """Replay clean chat history and opt into per-instance Sparse-vLLM chains."""
+    """Replay clean chat history and opt into per-instance Sparse-Engine chains."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._chain_cache_enabled = os.getenv(
-            "SPARSEVLLM_CHAIN_CACHE", ""
+            "SPARSEENGINE_CHAIN_CACHE", ""
         ).strip().lower() in {"1", "true", "yes", "on"}
-        self._prune_policy = os.getenv("SPARSEVLLM_PREFIX_PRUNE_POLICY", "").strip()
+        self._prune_policy = os.getenv("SPARSEENGINE_PREFIX_PRUNE_POLICY", "").strip()
         self._prune_finished = False
         self._prune_reuse_verified = False
         self._prune_freed_slots = 0
         if self._prune_policy:
             if self._prune_policy not in {"snapkv_global", "kvzip_global"}:
                 raise ValueError(
-                    "SPARSEVLLM_PREFIX_PRUNE_POLICY must be snapkv_global or "
+                    "SPARSEENGINE_PREFIX_PRUNE_POLICY must be snapkv_global or "
                     f"kvzip_global, got {self._prune_policy!r}."
                 )
             if self._chain_cache_enabled:
                 raise ValueError("Prefix-tree pruning requires radix cache, not chain cache.")
             self._prune_range_start = self._required_env_int(
-                "SPARSEVLLM_PREFIX_PRUNE_RANGE_START"
+                "SPARSEENGINE_PREFIX_PRUNE_RANGE_START"
             )
             self._prune_range_end = self._required_env_int(
-                "SPARSEVLLM_PREFIX_PRUNE_RANGE_END"
+                "SPARSEENGINE_PREFIX_PRUNE_RANGE_END"
             )
             self._prune_keep_tokens = self._required_env_int(
-                "SPARSEVLLM_PREFIX_PRUNE_KEEP_TOKENS"
+                "SPARSEENGINE_PREFIX_PRUNE_KEEP_TOKENS"
             )
             self._prune_trigger_tokens = self._required_env_int(
-                "SPARSEVLLM_PREFIX_PRUNE_TRIGGER_TOKENS"
+                "SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS"
             )
             if (
                 self._prune_range_start < 0
@@ -66,9 +66,9 @@ class SparseVLLMLitellmModel(LitellmModel):
             self._served_model_name = (
                 model_name.split("/", 1)[1] if model_name.startswith("openai/") else model_name
             )
-            events = os.getenv("SPARSEVLLM_PREFIX_PRUNE_EVENTS", "").strip()
+            events = os.getenv("SPARSEENGINE_PREFIX_PRUNE_EVENTS", "").strip()
             if not events:
-                raise ValueError("SPARSEVLLM_PREFIX_PRUNE_EVENTS is required.")
+                raise ValueError("SPARSEENGINE_PREFIX_PRUNE_EVENTS is required.")
             self._prune_events_path = Path(events)
         self._chain_id: str | None = None
         self._last_request_messages: list[dict[str, Any]] | None = None
@@ -183,7 +183,7 @@ class SparseVLLMLitellmModel(LitellmModel):
             method=method,
             data=data,
             headers={
-                "Authorization": "Bearer local-sparsevllm",
+                "Authorization": "Bearer local-sparseengine",
                 "Content-Type": "application/json",
             },
         )
@@ -398,7 +398,7 @@ class SparseVLLMLitellmModel(LitellmModel):
             continuation_error = self._continuation_error(messages)
             if continuation_error is not None:
                 raise RuntimeError(
-                    "Sparse-vLLM chain transcript is not append-only: "
+                    "Sparse-Engine chain transcript is not append-only: "
                     f"{continuation_error}."
                 )
         chain_append_start = (
@@ -456,7 +456,7 @@ class SparseVLLMLitellmModel(LitellmModel):
         normalized_chain_id = str(chain_id or "").strip()
         if not normalized_chain_id:
             raise RuntimeError(
-                "Sparse-vLLM chain-cache request completed without a chain_id."
+                "Sparse-Engine chain-cache request completed without a chain_id."
             )
         pending_request_messages = [
             self._chain_message(message) for message in messages
@@ -464,12 +464,12 @@ class SparseVLLMLitellmModel(LitellmModel):
         choices = getattr(response, "choices", None) or []
         if not choices:
             raise RuntimeError(
-                "Sparse-vLLM chain-cache response contained no choices."
+                "Sparse-Engine chain-cache response contained no choices."
             )
         response_message = getattr(choices[0], "message", None)
         if response_message is None:
             raise RuntimeError(
-                "Sparse-vLLM chain-cache response contained no assistant message."
+                "Sparse-Engine chain-cache response contained no assistant message."
             )
         pending_response_message = self._chain_message(response_message)
         finish_reason = str(
@@ -477,7 +477,7 @@ class SparseVLLMLitellmModel(LitellmModel):
         ).strip()
         if not finish_reason:
             raise RuntimeError(
-                "Sparse-vLLM chain-cache response omitted finish_reason."
+                "Sparse-Engine chain-cache response omitted finish_reason."
             )
         chain_status = getattr(response, "chain_status", None)
         if chain_status is None:
@@ -487,7 +487,7 @@ class SparseVLLMLitellmModel(LitellmModel):
         normalized_chain_status = str(chain_status or "").strip()
         if not normalized_chain_status:
             raise RuntimeError(
-                "Sparse-vLLM chain-cache response omitted chain_status."
+                "Sparse-Engine chain-cache response omitted chain_status."
             )
         self._pending_chain_state = (
             normalized_chain_id,
@@ -574,7 +574,7 @@ class SparseVLLMLitellmModel(LitellmModel):
         pending = self._pending_chain_state
         if pending is None:
             raise RuntimeError(
-                "Sparse-vLLM chain-cache query completed without pending "
+                "Sparse-Engine chain-cache query completed without pending "
                 "chain state."
             )
         (

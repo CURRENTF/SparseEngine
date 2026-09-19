@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager import (
+from sparseengine.engine.cache_manager import (
     AttentionKeyComputeView,
     AttentionViewMeta,
     DecodeComputeView,
@@ -15,15 +15,15 @@ from sparsevllm.engine.cache_manager import (
     MlaLatentPayload,
     PrefillComputeView,
 )
-from sparsevllm.engine.cache_manager.base import CacheManager
-from sparsevllm.layers.mla_attention import (
+from sparseengine.engine.cache_manager.base import CacheManager
+from sparseengine.layers.mla_attention import (
     MLAAttention,
 )
-from sparsevllm.operators.mla_attention import (
+from sparseengine.operators.mla_attention import (
     MlaAttentionOpSpec,
     MlaAttentionProvider,
 )
-from sparsevllm.utils.context import get_context, reset_context, set_context
+from sparseengine.utils.context import get_context, reset_context, set_context
 
 
 class _TestProvider(MlaAttentionProvider):
@@ -210,7 +210,7 @@ def test_mla_attention_bind_resolves_provider_once() -> None:
     provider = _TestProvider(spec, device="cpu", max_batch_size=8)
 
     with patch(
-        "sparsevllm.layers.mla_attention.resolve_mla_attention_provider",
+        "sparseengine.layers.mla_attention.resolve_mla_attention_provider",
         return_value=provider,
     ) as resolve:
         attention = MLAAttention.bind(

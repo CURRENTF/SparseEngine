@@ -11,10 +11,10 @@ import numpy as np
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager
-from sparsevllm.engine.prefix_prune import select_global_keep_indices
-from sparsevllm.multimodal.runtime import MultiModalRuntime, MultiModalState
-from sparsevllm.utils.context import get_context, set_context
+from sparseengine.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager
+from sparseengine.engine.prefix_prune import select_global_keep_indices
+from sparseengine.multimodal.runtime import MultiModalRuntime, MultiModalState
+from sparseengine.utils.context import get_context, set_context
 
 cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 
@@ -242,7 +242,7 @@ def test_multimodal_ranges_cross_chunks_and_mixed_requests(device):
 
 @cuda
 def test_flashinfer_eager_ragged_plan_reuses_storage_without_stale_indices():
-    from sparsevllm.operators.flashinfer_decode_state import FlashInferPagedDecodeState
+    from sparseengine.operators.flashinfer_decode_state import FlashInferPagedDecodeState
 
     # Real public wrapper execution catches stale packed indices after shortening
     # a request; mocks of plan() cannot establish this numerical contract.

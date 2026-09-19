@@ -5,8 +5,8 @@ import torch
 from safetensors.torch import save_file
 from torch import nn
 
-from sparsevllm.utils import loader
-from sparsevllm.utils.weight_target import WeightTarget
+from sparseengine.utils import loader
+from sparseengine.utils.weight_target import WeightTarget
 
 
 class _TwoShardModel(nn.Module):

@@ -12,7 +12,7 @@ does not resolve its overall efficiency issue; CUDA Graph support alone does
 not resolve TurboQuant's performance issue either.
 
 ```python
-from sparsevllm import LLM
+from sparseengine import LLM
 
 llm = LLM(
     model_path,

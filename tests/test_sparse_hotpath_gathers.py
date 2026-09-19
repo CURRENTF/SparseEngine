@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 import torch
 
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.config import RuntimeLayout
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
 
 
 @pytest.mark.parametrize('device', ['cpu', 'cuda'])

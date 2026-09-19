@@ -51,7 +51,7 @@ jobs:
     env:
       CUDA_VISIBLE_DEVICES: ""
       PYTHONPATH: ${{ github.workspace }}/src
-      SPARSEVLLM_PLATFORM: cpu
+      SPARSEENGINE_PLATFORM: cpu
 
     steps:
       - name: Check out repository

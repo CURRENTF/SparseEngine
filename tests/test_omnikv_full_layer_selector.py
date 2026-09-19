@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-from sparsevllm.utils.select_omnikv_full_layers import (
+from sparseengine.utils.select_omnikv_full_layers import (
     CalibrationPoint,
     add_topk_to_pair_scores,
     attention_layer_indices_from_config,
@@ -166,7 +166,7 @@ class OmniKVFullLayerSelectorTest(unittest.TestCase):
         self.assertEqual(breakdown[1]["sparse_layers"], [15])
 
     def test_global_calibration_excludes_truncated_sliding_attention_scores(self):
-        from sparsevllm.utils.select_omnikv_full_layers import topk_indices_from_decode_attentions
+        from sparseengine.utils.select_omnikv_full_layers import topk_indices_from_decode_attentions
 
         # Sliding layers return only their local window; mixing their local
         # indices into full-history coverage can select the wrong observers.

@@ -3,9 +3,9 @@ from unittest.mock import patch
 
 import torch
 
-from sparsevllm.models.qwen2 import Qwen2MLP
-from sparsevllm.models.qwen3 import Qwen3MLP
-from sparsevllm.distributed import ParallelContext, ParallelGroup
+from sparseengine.models.qwen2 import Qwen2MLP
+from sparseengine.models.qwen3 import Qwen3MLP
+from sparseengine.distributed import ParallelContext, ParallelGroup
 
 
 def _single_process_parallel_context() -> ParallelContext:
@@ -16,7 +16,7 @@ def _single_process_parallel_context() -> ParallelContext:
 class MLPChunkingTest(unittest.TestCase):
     def _assert_chunked_matches_full(self, cls):
         with patch(
-            "sparsevllm.layers.linear.get_parallel_context",
+            "sparseengine.layers.linear.get_parallel_context",
             return_value=_single_process_parallel_context(),
         ):
             torch.manual_seed(0)

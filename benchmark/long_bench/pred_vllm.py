@@ -20,8 +20,8 @@ if str(REPO_ROOT) not in sys.path:
 from benchmark.long_bench.prompt_budget import encode_prompt_with_generation_budget
 
 DATA_PREFIX_PATH = (
-    os.getenv("SPARSEVLLM_LONGBENCH_DATA_DIR")
-    or os.getenv("SPARSEVLLM_DATA_DIR")
+    os.getenv("SPARSEENGINE_LONGBENCH_DATA_DIR")
+    or os.getenv("SPARSEENGINE_DATA_DIR")
     or str(REPO_ROOT / "data" / "LongBench")
 )
 NO_CHAT_TEMPLATE_DATASETS = {

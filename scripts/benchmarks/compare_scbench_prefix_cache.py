@@ -84,7 +84,7 @@ def build_scbench_command(
         "-u",
         str(REPO_ROOT / "benchmark" / "scbench" / "run_scbench.py"),
         "--attn_type",
-        "sparsevllm",
+        "sparseengine",
         "--kv_type",
         "dense",
         "--task",
@@ -193,7 +193,7 @@ def compare_summaries(off_summary: dict[str, Any], on_summary: dict[str, Any]) -
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run SCBench with Sparse-vLLM prefix caching off/on and summarize reuse and speed."
+        description="Run SCBench with Sparse-Engine prefix caching off/on and summarize reuse and speed."
     )
     parser.add_argument("--model_name_or_path", required=True)
     parser.add_argument("--task", default="scbench_kv")
@@ -211,7 +211,7 @@ def parse_args() -> argparse.Namespace:
         "--master_port_base",
         type=int,
         default=25000,
-        help="Base SPARSEVLLM_MASTER_PORT. Each off/on variant gets a distinct port.",
+        help="Base SPARSEENGINE_MASTER_PORT. Each off/on variant gets a distinct port.",
     )
     parser.add_argument("--base_hyper_param", default="{}")
     parser.add_argument("--trust_remote_code", action="store_true")
@@ -272,7 +272,7 @@ def main() -> None:
         print(f"==== SCBench {mode} prefix cache off ====")
         print(" ".join(off_cmd))
         off_env = dict(os.environ)
-        off_env["SPARSEVLLM_MASTER_PORT"] = str(int(args.master_port_base) + mode_idx * 2)
+        off_env["SPARSEENGINE_MASTER_PORT"] = str(int(args.master_port_base) + mode_idx * 2)
         off_summary = _run_variant(
             cmd=off_cmd,
             output_dir=off_dir,
@@ -283,7 +283,7 @@ def main() -> None:
         print(f"==== SCBench {mode} prefix cache on ====")
         print(" ".join(on_cmd))
         on_env = dict(os.environ)
-        on_env["SPARSEVLLM_MASTER_PORT"] = str(int(args.master_port_base) + mode_idx * 2 + 1)
+        on_env["SPARSEENGINE_MASTER_PORT"] = str(int(args.master_port_base) + mode_idx * 2 + 1)
         on_summary = _run_variant(
             cmd=on_cmd,
             output_dir=on_dir,

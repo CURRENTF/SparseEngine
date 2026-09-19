@@ -11,23 +11,23 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.base import (
+from sparseengine.engine.cache_manager.base import (
     AttentionViewMeta,
     ExplicitKVPayload,
     PrefillComputeView,
 )
-from sparsevllm.kernels.external.support import (
+from sparseengine.kernels.external.support import (
     ExternalKernelFamilyError,
     KernelFamilyHealth,
     KernelFamilyState,
 )
-from sparsevllm.layers.attention import Attention
-from sparsevllm.method_registry import (
+from sparseengine.layers.attention import Attention
+from sparseengine.method_registry import (
     PrefillScoreCollectionKind,
     sparse_prefill_attention_contract,
 )
-from sparsevllm.models.attention_runtime import build_mha_prefill_attention_spec
-from sparsevllm.operators.prefill_attention import (
+from sparseengine.models.attention_runtime import build_mha_prefill_attention_spec
+from sparseengine.operators.prefill_attention import (
     PREFILL_ATTENTION_REGISTRY,
     FlashInferFa2Sm120PagedPrefillAttentionProvider,
     FlashInferPagedPrefillAttentionProvider,
@@ -39,9 +39,9 @@ from sparsevllm.operators.prefill_attention import (
     _FlashInferPagedPrefillState,
     _resolve_prefill_attention_provider,
 )
-from sparsevllm.operators.attention_capabilities import AttentionScoreKind
-from sparsevllm.operators.registry import NoProviderError, OpResolver
-from sparsevllm.platforms import DeviceCaps, PlatformEnum
+from sparseengine.operators.attention_capabilities import AttentionScoreKind
+from sparseengine.operators.registry import NoProviderError, OpResolver
+from sparseengine.platforms import DeviceCaps, PlatformEnum
 
 
 def _spec(**overrides) -> PrefillAttentionOpSpec:
@@ -96,7 +96,7 @@ def test_optional_h2o_lse_falls_back_during_provider_resolution(
     platform = SimpleNamespace(get_device_caps=lambda _index: caps)
 
     with patch(
-        "sparsevllm.platforms.get_current_platform",
+        "sparseengine.platforms.get_current_platform",
         return_value=platform,
     ):
         provider, execution_spec = _resolve_prefill_attention_provider(
@@ -119,7 +119,7 @@ def test_hard_prefill_lse_requirement_does_not_fall_back():
 
     with (
         patch(
-            "sparsevllm.platforms.get_current_platform",
+            "sparseengine.platforms.get_current_platform",
             return_value=platform,
         ),
         pytest.raises(NoProviderError),
@@ -156,7 +156,7 @@ def _sm120_caps(**overrides) -> DeviceCaps:
 @pytest.fixture(autouse=True)
 def _mock_flashinfer_paged_prefill_contract():
     with patch(
-        "sparsevllm.operators.prefill_attention.flashinfer_paged_prefill_support",
+        "sparseengine.operators.prefill_attention.flashinfer_paged_prefill_support",
         return_value=(True, "flashinfer prefill available"),
     ):
         yield
@@ -442,11 +442,11 @@ def test_flashinfer_fa2_sm120_support_is_not_limited_by_local_device_profile():
 
 
 @patch(
-    "sparsevllm.kernels.tilelang.gqa.runtime.tilelang_gqa_device_support",
+    "sparseengine.kernels.tilelang.gqa.runtime.tilelang_gqa_device_support",
     return_value=(False, "tilelang is not installed"),
 )
 @patch(
-    "sparsevllm.operators.prefill_attention.sgl_fa3_device_support",
+    "sparseengine.operators.prefill_attention.sgl_fa3_device_support",
     return_value=(False, "sglang-kernel is not installed"),
 )
 def test_resolver_does_not_hide_broken_flashinfer_family(_sgl, _tl):
@@ -458,7 +458,7 @@ def test_resolver_does_not_hide_broken_flashinfer_family(_sgl, _tl):
     )
     with (
         patch(
-            "sparsevllm.operators.prefill_attention.flashinfer_paged_prefill_support",
+            "sparseengine.operators.prefill_attention.flashinfer_paged_prefill_support",
             side_effect=ExternalKernelFamilyError(health, feature="FA3 paged prefill"),
         ),
         pytest.raises(ExternalKernelFamilyError, match="0.6.15"),
@@ -469,11 +469,11 @@ def test_resolver_does_not_hide_broken_flashinfer_family(_sgl, _tl):
 
 
 @patch(
-    "sparsevllm.kernels.tilelang.gqa.runtime.tilelang_gqa_device_support",
+    "sparseengine.kernels.tilelang.gqa.runtime.tilelang_gqa_device_support",
     return_value=(False, "tilelang is not installed"),
 )
 @patch(
-    "sparsevllm.operators.prefill_attention.sgl_fa3_device_support",
+    "sparseengine.operators.prefill_attention.sgl_fa3_device_support",
     return_value=(False, "unsupported sglang-kernel FA3 fwd schema"),
 )
 def test_resolver_falls_back_to_triton_for_variant_table_when_sgl_abi_rejected(
@@ -509,7 +509,7 @@ def test_tilelang_provider_rejects_per_head_score_contract():
 
 
 @patch(
-    "sparsevllm.kernels.tilelang.gqa.runtime.tilelang_gqa_device_support",
+    "sparseengine.kernels.tilelang.gqa.runtime.tilelang_gqa_device_support",
     return_value=(True, "dependencies available"),
 )
 def test_tilelang_atomic_support_is_not_narrowed_to_the_profiled_h100(_support):
@@ -526,7 +526,7 @@ def test_tilelang_atomic_support_is_not_narrowed_to_the_profiled_h100(_support):
 
 
 @patch(
-    "sparsevllm.kernels.tilelang.gqa.runtime.tilelang_gqa_device_support",
+    "sparseengine.kernels.tilelang.gqa.runtime.tilelang_gqa_device_support",
     return_value=(True, "validated pair"),
 )
 def test_unprofiled_tilelang_score_provider_does_not_override_triton(_support):
@@ -545,7 +545,7 @@ def test_unprofiled_tilelang_score_provider_does_not_override_triton(_support):
 
 
 def test_tilelang_installed_with_unvalidated_pair_is_broken(monkeypatch):
-    from sparsevllm.kernels.tilelang import support
+    from sparseengine.kernels.tilelang import support
 
     versions = {"tilelang": "0.2.0", "apache-tvm-ffi": "0.1.10"}
     monkeypatch.setattr(support.metadata, "version", versions.__getitem__)
@@ -555,8 +555,8 @@ def test_tilelang_installed_with_unvalidated_pair_is_broken(monkeypatch):
 
 
 def test_tilelang_support_probe_does_not_import_compiler(monkeypatch):
-    module_name = "sparsevllm.kernels.tilelang.gqa.runtime"
-    package_name = "sparsevllm.kernels.tilelang.gqa"
+    module_name = "sparseengine.kernels.tilelang.gqa.runtime"
+    package_name = "sparseengine.kernels.tilelang.gqa"
     sys.modules.pop(module_name, None)
     sys.modules.pop(package_name, None)
     compiler_modules_before = {
@@ -665,7 +665,7 @@ def test_flashinfer_prefill_passes_kv_cache_as_page_views_without_copying():
     plan_scope = object()
     provider._state.plan_scope = plan_scope
     with patch(
-        "sparsevllm.utils.context.get_context",
+        "sparseengine.utils.context.get_context",
         return_value=SimpleNamespace(attention_validation_scope=plan_scope),
     ):
         provider.run(
@@ -720,7 +720,7 @@ def test_flashinfer_prefill_plans_on_first_full_attention_call_per_step():
     chunk_lens = torch.tensor([1], dtype=torch.int32)
     context = SimpleNamespace(attention_validation_scope=object())
 
-    with patch("sparsevllm.utils.context.get_context", return_value=context):
+    with patch("sparseengine.utils.context.get_context", return_value=context):
         provider.run(
             spec,
             q,
@@ -935,8 +935,8 @@ def test_attention_forward_runs_sgl_before_posthoc_cache_manager_hooks():
     )
 
     with (
-        patch("sparsevllm.layers.attention.get_context", return_value=context),
-        patch("sparsevllm.utils.context.get_context", return_value=context),
+        patch("sparseengine.layers.attention.get_context", return_value=context),
+        patch("sparseengine.utils.context.get_context", return_value=context),
     ):
         actual = attention(q, torch.empty_like(k_cache[:2]), torch.empty_like(v_cache[:2]))
 

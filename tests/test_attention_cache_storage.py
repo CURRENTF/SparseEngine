@@ -7,24 +7,24 @@ import numpy as np
 import pytest
 import torch
 
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.engine.cache_manager import (
+from sparseengine.config import RuntimeLayout
+from sparseengine.engine.cache_manager import (
     ExplicitKVPayload,
     ExplicitKVWrite,
     LayerBatchStates,
     MlaLatentPayload,
     MlaLatentWrite,
 )
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
-from sparsevllm.engine.cache_manager.standard import StandardCacheManager
-from sparsevllm.engine.cache_manager.storage import (
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.engine.cache_manager.standard import StandardCacheManager
+from sparseengine.engine.cache_manager.storage import (
     CacheLayout,
     ExplicitKVStorage,
     HeterogeneousExplicitKVStorage,
     MlaLatentStorage,
     create_attention_cache_storage,
 )
-from sparsevllm.platforms import device_runtime
+from sparseengine.platforms import device_runtime
 
 
 @pytest.mark.parametrize(
@@ -343,7 +343,7 @@ def test_mla_storage_reuses_one_manager_validation_across_layers():
     storage.validate_slot_mapping(slots)
 
     with patch(
-        "sparsevllm.engine.cache_manager.storage.mla_latent.copy_latent_to_cache"
+        "sparseengine.engine.cache_manager.storage.mla_latent.copy_latent_to_cache"
     ) as copy:
         storage.store(0, slots, write)
         storage.store(1, slots, write)
@@ -371,7 +371,7 @@ def test_mla_storage_can_revalidate_between_graph_warmup_and_capture():
     )
 
     with patch(
-        "sparsevllm.engine.cache_manager.storage.mla_latent.copy_latent_to_cache"
+        "sparseengine.engine.cache_manager.storage.mla_latent.copy_latent_to_cache"
     ) as copy:
         storage.validate_slot_mapping(slots)
         storage.store(0, slots, write)
@@ -407,7 +407,7 @@ def test_mla_storage_prevalidates_nonuniform_layer_mappings():
     storage.validate_slot_mappings(layer_slots)
 
     with patch(
-        "sparsevllm.engine.cache_manager.storage.mla_latent.copy_latent_to_cache"
+        "sparseengine.engine.cache_manager.storage.mla_latent.copy_latent_to_cache"
     ) as copy:
         storage.store(0, layer_slots[0], write)
         storage.store(1, layer_slots[1], write)
@@ -432,10 +432,10 @@ def test_mla_storage_batches_equal_width_layer_validation_once():
         torch.tensor([0, 2], dtype=torch.int32),
     )
 
-    from sparsevllm.engine.cache_manager.storage import mla_latent
+    from sparseengine.engine.cache_manager.storage import mla_latent
 
     with patch(
-        "sparsevllm.engine.cache_manager.storage.mla_latent.validate_copy_slot_mappings",
+        "sparseengine.engine.cache_manager.storage.mla_latent.validate_copy_slot_mappings",
         wraps=mla_latent.validate_copy_slot_mappings,
     ) as validate_batch:
         storage.validate_slot_mappings(layer_slots)
@@ -550,7 +550,7 @@ def test_graph_capture_prevalidates_nonuniform_latent_layer_mappings():
 
     manager.validate_decode_cuda_graph_slot_mappings()
     with patch(
-        "sparsevllm.engine.cache_manager.storage.mla_latent.copy_latent_to_cache"
+        "sparseengine.engine.cache_manager.storage.mla_latent.copy_latent_to_cache"
     ) as copy:
         manager.store_attention_payload(0, write)
         manager.store_attention_payload(1, write)
@@ -578,7 +578,7 @@ def test_mla_storage_automatic_slot_validation_respects_runtime_policy():
         )
         storage.allocate(num_layers=1, num_slots=2, device=torch.device("cpu"))
         with patch(
-            "sparsevllm.engine.cache_manager.storage.mla_latent.copy_latent_to_cache"
+            "sparseengine.engine.cache_manager.storage.mla_latent.copy_latent_to_cache"
         ) as copy:
             storage.store(0, slots, write)
         validate_flags.append(copy.call_args.kwargs["validate_slots"])

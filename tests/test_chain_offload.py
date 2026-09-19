@@ -8,18 +8,18 @@ import numpy as np
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager import chain_offload
-from sparsevllm.engine.cache_manager.chain_offload import ChainOffloadController
-from sparsevllm.engine.cache_manager.methods.h2o import H2OCacheManager
-from sparsevllm.engine.cache_manager.methods.rkv import RKVCacheManager
-from sparsevllm.engine.cache_manager.methods.skipkv import (
+from sparseengine.engine.cache_manager import chain_offload
+from sparseengine.engine.cache_manager.chain_offload import ChainOffloadController
+from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
+from sparseengine.engine.cache_manager.methods.rkv import RKVCacheManager
+from sparseengine.engine.cache_manager.methods.skipkv import (
     SkipKVCacheManager, SkipKVSentence, SkipKVSequenceState,
 )
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
-from sparsevllm.engine.cache_manager.raw_kv_offload import RawKVOffloadBuffer
-from sparsevllm.engine.cache_manager.storage.mla_latent import MlaLatentStorage
-from sparsevllm.engine.chain_cache import ChainCacheCoordinator, ChainCapacityError, ChainGoneError, ChainState
-from sparsevllm.engine.runtime_state import RuntimeState
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.engine.cache_manager.raw_kv_offload import RawKVOffloadBuffer
+from sparseengine.engine.cache_manager.storage.mla_latent import MlaLatentStorage
+from sparseengine.engine.chain_cache import ChainCacheCoordinator, ChainCapacityError, ChainGoneError, ChainState
+from sparseengine.engine.runtime_state import RuntimeState
 
 
 def make_manager(cls=SnapKVCacheManager, device="cpu", rows=2, capacity=16):

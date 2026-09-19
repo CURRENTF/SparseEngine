@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# LongBench regression quality & full-lifecycle GPU monitoring script for SnapKV on Sparse-vLLM
+# LongBench regression quality & full-lifecycle GPU monitoring script for SnapKV on Sparse-Engine
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -20,8 +20,8 @@ esac
 
 # 1. Environment & Python Setup
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-DATA_ROOT="${SPARSEVLLM_LONGBENCH_DATA_DIR:-${SPARSEVLLM_DATA_DIR:-data/LongBench}}"
-OUTPUT_ROOT="${SPARSEVLLM_OUTPUT_DIR:-outputs}/snapkv_longbench_quality_$(date +%Y%m%d_%H%M%S)"
+DATA_ROOT="${SPARSEENGINE_LONGBENCH_DATA_DIR:-${SPARSEENGINE_DATA_DIR:-data/LongBench}}"
+OUTPUT_ROOT="${SPARSEENGINE_OUTPUT_DIR:-outputs}/snapkv_longbench_quality_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "${OUTPUT_ROOT}"
 
 # 2. Model & TP Configuration
@@ -73,8 +73,8 @@ export CUDA_VISIBLE_DEVICES="${GPUS}"
 export PYTHONPATH="${REPO_ROOT}:${REPO_ROOT}/src"
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 export PATH="${CUDA_HOME}/bin:${PATH}"
-export SPARSEVLLM_DATA_DIR="${DATA_ROOT}"
-export SPARSEVLLM_LONGBENCH_DATA_DIR="${DATA_ROOT}"
+export SPARSEENGINE_DATA_DIR="${DATA_ROOT}"
+export SPARSEENGINE_LONGBENCH_DATA_DIR="${DATA_ROOT}"
 export TOKENIZERS_PARALLELISM="false"
 export LOG_LEVEL="INFO"
 

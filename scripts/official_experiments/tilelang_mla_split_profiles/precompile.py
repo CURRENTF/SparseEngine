@@ -11,7 +11,7 @@ import time
 
 def compile_one(item):
     import torch
-    from sparsevllm.kernels.tilelang.mla.decode import build_glm_mla_decode_kernel
+    from sparseengine.kernels.tilelang.mla.decode import build_glm_mla_decode_kernel
 
     if torch.cuda.is_available():
         raise RuntimeError("Precompilation must run with CUDA_VISIBLE_DEVICES empty")

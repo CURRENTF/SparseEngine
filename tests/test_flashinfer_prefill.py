@@ -5,11 +5,11 @@ from unittest.mock import patch
 
 import pytest
 
-from sparsevllm.kernels.external.flashinfer.prefill import (
+from sparseengine.kernels.external.flashinfer.prefill import (
     _paged_prefill_wrapper_type,
     flashinfer_paged_prefill_support,
 )
-from sparsevllm.kernels.external.support import ExternalKernelContractError
+from sparseengine.kernels.external.support import ExternalKernelContractError
 
 
 class _PublicPagedPrefillWrapper:
@@ -75,7 +75,7 @@ def test_flashinfer_paged_prefill_accepts_public_wrapper_contract():
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.prefill.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.prefill.flashinfer_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", return_value=module),
@@ -97,7 +97,7 @@ def test_flashinfer_paged_prefill_rejects_wrapper_without_backend_contract():
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.prefill.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.prefill.flashinfer_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", return_value=module),
@@ -119,7 +119,7 @@ def test_flashinfer_paged_prefill_rejects_wrapper_without_workspace_sizing():
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.prefill.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.prefill.flashinfer_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", return_value=module),
@@ -142,7 +142,7 @@ def test_flashinfer_fa3_accepts_wrapper_without_workspace_sizing():
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.prefill.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.prefill.flashinfer_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", return_value=module),

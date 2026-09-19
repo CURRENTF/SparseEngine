@@ -1,17 +1,17 @@
 # Architecture
 
-Sparse-vLLM has one native runtime under `src/sparsevllm/`: a sparse-first
+Sparse-Engine has one native runtime under `src/sparseengine/`: a sparse-first
 inference engine with its own scheduler,
   model runner, cache managers, sparse controller, model definitions, and
   Triton kernels.
 
-## Sparse-vLLM Flow
+## Sparse-Engine Flow
 
-The Sparse-vLLM inference path is:
+The Sparse-Engine inference path is:
 
-1. `sparsevllm.LLM(model, **kwargs)`
+1. `sparseengine.LLM(model, **kwargs)`
 2. `LLMEngine` validates kwargs against the canonical `Config` fields.
-3. `src/sparsevllm/config.py` validates engine config and method compatibility.
+3. `src/sparseengine/config.py` validates engine config and method compatibility.
 4. `CacheManager.create()` in `engine/cache_manager/base.py` selects a cache
    manager, and `engine/sparse_methods/factory.py` selects the logical method
    runtime.
@@ -19,22 +19,22 @@ The Sparse-vLLM inference path is:
    selected `SparseMethodRuntime`, kernels, and the selected cache manager
    execute prefill and decode.
 
-`src/sparsevllm/layers/attention.py` is intentionally generic. It writes K/V,
+`src/sparseengine/layers/attention.py` is intentionally generic. It writes K/V,
 asks the sparse controller for the logical read view, and lets the cache manager
 customize decode-time views through hooks such as `build_decode_view(...)`.
 
 ## Method Ownership
 
-New Sparse-vLLM sparse methods should follow the cache-manager-first design and
+New Sparse-Engine sparse methods should follow the cache-manager-first design and
 the [sparse method runtime architecture](sparse-method-runtime.md):
 
 - Persistent physical cache state and prefix-coupled metadata belong in
-  `src/sparsevllm/engine/cache_manager/`.
+  `src/sparseengine/engine/cache_manager/`.
 - Per-step and cross-layer score/selection orchestration belongs in a
-  `src/sparsevllm/engine/sparse_methods/` runtime.
-- `src/sparsevllm/engine/sparse_controller.py` remains the stable generic
+  `src/sparseengine/engine/sparse_methods/` runtime.
+- `src/sparseengine/engine/sparse_controller.py` remains the stable generic
   facade and must not grow method-name hot-path branches.
-- `src/sparsevllm/layers/attention.py` should only call generic hooks or shared
+- `src/sparseengine/layers/attention.py` should only call generic hooks or shared
   kernels.
 - Public runtime arguments should use canonical names documented in
   [runtime-parameter-semantics.md](../configuration/runtime-parameter-semantics.md).
@@ -46,8 +46,8 @@ workflow.
 ## Scheduling Ownership
 
 Prefill scheduling is part of the method contract. Default policies live in
-`src/sparsevllm/method_registry.py`, `Config` resolves and validates the policy,
-and `src/sparsevllm/engine/scheduler.py` implements the scheduling behavior.
+`src/sparseengine/method_registry.py`, `Config` resolves and validates the policy,
+and `src/sparseengine/engine/scheduler.py` implements the scheduling behavior.
 
 The engine currently supports:
 
@@ -75,20 +75,20 @@ defaults. Add the method-to-policy mapping to the registry and update
 
 ## Important Files
 
-- `src/sparsevllm/configs/groups.py` and `runtime.py`: canonical runtime fields,
+- `src/sparseengine/configs/groups.py` and `runtime.py`: canonical runtime fields,
   defaults, and validation. Public and internal names are identical.
-- `src/sparsevllm/config.py`: compatibility import facade for `Config`.
-- `src/sparsevllm/method_registry.py`: supported method names and prefill policy
+- `src/sparseengine/config.py`: compatibility import facade for `Config`.
+- `src/sparseengine/method_registry.py`: supported method names and prefill policy
   defaults.
-- `src/sparsevllm/engine/cache_manager/base.py`: shared cache-manager contracts,
+- `src/sparseengine/engine/cache_manager/base.py`: shared cache-manager contracts,
   construction routing, and hooks.
-- `src/sparsevllm/engine/sparse_controller.py`: method-agnostic engine facade.
-- `src/sparsevllm/engine/sparse_methods/`: method runtime interface, factory,
+- `src/sparseengine/engine/sparse_controller.py`: method-agnostic engine facade.
+- `src/sparseengine/engine/sparse_methods/`: method runtime interface, factory,
   per-step score/selection orchestration, and mechanism-specific runtimes.
-- `src/sparsevllm/engine/scheduler.py`: prefill/decode scheduling and admission.
-- `src/sparsevllm/layers/attention.py`: generic K/V storage and attention
+- `src/sparseengine/engine/scheduler.py`: prefill/decode scheduling and admission.
+- `src/sparseengine/layers/attention.py`: generic K/V storage and attention
   compute path.
 - `benchmark/`: LongBench, MathBench, SCBench, NIAH, and multimodal benchmark
   entrypoints.
-- `benchmark/model_adapters/sparsevllm.py`: shared native generation adapter for
+- `benchmark/model_adapters/sparseengine.py`: shared native generation adapter for
   text benchmarks.

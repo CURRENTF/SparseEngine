@@ -4,14 +4,14 @@ from unittest.mock import patch
 import pytest
 import torch
 
-import sparsevllm.platforms as platforms
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.engine.cache_manager.base import CacheManager, ExplicitKVPayload
-from sparsevllm.engine.cache_manager.methods.kvzip import KVzipCacheManager
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.sparse_methods.base import SparseStepContext
-from sparsevllm.engine.sparse_methods.kvzip import KVzipRuntime
-from sparsevllm.platforms.cpu import CpuPlatform
+import sparseengine.platforms as platforms
+from sparseengine.config import RuntimeLayout
+from sparseengine.engine.cache_manager.base import CacheManager, ExplicitKVPayload
+from sparseengine.engine.cache_manager.methods.kvzip import KVzipCacheManager
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.sparse_methods.base import SparseStepContext
+from sparseengine.engine.sparse_methods.kvzip import KVzipRuntime
+from sparseengine.platforms.cpu import CpuPlatform
 
 
 def _manager(*, profiling=False, **overrides):
@@ -38,7 +38,7 @@ def _manager(*, profiling=False, **overrides):
     )
     with patch.object(platforms, "_current_platform", CpuPlatform()):
         if profiling:
-            from sparsevllm.engine.startup.capacity import profiling_kv_budget_bytes, profiling_kv_slots
+            from sparseengine.engine.startup.capacity import profiling_kv_budget_bytes, profiling_kv_slots
 
             config.startup_cache_phase = "profiling"
             manager = KVzipCacheManager(config, context, allocation_budget_bytes=
@@ -58,8 +58,8 @@ def _seed(manager, seq):
 @pytest.mark.parametrize("budget,graph", [(4, False), (4, True), (128, False)])
 def test_profiling_capacity_admits_warmup_without_consuming_replay_reserve(monkeypatch, budget, graph):
     """Small profiling pools used to have zero usable slots after reserving replay KV."""
-    from sparsevllm.engine.runtime_state import RuntimeState
-    from sparsevllm.engine.startup import capacity
+    from sparseengine.engine.runtime_state import RuntimeState
+    from sparseengine.engine.startup import capacity
 
     graph_batch = 7
     monkeypatch.setattr(capacity, "build_decode_cuda_graph_startup_plan",
@@ -135,7 +135,7 @@ def test_reconstruction_requires_every_layer_and_preserves_headroom():
 def test_tp_chunk_only_ipc_retains_identical_reconstruction_source():
     """Follower IPC drops earlier chunks; reconstruction must retain them itself."""
     import pickle
-    from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+    from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
 
     leader, follower = _manager(), _manager()
     seq = Sequence(list(range(11)))
@@ -193,9 +193,9 @@ def test_runtime_compacts_only_completed_prompts_with_deterministic_global_selec
 
 def test_auxiliary_forward_restores_context_and_does_not_mutate_request_on_failure():
     """Replay failure must leave business token/sampling state and context intact."""
-    from sparsevllm.engine.model_runner import ModelRunner
-    from sparsevllm.engine.sparse_methods.base import AuxiliaryPrefillRequest
-    from sparsevllm.utils.context import get_context, reset_context
+    from sparseengine.engine.model_runner import ModelRunner
+    from sparseengine.engine.sparse_methods.base import AuxiliaryPrefillRequest
+    from sparseengine.utils.context import get_context, reset_context
 
     seq = Sequence([1, 2, 3])
     seq.current_chunk_size = 3
@@ -232,7 +232,7 @@ def test_auxiliary_forward_restores_context_and_does_not_mutate_request_on_failu
     ("sparse_attn_score_dtype", "float16"),
 ])
 def test_invalid_reconstruction_config_fails_before_execution(field, value):
-    from sparsevllm.configs.sparse import _normalize_kvzip
+    from sparseengine.configs.sparse import _normalize_kvzip
 
     config = _manager().config
     setattr(config, field, value)
@@ -251,8 +251,8 @@ def test_reconstruction_scores_match_independent_probability_oracle(replay, head
     manager.config = SimpleNamespace(sparse_attn_score_dtype="float32")
     manager.device = device
     manager._prefill_step_score_buffers = {}
-    from sparsevllm.kernels.triton.prefill_score import PrefillScoreWorkspace
-    from sparsevllm.engine.cache_manager.methods.kvzip import ReconstructionChunk
+    from sparseengine.kernels.triton.prefill_score import PrefillScoreWorkspace
+    from sparseengine.engine.cache_manager.methods.kvzip import ReconstructionChunk
     manager._prefill_score_workspace = PrefillScoreWorkspace()
     manager.seq_id_to_row = [{3: 0}, {3: 0}]
     manager.row_seq_lens = [[length + replay], [length + replay]]

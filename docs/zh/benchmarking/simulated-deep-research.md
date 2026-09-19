@@ -21,9 +21,9 @@
 
 runner 调用 smart router 的 `/v1/completions` endpoint。
 
-- Subagent 发送 `svllm_method_preference=snapkv`。
-- Main-agent request 发送 `svllm_method_preference=omnikv,vanilla`。
-- 可选的 `--subagent-required-tags` 和 `--main-agent-required-tags` 会作为 `svllm_required_tags` 转发。这样两个使用相同方法的 worker（例如双 worker vanilla baseline）仍可分配给不同角色。
+- Subagent 发送 `sengine_method_preference=snapkv`。
+- Main-agent request 发送 `sengine_method_preference=omnikv,vanilla`。
+- 可选的 `--subagent-required-tags` 和 `--main-agent-required-tags` 会作为 `sengine_required_tags` 转发。这样两个使用相同方法的 worker（例如双 worker vanilla baseline）仍可分配给不同角色。
 - Preflight 要求所选模型至少有两个 healthy worker，并验证 worker 广告的方法和 context capacity 覆盖两个 agent role。使用同一模型但方法无关的 worker 不约束 benchmark。
 - 每个符合 main-agent routing 条件的 worker 都必须启用 prefix cache，并报告正整数 `prefix_cache_block_size`，且不能大于 workload 保证可复用的 main-agent prefix：`main_overhead_tokens + max(0, rounds - 1) * min_round_summary_tokens`。
 - 每个 response 必须包含 `X-SparseVLLM-Worker`、`X-SparseVLLM-Route-Reason`、`X-SparseVLLM-Sparse-Method` 和 `X-SparseVLLM-Prefix-Matched-Tokens`。
@@ -43,7 +43,7 @@ python -m benchmark.simulated_deep_research.run \
   --output-dir outputs/simulated_deep_research/<RUN_NAME>
 ```
 
-client timeout 必须比 router upstream timeout 至少多 `--router-timeout-margin-s`。默认 client timeout 为 930 秒、margin 为 30 秒，systemd router 使用 `SPARSEVLLM_ROUTER_REQUEST_TIMEOUT_S=900`。独立 router control-plane timeout 应保持较短，默认 5 秒。
+client timeout 必须比 router upstream timeout 至少多 `--router-timeout-margin-s`。默认 client timeout 为 930 秒、margin 为 30 秒，systemd router 使用 `SPARSEENGINE_ROUTER_REQUEST_TIMEOUT_S=900`。独立 router control-plane timeout 应保持较短，默认 5 秒。
 
 worker 根据 immutable dispatcher snapshot 响应内部 routing-load 和 prefix-match probe，因此很长的同步 prefill step 不会让较短的 control timeout 误判 worker failure。完整 `/v1/worker/load` control endpoint 仍与 engine 同步，router 的 short-timeout probe 不使用它。
 
@@ -81,7 +81,7 @@ python -m benchmark.simulated_deep_research.run \
 
 两个 range 参数必须同时提供，取值为正数、闭区间且顺序正确。未提供时，`--articles-per-round` 保留原 fixed-count 行为。preflight 使用配置的最大值计算 main-agent context requirement，确保每个 sampled round 都有效。
 
-为了公平比较双 worker vanilla baseline，通过 `SPARSEVLLM_WORKER_TAGS=subagent` 和 `SPARSEVLLM_WORKER_TAGS=main-agent` 标记 worker，在 main-agent worker 上启用 prefix cache，然后运行：
+为了公平比较双 worker vanilla baseline，通过 `SPARSEENGINE_WORKER_TAGS=subagent` 和 `SPARSEENGINE_WORKER_TAGS=main-agent` 标记 worker，在 main-agent worker 上启用 prefix cache，然后运行：
 
 ```bash
 python -m benchmark.simulated_deep_research.run \

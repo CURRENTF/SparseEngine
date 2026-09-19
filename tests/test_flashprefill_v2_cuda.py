@@ -1,10 +1,10 @@
 import pytest
 import torch
 
-from sparsevllm.kernels.external.flashprefill_v2.prefill import (
+from sparseengine.kernels.external.flashprefill_v2.prefill import (
     make_flashprefill_v2,
 )
-from sparsevllm.operators.prefill_attention import FlashPrefillV2Semantics
+from sparseengine.operators.prefill_attention import FlashPrefillV2Semantics
 
 
 def _dense_varlen_reference(

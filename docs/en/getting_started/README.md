@@ -1,14 +1,14 @@
 # Getting Started
 
 This page covers environment setup, checkpoint download, and a minimal
-Sparse-vLLM usage example.
+Sparse-Engine usage example.
 
 
 ## Install with Conda
 
 ```bash
-conda create -n sparse-vllm-cu130-py312 python=3.12 -y
-conda activate sparse-vllm-cu130-py312
+conda create -n sparse-engine-cu130-py312 python=3.12 -y
+conda activate sparse-engine-cu130-py312
 
 python -m pip config --site set global.extra-index-url \
   "https://download.pytorch.org/whl/cu130 https://flashinfer.ai/whl"
@@ -44,7 +44,7 @@ startup fails if FlashInfer or SGL kernel is absent, has incompatible package
 metadata, or cannot load. Reinstall the matching dependency set with
 `pip install -e ".[cu129]"` or `pip install -e ".[cu130]"`.
 
-Sparse-vLLM supports Qwen3.5/Qwen3.6/Qwen3.8 checkpoints in unquantized BF16
+Sparse-Engine supports Qwen3.5/Qwen3.6/Qwen3.8 checkpoints in unquantized BF16
 and block-scaled FP8 formats. All three share the `qwen3_5` runtime architecture
 and support matrix.
 
@@ -115,7 +115,7 @@ model and its layer/head dimensions match.
 ## Minimal Usage
 
 ```python
-from sparsevllm import LLM, SamplingParams
+from sparseengine import LLM, SamplingParams
 
 llm = LLM(
     "/path/to/Qwen2.5-7B-Instruct-1M",
@@ -137,7 +137,7 @@ llm.exit()
 
 ## Key Parameters
 
-Sparse-vLLM runtime knobs are defined in `src/sparsevllm/configs/groups.py` and
+Sparse-Engine runtime knobs are defined in `src/sparseengine/configs/groups.py` and
 `runtime.py` and can be passed unchanged as keyword args to `LLM(...)`.
 `sparse_method` and `engine_prefill_chunk_size` are canonical names. Legacy
 names such as `sparse_method`, `engine_prefill_chunk_size`, `num_top_tokens`,
@@ -148,7 +148,7 @@ Common knobs:
 - `tensor_parallel_size`: number of GPU ranks to spawn.
 - `gpu_memory_utilization`: fraction of total GPU memory to allocate for the KV cache.
 - `max_model_len`: max prompt plus generated tokens allowed.
-- `engine_prefill_chunk_size`: Sparse-vLLM prefill scheduling and memory-admission chunk size.
+- `engine_prefill_chunk_size`: Sparse-Engine prefill scheduling and memory-admission chunk size.
 - `max_num_batched_tokens`: per-step token budget.
 - `max_num_seqs_in_batch`: prefill batch limit and the default decode batch limit.
 - `max_decoding_seqs`: optional decode batch override; when set, its exact value is included in the decode CUDA Graph capture buckets.

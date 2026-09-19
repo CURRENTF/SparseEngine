@@ -3,18 +3,18 @@ from __future__ import annotations
 import pytest
 import torch
 
-from sparsevllm.layers.rotary_embedding import RotaryEmbedding
-from sparsevllm.kernels.external.flashinfer.topk import (
+from sparseengine.layers.rotary_embedding import RotaryEmbedding
+from sparseengine.kernels.external.flashinfer.topk import (
     flashinfer_top_k_page_table_transform_support,
 )
-from sparsevllm.kernels.triton.glm_mla_decode import (
+from sparseengine.kernels.triton.glm_mla_decode import (
     fuse_glm_mla_decode_rope,
     project_and_fuse_glm_mla_decode_rope,
 )
-from sparsevllm.kernels.triton.mla.copy_latent import (
+from sparseengine.kernels.triton.mla.copy_latent import (
     copy_latent_to_cache_with_quest_metadata,
 )
-from sparsevllm.kernels.triton.quest_decode_view import (
+from sparseengine.kernels.triton.quest_decode_view import (
     fuse_mla_quest_selection_query,
     finalize_quest_decode_view,
     finalize_quest_paged_decode_view,
@@ -22,15 +22,15 @@ from sparsevllm.kernels.triton.quest_decode_view import (
     prepare_quest_decode_geometry,
     score_quest_pages,
 )
-from sparsevllm.kernels.triton.quest_fused_selection import (
+from sparseengine.kernels.triton.quest_fused_selection import (
     exact_select_quest_pages,
     fused_exact_select_quest_paged_view,
 )
-from sparsevllm.kernels.triton.store_kvcache import (
+from sparseengine.kernels.triton.store_kvcache import (
     store_prefill_kvcache_with_quest_metadata,
     store_kvcache_with_quest_metadata,
 )
-from sparsevllm.operators.quest_selection import (
+from sparseengine.operators.quest_selection import (
     FlashInferQuestPageSelectionProvider,
     QuestPageSelectionOpSpec,
     TorchQuestPageSelectionProvider,
@@ -573,7 +573,7 @@ def test_tensorcore_quest_scores_match_matmul_oracle_and_graph(batch, pages, hea
     The scalar scoring test does not exercise tensor-core padding or the
     second pass that merges scores into the original shared-head page set.
     """
-    from sparsevllm.kernels.triton.quest_page_score import score_quest_pages_tensorcore
+    from sparseengine.kernels.triton.quest_page_score import score_quest_pages_tensorcore
 
     if torch.cuda.get_device_capability() < (8, 0):
         pytest.skip("BF16 tensor cores require SM80+")
@@ -1079,7 +1079,7 @@ def test_general_page_scores_preserve_dimension_tails_and_head_tiles(
     The D128 test cannot observe K-loop accumulation or heads beyond one MMA
     tile. A float64 oracle here independently specifies the reduction formula.
     """
-    from sparsevllm.kernels.triton.quest_page_score import (
+    from sparseengine.kernels.triton.quest_page_score import (
         score_quest_pages_tensorcore,
         score_quest_pages_vector,
     )
@@ -1147,8 +1147,8 @@ def test_matrix_score_rounding_repair_preserves_scalar_selection(
     The broad numerical test above protects the formula; this regression also
     requires compatibility with the original scalar reduction on changed graphs.
     """
-    from sparsevllm.kernels.triton.quest_decode_view import score_quest_pages
-    from sparsevllm.kernels.triton.quest_page_score import score_quest_pages_tensorcore
+    from sparseengine.kernels.triton.quest_decode_view import score_quest_pages
+    from sparseengine.kernels.triton.quest_page_score import score_quest_pages_tensorcore
 
     if torch.cuda.get_device_capability() < (8, 0):
         pytest.skip("Matrix-product rounding repair requires SM80+")

@@ -1,6 +1,6 @@
 # DeltaKV
 
-DeltaKV 为长上下文推理压缩 KV cache。本仓库只包含原生 Sparse-vLLM
+DeltaKV 为长上下文推理压缩 KV cache。本仓库只包含原生 Sparse-Engine
 inference path 和原生 benchmark 集成。
 
 ## 推理
@@ -13,7 +13,7 @@ inference path 和原生 benchmark 集成。
 
 进行 DeltaKV 推理时，还需传入
 `deltakv_checkpoint_path="/path/to/local/trained_compressor_dir_or_file"`。
-当前 Sparse-vLLM DeltaKV runtime 依赖 compressor；缺少 checkpoint 的情况仅用于构造测试，不能用于可报告的 benchmark run。
+当前 Sparse-Engine DeltaKV runtime 依赖 compressor；缺少 checkpoint 的情况仅用于构造测试，不能用于可报告的 benchmark run。
 
 可能需要使用的 DeltaKV 参数：
 
@@ -25,7 +25,7 @@ inference path 和原生 benchmark 集成。
 
 ## 精简 Runtime
 
-Sparse-vLLM DeltaKV runtime 使用 `src/sparsevllm/engine/cache_manager/` 下的 cache-manager 实现。它按照 `full_attention_layers` 保留 full layer，为 sparse layer 存储 compressor residual state，并在 decode 中使用 graph-stable metadata。
+Sparse-Engine DeltaKV runtime 使用 `src/sparseengine/engine/cache_manager/` 下的 cache-manager 实现。它按照 `full_attention_layers` 保留 full layer，为 sparse layer 存储 compressor residual state，并在 decode 中使用 graph-stable metadata。
 
 支持两类存储路径：BF16/FP16 full layer 加 BF16/FP16 compressor latent residual，或者 KIVI int4 full layer 加 int4 compressor residual。
 
@@ -33,7 +33,7 @@ Sparse-vLLM DeltaKV runtime 使用 `src/sparsevllm/engine/cache_manager/` 下的
 
 ```bash
 CUDA_VISIBLE_DEVICES=7 PYTHONPATH=$PWD/src \
-python scripts/benchmarks/bench_sparse_vllm.py \
+python scripts/benchmarks/bench_sparse_engine.py \
   --model_path <MODEL_ROOT>/Qwen2.5-7B-Instruct-1M \
   --lengths 1024 \
   --batch_sizes 2 \
@@ -46,7 +46,7 @@ python scripts/benchmarks/bench_sparse_vllm.py \
 ## Compressor 训练
 
 Compressor 训练代码由独立仓库
-[CURRENTF/DeltaKV](https://github.com/CURRENTF/DeltaKV) 维护。请在该仓库中准备训练数据、训练 compressor checkpoint 和运行训练消融实验；Sparse-vLLM 仅消费兼容 checkpoint，用于推理和 benchmark。
+[CURRENTF/DeltaKV](https://github.com/CURRENTF/DeltaKV) 维护。请在该仓库中准备训练数据、训练 compressor checkpoint 和运行训练消融实验；Sparse-Engine 仅消费兼容 checkpoint，用于推理和 benchmark。
 
 ## 在 LongBench 上评估
 
@@ -75,4 +75,4 @@ python benchmark/long_bench/pred.py \
 - 公开 compressor checkpoint 列在[快速开始](../getting_started/README.md#deltakv-checkpoint)中。
 - `deltakv_checkpoint_path` 可以指向本地目录或单个 checkpoint 文件。
 - loader 优先扫描 `*.safetensors`，随后扫描 `*.bin` 和 `*.pt`。
-- Sparse-vLLM loader 不支持 split-KV checkpoint（`k_compress_*` / `v_compress_*`）。
+- Sparse-Engine loader 不支持 split-KV checkpoint（`k_compress_*` / `v_compress_*`）。

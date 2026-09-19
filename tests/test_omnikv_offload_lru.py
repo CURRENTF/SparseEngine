@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.methods.omnikv.lru import OmniKVLRU
-from sparsevllm.operators.indexed_host_copy import append_rows, gather_rows
+from sparseengine.engine.cache_manager.methods.omnikv.lru import OmniKVLRU
+from sparseengine.operators.indexed_host_copy import append_rows, gather_rows
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")

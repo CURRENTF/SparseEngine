@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from sparsevllm.kernels.triton.moe_config import resolve_moe_gemm_config
+from sparseengine.kernels.triton.moe_config import resolve_moe_gemm_config
 
 
 def _unknown_shape_config():
@@ -49,7 +49,7 @@ def test_moe_config_rejects_unknown_stage():
 @pytest.mark.parametrize("stage", ["w13", "w2"])
 @pytest.mark.parametrize("num_tokens", [1, 2, 4, 8, 16])
 def test_h20_ep2_profile_accepts_measured_decode_capacities(stage, num_tokens):
-    from sparsevllm.kernels.triton.moe_config import (
+    from sparseengine.kernels.triton.moe_config import (
         MoeGemmShape,
         _glm_sm90_tp2_ep2_config,
     )
@@ -77,7 +77,7 @@ def test_h20_ep2_profile_accepts_measured_decode_capacities(stage, num_tokens):
 def test_h20_ep2_profile_misses_preserve_portfolio(change, num_tokens, stage):
     from dataclasses import replace
 
-    from sparsevllm.kernels.triton.moe_config import (
+    from sparseengine.kernels.triton.moe_config import (
         MoeGemmShape,
         _glm_sm90_tp2_ep2_config,
     )

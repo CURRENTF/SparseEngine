@@ -7,23 +7,23 @@ import torch
 from safetensors.torch import save_file
 from transformers import Qwen3MoeConfig
 
-from sparsevllm.config import QuantizationConfig
-from sparsevllm.distributed import ParallelContext, ParallelGroup
-from sparsevllm.layers.layernorm import RMSNorm
-from sparsevllm.models.qwen3 import Qwen3Attention
-from sparsevllm.models.qwen3 import build_qwen3_prefill_attention_op
-from sparsevllm.models.qwen3_moe import (
+from sparseengine.config import QuantizationConfig
+from sparseengine.distributed import ParallelContext, ParallelGroup
+from sparseengine.layers.layernorm import RMSNorm
+from sparseengine.models.qwen3 import Qwen3Attention
+from sparseengine.models.qwen3 import build_qwen3_prefill_attention_op
+from sparseengine.models.qwen3_moe import (
     Qwen3MoeForCausalLM,
     Qwen3MoePackedExperts,
     Qwen3MoeSparseMoeBlock,
 )
-from sparsevllm.operators.attention_capabilities import AttentionScoreKind
-from sparsevllm.operators.moe import (
+from sparseengine.operators.attention_capabilities import AttentionScoreKind
+from sparseengine.operators.moe import (
     FlashInferCutlassFp8MoeProvider,
     TritonMoeProvider,
 )
-from sparsevllm.quantization.fp8 import fp8_blockwise_linear_reference
-from sparsevllm.utils.loader import load_model
+from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+from sparseengine.utils.loader import load_model
 
 
 class _TestRouterProvider:
@@ -41,7 +41,7 @@ class _TestRouterProvider:
 @pytest.fixture(autouse=True)
 def _bind_test_router_provider():
     with patch(
-        "sparsevllm.models.qwen3_moe.resolve_moe_router_provider",
+        "sparseengine.models.qwen3_moe.resolve_moe_router_provider",
         return_value=_TestRouterProvider(),
     ):
         yield
@@ -137,19 +137,19 @@ def _instantiate_model(config, context, full_attention_provider=None):
     with ExitStack() as stack:
         stack.enter_context(
             patch(
-                "sparsevllm.models.qwen3_moe.get_parallel_context",
+                "sparseengine.models.qwen3_moe.get_parallel_context",
                 return_value=context,
             )
         )
         stack.enter_context(
-            patch("sparsevllm.models.qwen3.get_parallel_context", return_value=context)
+            patch("sparseengine.models.qwen3.get_parallel_context", return_value=context)
         )
         stack.enter_context(
-            patch("sparsevllm.layers.linear.get_parallel_context", return_value=context)
+            patch("sparseengine.layers.linear.get_parallel_context", return_value=context)
         )
         stack.enter_context(
             patch(
-                "sparsevllm.layers.embed_head.get_parallel_context",
+                "sparseengine.layers.embed_head.get_parallel_context",
                 return_value=context,
             )
         )
@@ -158,7 +158,7 @@ def _instantiate_model(config, context, full_attention_provider=None):
         )
         stack.enter_context(
             patch(
-                "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+                "sparseengine.models.qwen3_moe.resolve_moe_provider",
                 return_value=(
                     FlashInferCutlassFp8MoeProvider()
                     if fp8_enabled
@@ -169,7 +169,7 @@ def _instantiate_model(config, context, full_attention_provider=None):
         if fp8_enabled:
             stack.enter_context(
                 patch(
-                    "sparsevllm.layers.linear.QuantizationRegistry."
+                    "sparseengine.layers.linear.QuantizationRegistry."
                     "resolve_linear_provider",
                     return_value=Mock(return_value=None),
                 )
@@ -197,7 +197,7 @@ def test_qwen3_moe_builds_real_prefill_shape_spec(
     )
     prepared = SimpleNamespace(name="prepared")
     with patch(
-        "sparsevllm.models.attention_runtime.prepare_prefill_attention_op",
+        "sparseengine.models.attention_runtime.prepare_prefill_attention_op",
         return_value=prepared,
     ) as prepare:
         actual = build_qwen3_prefill_attention_op(
@@ -247,7 +247,7 @@ def test_qwen3_prefill_builder_preserves_orthogonal_flashprefill_semantics(
     )
     prepared = SimpleNamespace(name="flashprefill_v2")
     with patch(
-        "sparsevllm.models.attention_runtime.prepare_prefill_attention_op",
+        "sparseengine.models.attention_runtime.prepare_prefill_attention_op",
         return_value=prepared,
     ) as prepare:
         actual = build_qwen3_prefill_attention_op(
@@ -304,7 +304,7 @@ def test_qwen3_moe_shares_and_closes_full_attention_provider():
 def test_qwen3_sparse_prefill_uses_resolved_provider():
     prepared = SimpleNamespace(name="prepared")
     with patch(
-        "sparsevllm.models.attention_runtime.prepare_prefill_attention_op",
+        "sparseengine.models.attention_runtime.prepare_prefill_attention_op",
         return_value=prepared,
     ) as prepare:
         actual = build_qwen3_prefill_attention_op(
@@ -429,7 +429,7 @@ def test_qwen3_attention_passes_raw_key_without_clone():
     cache = CacheRecorder()
     context = SimpleNamespace(cache_manager=cache, now_layer_idx=0)
 
-    with patch("sparsevllm.models.qwen3.get_context", return_value=context):
+    with patch("sparseengine.models.qwen3.get_context", return_value=context):
         attention(torch.arange(2), torch.empty(2, 8))
 
     assert cache.raw_key.data_ptr() == expected_raw_key.data_ptr()
@@ -440,9 +440,9 @@ def test_moe_block_uses_bound_router_provider():
     config = _config()
     context = _ep_context(0, 1)
     with (
-        patch("sparsevllm.models.qwen3_moe.get_parallel_context", return_value=context),
+        patch("sparseengine.models.qwen3_moe.get_parallel_context", return_value=context),
         patch(
-            "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+            "sparseengine.models.qwen3_moe.resolve_moe_provider",
             return_value=TritonMoeProvider(),
         ),
     ):
@@ -470,9 +470,9 @@ def test_moe_block_reduces_in_activation_dtype():
     config = _config()
     context = _ep_context(0, 1)
     with (
-        patch("sparsevllm.models.qwen3_moe.get_parallel_context", return_value=context),
+        patch("sparseengine.models.qwen3_moe.get_parallel_context", return_value=context),
         patch(
-            "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+            "sparseengine.models.qwen3_moe.resolve_moe_provider",
             return_value=TritonMoeProvider(),
         ),
     ):
@@ -503,9 +503,9 @@ def test_moe_block_honors_mlp_chunk_size():
     config.mlp_chunk_size = 2
     context = _ep_context(0, 1)
     with (
-        patch("sparsevllm.models.qwen3_moe.get_parallel_context", return_value=context),
+        patch("sparseengine.models.qwen3_moe.get_parallel_context", return_value=context),
         patch(
-            "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+            "sparseengine.models.qwen3_moe.resolve_moe_provider",
             return_value=TritonMoeProvider(),
         ),
     ):
@@ -546,11 +546,11 @@ def test_moe_chunking_does_not_concatenate_debug_metadata_when_disabled():
     context = _ep_context(0, 1)
     with (
         patch(
-            "sparsevllm.models.qwen3_moe.get_parallel_context",
+            "sparseengine.models.qwen3_moe.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+            "sparseengine.models.qwen3_moe.resolve_moe_provider",
             return_value=TritonMoeProvider(),
         ),
     ):
@@ -578,7 +578,7 @@ def test_moe_chunking_does_not_concatenate_debug_metadata_when_disabled():
             side_effect=lambda chunk, _ids, _weights: chunk,
         ),
         patch(
-            "sparsevllm.models.qwen3_moe.torch.cat",
+            "sparseengine.models.qwen3_moe.torch.cat",
             wraps=real_cat,
         ) as cat,
     ):
@@ -600,7 +600,7 @@ def test_moe_warmup_uses_requested_tokens_and_balanced_local_assignments():
     with (
         patch.object(experts, "forward", return_value=expected) as forward,
         patch(
-            "sparsevllm.models.qwen3_moe.device_runtime.synchronize"
+            "sparseengine.models.qwen3_moe.device_runtime.synchronize"
         ) as synchronize,
     ):
         model.warmup_moe(num_tokens=5)
@@ -632,9 +632,9 @@ def test_packed_expert_weight_mapping():
     config = _config()
     context = _ep_context(0, 1)
     with (
-        patch("sparsevllm.models.qwen3_moe.get_parallel_context", return_value=context),
+        patch("sparseengine.models.qwen3_moe.get_parallel_context", return_value=context),
         patch(
-            "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+            "sparseengine.models.qwen3_moe.resolve_moe_provider",
             return_value=TritonMoeProvider(),
         ),
     ):
@@ -684,11 +684,11 @@ def test_packed_expert_tp_shards_cover_each_projection_exactly(tp_size):
         context = _tp_context(tp_rank, tp_size)
         with (
             patch(
-                "sparsevllm.models.qwen3_moe.get_parallel_context",
+                "sparseengine.models.qwen3_moe.get_parallel_context",
                 return_value=context,
             ),
             patch(
-                "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+                "sparseengine.models.qwen3_moe.resolve_moe_provider",
                 return_value=TritonMoeProvider(),
             ),
         ):
@@ -756,9 +756,9 @@ def test_moe_block_reduces_hybrid_partial_output_over_outer_world():
     config = _config(moe_intermediate_size=8)
     context = _tp_context(0, 2)
     with (
-        patch("sparsevllm.models.qwen3_moe.get_parallel_context", return_value=context),
+        patch("sparseengine.models.qwen3_moe.get_parallel_context", return_value=context),
         patch(
-            "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+            "sparseengine.models.qwen3_moe.resolve_moe_provider",
             return_value=TritonMoeProvider(),
         ),
     ):
@@ -796,11 +796,11 @@ def test_hybrid_expert_shards_cover_ep_and_moe_tp_dimensions():
     for world_rank in range(4):
         with (
             patch(
-                "sparsevllm.models.qwen3_moe.get_parallel_context",
+                "sparseengine.models.qwen3_moe.get_parallel_context",
                 return_value=_hybrid_context(world_rank),
             ),
             patch(
-                "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+                "sparseengine.models.qwen3_moe.resolve_moe_provider",
                 return_value=TritonMoeProvider(),
             ),
         ):
@@ -825,9 +825,9 @@ def test_packed_fp8_expert_weight_and_scale_mapping():
     config = _fp8_config()
     context = _ep_context(0, 1)
     with (
-        patch("sparsevllm.models.qwen3_moe.get_parallel_context", return_value=context),
+        patch("sparseengine.models.qwen3_moe.get_parallel_context", return_value=context),
         patch(
-            "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+            "sparseengine.models.qwen3_moe.resolve_moe_provider",
             return_value=FlashInferCutlassFp8MoeProvider(),
         ),
     ):
@@ -884,9 +884,9 @@ def test_fp8_expert_loader_rejects_missing_scale_and_unaligned_shapes():
     context = _ep_context(0, 1)
     config = _fp8_config()
     with (
-        patch("sparsevllm.models.qwen3_moe.get_parallel_context", return_value=context),
+        patch("sparseengine.models.qwen3_moe.get_parallel_context", return_value=context),
         patch(
-            "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+            "sparseengine.models.qwen3_moe.resolve_moe_provider",
             return_value=FlashInferCutlassFp8MoeProvider(),
         ),
     ):
@@ -898,9 +898,9 @@ def test_fp8_expert_loader_rejects_missing_scale_and_unaligned_shapes():
 
     invalid_config = _fp8_config(moe_intermediate_size=96)
     with (
-        patch("sparsevllm.models.qwen3_moe.get_parallel_context", return_value=context),
+        patch("sparseengine.models.qwen3_moe.get_parallel_context", return_value=context),
         patch(
-            "sparsevllm.models.qwen3_moe.resolve_moe_provider",
+            "sparseengine.models.qwen3_moe.resolve_moe_provider",
             return_value=FlashInferCutlassFp8MoeProvider(),
         ),
         pytest.raises(ValueError, match="aligned to 128"),
@@ -914,7 +914,7 @@ def test_flashinfer_fp8_experts_match_torch_reference():
     torch.manual_seed(11)
     config = _fp8_config(num_experts=2, num_experts_per_tok=2)
     context = _ep_context(0, 1)
-    with patch("sparsevllm.models.qwen3_moe.get_parallel_context", return_value=context):
+    with patch("sparseengine.models.qwen3_moe.get_parallel_context", return_value=context):
         experts = Qwen3MoePackedExperts(config).cuda()
 
     source = {}

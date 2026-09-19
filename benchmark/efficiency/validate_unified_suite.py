@@ -16,11 +16,11 @@ if str(REPO_ROOT) not in sys.path:
 from benchmark.efficiency.metrics import REQUEST_METRIC_CONTRACT
 
 SYSTEM_PROTOCOLS = {
-    "svllm-vanilla": ("sparsevllm", "vanilla"),
-    "svllm-snapkv": ("sparsevllm", "snapkv"),
-    "svllm-h2o": ("sparsevllm", "h2o"),
-    "svllm-omnikv": ("sparsevllm", "omnikv"),
-    "svllm-deltakv": ("sparsevllm", "deltakv"),
+    "sengine-vanilla": ("sparseengine", "vanilla"),
+    "sengine-snapkv": ("sparseengine", "snapkv"),
+    "sengine-h2o": ("sparseengine", "h2o"),
+    "sengine-omnikv": ("sparseengine", "omnikv"),
+    "sengine-deltakv": ("sparseengine", "deltakv"),
     "vllm-vanilla": ("vllm", "vanilla"),
     "vllm": ("vllm", "vanilla"),
 }
@@ -505,7 +505,7 @@ def validate_suite(
                     )
                 actual_engine = config.get("engine")
                 actual_method = config.get("sparse_method")
-                if actual_engine == "sparsevllm":
+                if actual_engine == "sparseengine":
                     _validate_sparse_operator_stats(
                         system_dir,
                         system=system,
@@ -517,7 +517,7 @@ def validate_suite(
                 actual_engine = config.get("backend")
                 actual_method = (
                     config.get("sparse_method")
-                    if actual_engine == "sparsevllm"
+                    if actual_engine == "sparseengine"
                     else "vanilla"
                 )
                 args = config.get("args")
@@ -549,7 +549,7 @@ def validate_suite(
                     system=system,
                     tasks=tasks,
                     expected_count=expected_count,
-                    require_operator_stats=(expected_engine == "sparsevllm"),
+                    require_operator_stats=(expected_engine == "sparseengine"),
                     errors=errors,
                 )
             if provenance is not None and (
@@ -562,7 +562,7 @@ def validate_suite(
                 )
             if (
                 scenario == "scenario_b_longbench"
-                and actual_engine == "sparsevllm"
+                and actual_engine == "sparseengine"
                 and actual_method == "omnikv"
             ):
                 _validate_omnikv_runtime_config(

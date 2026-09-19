@@ -6,7 +6,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-SYSTEM="${1:-svllm-vanilla}"
+SYSTEM="${1:-sengine-vanilla}"
 MODEL_PATH="${2:?usage: run_efficiency_profile.sh SYSTEM MODEL_PATH GPUS}"
 GPUS="${3:?usage: run_efficiency_profile.sh SYSTEM MODEL_PATH GPUS}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -16,7 +16,7 @@ CONCURRENCY="${CONCURRENCY:-8}"
 CHURN_REQUEST_MULTIPLIER="${CHURN_REQUEST_MULTIPLIER:-2}"
 SPARSE_PREFILL_SCORE_MODE="${SPARSE_PREFILL_SCORE_MODE:-probability}"
 NSYS_GPU_METRICS_FREQUENCY="${NSYS_GPU_METRICS_FREQUENCY:-1000}"
-BASE_OUT="${SPARSEVLLM_OUTPUT_DIR:-outputs}/efficiency_profile_$(date +%Y%m%d_%H%M%S)"
+BASE_OUT="${SPARSEENGINE_OUTPUT_DIR:-outputs}/efficiency_profile_$(date +%Y%m%d_%H%M%S)"
 
 if ! command -v nsys >/dev/null 2>&1; then
   echo "ERROR: Nsight Systems (nsys) is required for diagnostic profiling." >&2
@@ -44,12 +44,12 @@ for GPU_ID in "${GPU_ARR[@]}"; do
 done
 
 case "${SYSTEM}" in
-  svllm-vanilla)
-    ENGINE=sparsevllm
+  sengine-vanilla)
+    ENGINE=sparseengine
     METHOD=vanilla
     ;;
-  svllm-snapkv)
-    ENGINE=sparsevllm
+  sengine-snapkv)
+    ENGINE=sparseengine
     METHOD=snapkv
     ;;
   vllm-vanilla|vllm)
@@ -66,7 +66,7 @@ mkdir -p "${BASE_OUT}/probe"
 export CUDA_VISIBLE_DEVICES="${GPUS}"
 export PYTHONPATH="${REPO_ROOT}:${REPO_ROOT}/src:${PYTHONPATH:-}"
 export TOKENIZERS_PARALLELISM=false
-export PROFILER_SVLLM=1
+export PROFILER_SENGINE=1
 
 PROBE_ARGS=(
   --engine "${ENGINE}"

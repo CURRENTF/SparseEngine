@@ -6,24 +6,24 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager import (
+from sparseengine.engine.cache_manager import (
     AttentionViewMeta,
     DecodeComputeView,
     ExplicitKVPayload,
     MlaLatentPayload,
 )
-from sparsevllm.kernels.external.sgl.fa3 import sgl_fa3_device_support
-from sparsevllm.kernels.triton.mla import (
+from sparseengine.kernels.external.sgl.fa3 import sgl_fa3_device_support
+from sparseengine.kernels.triton.mla import (
     MlaDecodeWorkspace,
 )
-from sparsevllm.operators.mla_attention import (
+from sparseengine.operators.mla_attention import (
     MLA_ATTENTION_REGISTRY,
     MlaAttentionOpSpec,
     MlaSglFa3Provider,
     MlaTritonProvider,
 )
-from sparsevllm.operators.registry import OpResolver
-from sparsevllm.platforms import DeviceCaps, PlatformEnum
+from sparseengine.operators.registry import OpResolver
+from sparseengine.platforms import DeviceCaps, PlatformEnum
 
 
 def _spec(**overrides) -> MlaAttentionOpSpec:
@@ -98,8 +98,8 @@ def test_mla_attention_scale_uses_qk_head_dimension() -> None:
 
 
 def test_online_h2o_requests_an_executable_mla_score_contract():
-    from sparsevllm.method_registry import sparse_decode_attention_score_kind
-    from sparsevllm.operators.attention_capabilities import AttentionScoreKind
+    from sparseengine.method_registry import sparse_decode_attention_score_kind
+    from sparseengine.operators.attention_capabilities import AttentionScoreKind
 
     kind = sparse_decode_attention_score_kind(
         "h2o", h2o_decode_eviction=True, attention_cache_layout="mla_latent",
@@ -143,11 +143,11 @@ def test_mla_resolver_selects_triton_on_sm120() -> None:
     workspace = _cpu_workspace(batch_size=1, head_count=20)
     with (
         patch(
-            "sparsevllm.operators.mla_attention.sgl_fa3_device_support",
+            "sparseengine.operators.mla_attention.sgl_fa3_device_support",
             return_value=(False, "FA3 unsupported on SM120"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
             return_value=workspace,
         ),
     ):
@@ -184,7 +184,7 @@ def test_decode_graph_mla_launch_config_ignores_runtime_context() -> None:
     )
     workspace = _cpu_workspace(batch_size=32, head_count=10)
     with patch(
-        "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+        "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
         return_value=workspace,
     ):
         provider = MlaTritonProvider(
@@ -195,7 +195,7 @@ def test_decode_graph_mla_launch_config_ignores_runtime_context() -> None:
         )
     launch_config = provider.launch_config
     with patch(
-        "sparsevllm.operators.mla_attention.select_glm_mla_decode_config",
+        "sparseengine.operators.mla_attention.select_glm_mla_decode_config",
         return_value=launch_config,
     ) as select:
         first = provider._launch_config_for(
@@ -218,7 +218,7 @@ def test_mla_binding_rejects_missing_sm_before_allocation() -> None:
     spec = _spec(tp_size=2)
     workspace = _cpu_workspace(batch_size=8, head_count=10)
     with patch(
-        "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+        "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
         return_value=workspace,
     ) as allocate:
         with pytest.raises(ValueError, match="positive SM count"):
@@ -235,7 +235,7 @@ def test_sgl_mla_accepts_graph_stable_score_free_contract() -> None:
         context_capacity=32768,
     )
     with patch(
-        "sparsevllm.operators.mla_attention.sgl_fa3_device_support",
+        "sparseengine.operators.mla_attention.sgl_fa3_device_support",
         return_value=(True, "sgl test"),
     ):
         result = MlaSglFa3Provider.supports(spec, _h100_caps())
@@ -252,14 +252,14 @@ def test_decode_graph_mla_resolver_prefers_sgl_fa3() -> None:
     workspace = _cpu_workspace(batch_size=8, head_count=5)
     with (
         patch(
-            "sparsevllm.operators.mla_attention.sgl_fa3_device_support",
+            "sparseengine.operators.mla_attention.sgl_fa3_device_support",
             return_value=(True, "sgl test"),
         ),
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
             return_value=workspace,
         ),
-        patch("sparsevllm.operators.mla_attention.SglFa3DecodeKernel"),
+        patch("sparseengine.operators.mla_attention.SglFa3DecodeKernel"),
     ):
         resolved = OpResolver(MLA_ATTENTION_REGISTRY).resolve(
             spec,
@@ -306,7 +306,7 @@ def test_mla_provider_rejects_explicit_kv_before_kernel() -> None:
     spec = _spec(tp_size=1)
     workspace = _cpu_workspace(batch_size=1, head_count=20)
     with patch(
-        "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+        "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
         return_value=workspace,
     ):
         provider = MlaTritonProvider(
@@ -327,7 +327,7 @@ def test_mla_provider_rejects_explicit_kv_before_kernel() -> None:
     )
 
     with (
-        patch("sparsevllm.operators.mla_attention.run_mla_decode") as kernel,
+        patch("sparseengine.operators.mla_attention.run_mla_decode") as kernel,
         pytest.raises(TypeError, match="MlaLatentPayload"),
     ):
         provider.run(
@@ -346,11 +346,11 @@ def test_sgl_provider_returns_chunk_output_and_lse(causal) -> None:
     fa3 = Mock()
     with (
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
             return_value=workspace,
         ),
         patch(
-            "sparsevllm.operators.mla_attention.SglFa3DecodeKernel",
+            "sparseengine.operators.mla_attention.SglFa3DecodeKernel",
             return_value=fa3,
         ),
     ):
@@ -401,7 +401,7 @@ def test_mla_provider_run_does_not_resolve_or_allocate() -> None:
     spec = _spec(tp_size=4)
     workspace = _cpu_workspace(batch_size=2, head_count=5)
     with patch(
-        "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+        "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
         return_value=workspace,
     ):
         provider = MlaTritonProvider(
@@ -429,14 +429,14 @@ def test_mla_provider_run_does_not_resolve_or_allocate() -> None:
     with (
         patch.object(OpResolver, "resolve") as resolve,
         patch(
-            "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace"
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace"
         ) as allocate,
         patch(
-            "sparsevllm.operators.mla_attention.run_mla_decode",
+            "sparseengine.operators.mla_attention.run_mla_decode",
             return_value=output,
         ) as kernel,
         patch(
-            "sparsevllm.operators.mla_attention.validate_mla_decode_metadata"
+            "sparseengine.operators.mla_attention.validate_mla_decode_metadata"
         ) as validate,
     ):
         actual = provider.run(
@@ -496,7 +496,7 @@ def test_mla_provider_validates_each_metadata_identity_once_per_scope() -> None:
     spec = _spec(tp_size=4)
     workspace = _cpu_workspace(batch_size=1, head_count=5)
     with patch(
-        "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+        "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
         return_value=workspace,
     ):
         provider = MlaTritonProvider(
@@ -529,11 +529,11 @@ def test_mla_provider_validates_each_metadata_identity_once_per_scope() -> None:
 
     with (
         patch(
-            "sparsevllm.operators.mla_attention.run_mla_decode",
+            "sparseengine.operators.mla_attention.run_mla_decode",
             return_value=output,
         ),
         patch(
-            "sparsevllm.operators.mla_attention.validate_mla_decode_metadata"
+            "sparseengine.operators.mla_attention.validate_mla_decode_metadata"
         ) as validate,
     ):
         for decode_view in (view_a, view_b, view_a, view_b):
@@ -552,7 +552,7 @@ def test_mla_provider_rejects_batch_larger_than_workspace() -> None:
     spec = _spec(tp_size=4)
     workspace = _cpu_workspace(batch_size=1, head_count=5)
     with patch(
-        "sparsevllm.operators.mla_attention.allocate_mla_decode_workspace",
+        "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
         return_value=workspace,
     ):
         provider = MlaTritonProvider(

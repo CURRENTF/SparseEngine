@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 import torch
 
-from sparsevllm.kernels.triton.prefill_score import (
+from sparseengine.kernels.triton.prefill_score import (
     PrefillScoreWorkspace,
     prefill_score_fwd,
 )
@@ -255,7 +255,7 @@ def _iters_for_length(length: int) -> int:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Microbench Sparse-vLLM prefill score implementations.")
+    parser = argparse.ArgumentParser(description="Microbench Sparse-Engine prefill score implementations.")
     parser.add_argument("--lengths", type=int, nargs="+", default=[4096, 8192, 16384, 32768, 65536])
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--num-heads", type=int, default=28)

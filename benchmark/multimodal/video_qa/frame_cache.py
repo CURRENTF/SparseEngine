@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-DEFAULT_DATA_ROOT = Path(os.getenv("SPARSEVLLM_DATA_DIR", PROJECT_ROOT / "data"))
+DEFAULT_DATA_ROOT = Path(os.getenv("SPARSEENGINE_DATA_DIR", PROJECT_ROOT / "data"))
 
 from benchmark.multimodal.video_qa import streamingbench
 

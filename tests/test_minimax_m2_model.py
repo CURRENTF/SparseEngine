@@ -5,16 +5,16 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from sparsevllm.config import QuantizationConfig
-from sparsevllm.distributed import ParallelContext, ParallelGroup
-from sparsevllm.layers.layernorm import RMSNorm
-from sparsevllm.models.minimax_m2 import (
+from sparseengine.config import QuantizationConfig
+from sparseengine.distributed import ParallelContext, ParallelGroup
+from sparseengine.layers.layernorm import RMSNorm
+from sparseengine.models.minimax_m2 import (
     MiniMaxM2Attention,
     MiniMaxM2ForCausalLM,
     MiniMaxM2PackedExperts,
     MiniMaxM2RuntimeConfig,
 )
-from sparsevllm.utils.loader import load_model
+from sparseengine.utils.loader import load_model
 
 
 pytestmark = pytest.mark.skipif(
@@ -36,7 +36,7 @@ class _TestMiniMaxRouterProvider:
 @pytest.fixture(autouse=True)
 def _bind_test_router_provider():
     with patch(
-        "sparsevllm.models.minimax_m2.resolve_moe_router_provider",
+        "sparseengine.models.minimax_m2.resolve_moe_router_provider",
         return_value=_TestMiniMaxRouterProvider(),
     ):
         yield
@@ -172,19 +172,19 @@ def _tp_context(tp_rank: int, tp_size: int) -> ParallelContext:
 def _instantiate_model(config, context, runtime_config=None):
     with (
         patch(
-            "sparsevllm.models.minimax_m2.get_parallel_context",
+            "sparseengine.models.minimax_m2.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.models.qwen3.get_parallel_context",
+            "sparseengine.models.qwen3.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.linear.get_parallel_context",
+            "sparseengine.layers.linear.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.embed_head.get_parallel_context",
+            "sparseengine.layers.embed_head.get_parallel_context",
             return_value=context,
         ),
     ):
@@ -250,7 +250,7 @@ def test_minimax_runtime_kwargs_bind_shared_operators():
     bound = object()
     collective_runtime = object()
     with patch(
-        "sparsevllm.models.minimax_m2.build_minimax_m2_runtime_config",
+        "sparseengine.models.minimax_m2.build_minimax_m2_runtime_config",
         return_value=bound,
     ) as build:
         kwargs = MiniMaxM2ForCausalLM.build_runtime_kwargs(
@@ -360,11 +360,11 @@ def test_attention_uses_flat_qk_norm_and_partial_rope():
     context = _ep_context(0, 1)
     with (
         patch(
-            "sparsevllm.models.minimax_m2.get_parallel_context",
+            "sparseengine.models.minimax_m2.get_parallel_context",
             return_value=context,
         ),
         patch(
-            "sparsevllm.layers.linear.get_parallel_context",
+            "sparseengine.layers.linear.get_parallel_context",
             return_value=context,
         ),
         ):
@@ -384,7 +384,7 @@ def test_attention_uses_flat_qk_norm_and_partial_rope():
     positions = torch.tensor([0, 1, 2])
 
     with patch(
-        "sparsevllm.models.minimax_m2.get_context",
+        "sparseengine.models.minimax_m2.get_context",
         return_value=runtime_context,
     ):
         attention(positions, torch.empty(3, config.hidden_size))
@@ -522,7 +522,7 @@ def test_remote_expert_metadata_rejects_bad_weight_dtype_and_shape():
 def test_local_expert_loader_rejects_missing_duplicate_and_bad_tensors():
     config = _config()
     with patch(
-        "sparsevllm.models.minimax_m2.get_parallel_context",
+        "sparseengine.models.minimax_m2.get_parallel_context",
         return_value=_ep_context(0, 1),
     ):
         experts = MiniMaxM2PackedExperts(config)

@@ -6,24 +6,24 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.kernels.external.flashinfer.fp8_linear import (
+from sparseengine.kernels.external.flashinfer.fp8_linear import (
     _sm90_fp8_linear_op,
     _sm120_groupwise_fp8_linear_op,
     flashinfer_fp8_blockscale_gemm_sm90,
     flashinfer_fp8_nt_groupwise_sm120,
     flashinfer_sm120_groupwise_fp8_linear_support,
 )
-from sparsevllm.kernels.external.flashinfer.moe import (
+from sparseengine.kernels.external.flashinfer.moe import (
     _cutlass_fp8_moe_op,
     flashinfer_cutlass_fp8_moe_support,
     flashinfer_cutlass_fused_moe,
     flashinfer_cutlass_fused_moe_workspace_size,
 )
-from sparsevllm.kernels.external.flashinfer.support import (
+from sparseengine.kernels.external.flashinfer.support import (
     flashinfer_kernel_health,
     flashinfer_kernel_metadata_health,
 )
-from sparsevllm.kernels.external.support import (
+from sparseengine.kernels.external.support import (
     ExternalKernelContractError,
     ExternalKernelFamilyError,
     KernelFamilyState,
@@ -96,7 +96,7 @@ def test_flashinfer_groupwise_feature_accepts_public_contract() -> None:
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.fp8_linear.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.fp8_linear.flashinfer_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", return_value=module),
@@ -115,7 +115,7 @@ def test_flashinfer_groupwise_feature_rejects_schema_drift() -> None:
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.fp8_linear.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.fp8_linear.flashinfer_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", return_value=module),
@@ -131,7 +131,7 @@ def test_flashinfer_groupwise_adapter_fixes_layout_contract() -> None:
     _sm120_groupwise_fp8_linear_op.cache_clear()
     try:
         with patch(
-            "sparsevllm.kernels.external.flashinfer.fp8_linear._sm120_groupwise_fp8_linear_op",
+            "sparseengine.kernels.external.flashinfer.fp8_linear._sm120_groupwise_fp8_linear_op",
             return_value=(gemm, "available"),
         ):
             activation = torch.empty(2, 128)
@@ -166,7 +166,7 @@ def test_flashinfer_sm90_adapter_fixes_scale_contract() -> None:
     _sm90_fp8_linear_op.cache_clear()
     try:
         with patch(
-            "sparsevllm.kernels.external.flashinfer.fp8_linear._sm90_fp8_linear_op",
+            "sparseengine.kernels.external.flashinfer.fp8_linear._sm90_fp8_linear_op",
             return_value=(gemm, "available"),
         ):
             inputs = torch.empty(2, 128)
@@ -211,11 +211,11 @@ def test_flashinfer_moe_feature_accepts_public_contract() -> None:
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.moe.flashinfer_kernel_health",
+                "sparseengine.kernels.external.flashinfer.moe.flashinfer_kernel_health",
                 return_value=SimpleNamespace(ready=True, version="0.6.17"),
             ),
             patch(
-                "sparsevllm.kernels.external.flashinfer.moe.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.moe.flashinfer_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", side_effect=import_module),
@@ -230,11 +230,11 @@ def test_flashinfer_moe_feature_rejects_missing_contract() -> None:
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.moe.flashinfer_kernel_health",
+                "sparseengine.kernels.external.flashinfer.moe.flashinfer_kernel_health",
                 return_value=SimpleNamespace(ready=True, version="0.6.17"),
             ),
             patch(
-                "sparsevllm.kernels.external.flashinfer.moe.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.moe.flashinfer_kernel_support",
                 return_value=(True, "available"),
             ),
             patch(
@@ -250,7 +250,7 @@ def test_flashinfer_moe_feature_rejects_missing_contract() -> None:
 
 def test_flashinfer_moe_workspace_requires_0617() -> None:
     with patch(
-        "sparsevllm.kernels.external.flashinfer.moe.flashinfer_kernel_health",
+        "sparseengine.kernels.external.flashinfer.moe.flashinfer_kernel_health",
         return_value=SimpleNamespace(ready=True, version="0.6.15"),
     ):
         supported, reason = flashinfer_cutlass_fp8_moe_support()
@@ -277,7 +277,7 @@ def test_flashinfer_moe_adapter_fixes_execution_contract() -> None:
     workspace = torch.empty(1024, dtype=torch.uint8)
 
     with patch(
-        "sparsevllm.kernels.external.flashinfer.moe._cutlass_fp8_moe_op",
+        "sparseengine.kernels.external.flashinfer.moe._cutlass_fp8_moe_op",
         return_value=(function, workspace_size, activation_type, "available"),
     ):
         flashinfer_cutlass_fused_moe(
@@ -324,7 +324,7 @@ def test_flashinfer_moe_workspace_query_fixes_topology_contract() -> None:
     activation_type = object()
 
     with patch(
-        "sparsevllm.kernels.external.flashinfer.moe._cutlass_fp8_moe_op",
+        "sparseengine.kernels.external.flashinfer.moe._cutlass_fp8_moe_op",
         return_value=(function, workspace_size, activation_type, "available"),
     ):
         actual = flashinfer_cutlass_fused_moe_workspace_size(

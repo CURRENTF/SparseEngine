@@ -3,9 +3,9 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from sparsevllm.engine.chain_cache import RequestAdmission
-from sparsevllm.engine.dp_engine import DPAttentionEngine, DPAttentionPrefixSnapshot
-from sparsevllm.sampling_params import SamplingParams
+from sparseengine.engine.chain_cache import RequestAdmission
+from sparseengine.engine.dp_engine import DPAttentionEngine, DPAttentionPrefixSnapshot
+from sparseengine.sampling_params import SamplingParams
 
 
 def _frontend():
@@ -104,7 +104,7 @@ def test_control_failure_drains_other_rank_responses_before_next_rpc():
 def test_discard_is_idempotent_but_rejects_a_different_resident_sequence():
     import pytest
 
-    from sparsevllm.engine.chain_cache import ChainOwnerMismatchError
+    from sparseengine.engine.chain_cache import ChainOwnerMismatchError
 
     engine = _frontend()
     assert engine.discard_chain("gone", expected_seq_id=10) is False
@@ -116,9 +116,9 @@ def test_discard_is_idempotent_but_rejects_a_different_resident_sequence():
 def test_dp_entrypoint_rejects_unknown_configuration_before_loading_model():
     import pytest
 
-    from sparsevllm import LLM
+    from sparseengine import LLM
 
-    with pytest.raises(ValueError, match="Unknown Sparse-vLLM config keys"):
+    with pytest.raises(ValueError, match="Unknown Sparse-Engine config keys"):
         LLM(
             "unused-model",
             data_parallel_size=2,
@@ -130,7 +130,7 @@ def test_dp_entrypoint_rejects_unknown_configuration_before_loading_model():
 def test_dp_rejects_uncaptured_sampling_plan_at_configuration_boundary():
     import pytest
 
-    from sparsevllm.configs.cuda_graph import normalize_decode_cuda_graph
+    from sparseengine.configs.cuda_graph import normalize_decode_cuda_graph
 
     config = SimpleNamespace(
         data_parallel_size=2,

@@ -22,10 +22,10 @@ from transformers.models.gemma4.modeling_gemma4 import (
     Gemma4TextRouter as HFGemma4Router,
 )
 
-from sparsevllm.configs.sparse import normalize_sparse_methods
-from sparsevllm.distributed import ParallelContext, ParallelGroup
-from sparsevllm.engine.cache_manager.base import ExplicitKVPayload
-from sparsevllm.models.gemma4 import (
+from sparseengine.configs.sparse import normalize_sparse_methods
+from sparseengine.distributed import ParallelContext, ParallelGroup
+from sparseengine.engine.cache_manager.base import ExplicitKVPayload
+from sparseengine.models.gemma4 import (
     Gemma4Attention,
     Gemma4ForCausalLM,
     Gemma4MLP,
@@ -33,27 +33,27 @@ from sparsevllm.models.gemma4 import (
     Gemma4RotaryEmbedding,
     Gemma4Router,
 )
-from sparsevllm.models.layout import RuntimeLayout
-from sparsevllm.operators.gemma4 import (
+from sparseengine.models.layout import RuntimeLayout
+from sparseengine.operators.gemma4 import (
     Gemma4OpSpec,
     TorchGemma4OperatorProvider,
     TritonGemma4OperatorProvider,
 )
-from sparsevllm.operators.gemma4_attention import (
+from sparseengine.operators.gemma4_attention import (
     Gemma4FlashInferPrefill,
     _FlashInferState,
 )
-from sparsevllm.operators.gemma4_moe import (
+from sparseengine.operators.gemma4_moe import (
     GEMMA4_MOE_REGISTRY,
     TorchGemma4MoeProvider,
 )
-from sparsevllm.operators.gemma4_router import (
+from sparseengine.operators.gemma4_router import (
     H20Gemma4RouterProvider,
     TorchGemma4RouterProvider,
     TritonGemma4RouterProvider,
 )
-from sparsevllm.utils.config import config_layer_get
-from sparsevllm.utils.context import reset_context, set_context
+from sparseengine.utils.config import config_layer_get
+from sparseengine.utils.context import reset_context, set_context
 
 
 def test_gemma4_flashinfer_prefill_caches_alternating_attention_contracts():
@@ -125,7 +125,7 @@ def test_gemma4_runtime_spec_counts_alternating_attention_contracts():
         return Mock(name="provider")
 
     with patch(
-        "sparsevllm.models.gemma4.resolve_gemma4_provider",
+        "sparseengine.models.gemma4.resolve_gemma4_provider",
         side_effect=resolve,
     ):
         Gemma4ForCausalLM.build_runtime_kwargs(
@@ -165,11 +165,11 @@ def test_gemma4_runtime_closes_operator_if_router_prepare_fails():
     operator_provider = Mock(name="operator_provider")
     with (
         patch(
-            "sparsevllm.models.gemma4.resolve_gemma4_provider",
+            "sparseengine.models.gemma4.resolve_gemma4_provider",
             return_value=operator_provider,
         ),
         patch(
-            "sparsevllm.models.gemma4.resolve_gemma4_router_provider",
+            "sparseengine.models.gemma4.resolve_gemma4_router_provider",
             side_effect=RuntimeError("router prepare failed"),
         ),
         pytest.raises(RuntimeError, match="router prepare failed"),
@@ -186,10 +186,10 @@ def test_gemma4_runtime_closes_operator_if_router_prepare_fails():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_gemma4_router_kernels_match_torch():
-    from sparsevllm.kernels.triton.gemma4_fused_router import (
+    from sparseengine.kernels.triton.gemma4_fused_router import (
         gemma4_fused_router_topk,
     )
-    from sparsevllm.kernels.triton.gemma4_router import (
+    from sparseengine.kernels.triton.gemma4_router import (
         gemma4_router_input,
     )
 
@@ -283,9 +283,9 @@ def _patch_parallel_context():
     stack = ExitStack()
     context = _parallel_context()
     for target in (
-        "sparsevllm.models.gemma4.get_parallel_context",
-        "sparsevllm.layers.linear.get_parallel_context",
-        "sparsevllm.layers.embed_head.get_parallel_context",
+        "sparseengine.models.gemma4.get_parallel_context",
+        "sparseengine.layers.linear.get_parallel_context",
+        "sparseengine.layers.embed_head.get_parallel_context",
     ):
         stack.enter_context(patch(target, return_value=context))
     return stack
@@ -586,8 +586,8 @@ def test_gemma4_shared_kv_rejects_per_layer_streaming_eviction():
 
 
 def test_gemma4_parallel_branches_keep_reduction_before_each_norm():
-    from sparsevllm.models.gemma4 import Gemma4DecoderLayer
-    from sparsevllm.distributed.moe_communication import AllReduceMoeCommunication
+    from sparseengine.models.gemma4 import Gemma4DecoderLayer
+    from sparseengine.distributed.moe_communication import AllReduceMoeCommunication
 
     layer = Gemma4DecoderLayer.__new__(Gemma4DecoderLayer)
     torch.nn.Module.__init__(layer)
@@ -613,9 +613,9 @@ def test_gemma4_parallel_branches_keep_reduction_before_each_norm():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize("quantized", [False, True])
 def test_gemma4_moe_parallel_eager_and_graph_match_independent_dense_reference(tmp_path, quantized):
-    from sparsevllm.models.gemma4 import Gemma4DecoderLayer
-    from sparsevllm.operators.moe_execution import prepare_model_moe_execution
-    from sparsevllm.distributed import init_parallel_context, reset_parallel_context, ParallelTopology
+    from sparseengine.models.gemma4 import Gemma4DecoderLayer
+    from sparseengine.operators.moe_execution import prepare_model_moe_execution
+    from sparseengine.distributed import init_parallel_context, reset_parallel_context, ParallelTopology
     import torch.nn.functional as F
 
     config = _config(hidden_size=256, intermediate_size=512, moe_intermediate_size=128,
@@ -623,13 +623,13 @@ def test_gemma4_moe_parallel_eager_and_graph_match_independent_dense_reference(t
                      dtype=torch.bfloat16, decode_graph=True)
     torch.distributed.init_process_group("gloo", init_method=f"file://{tmp_path / 'rendezvous'}", rank=0, world_size=1)
     init_parallel_context(topology=ParallelTopology(1, 1, 1))
-    from sparsevllm.quantization.config import QuantizationConfig
+    from sparseengine.quantization.config import QuantizationConfig
     config.quantization_config = (QuantizationConfig.from_hf_config({
         "quant_method": "fp8", "activation_scheme": "dynamic", "weight_block_size": [128, 128],
     }) if quantized else QuantizationConfig.disabled())
     try:
         # Test the actual MoE sublayer; attention is outside this change.
-        with torch.device("cuda"), patch("sparsevllm.models.gemma4.Gemma4Attention", return_value=torch.nn.Identity()):
+        with torch.device("cuda"), patch("sparseengine.models.gemma4.Gemma4Attention", return_value=torch.nn.Identity()):
             layer = Gemma4DecoderLayer(config, 0, TritonGemma4OperatorProvider(),
                                        TritonGemma4RouterProvider(), None)
         # Preserve FP8 weights while converting the unquantized model parameters.
@@ -654,7 +654,7 @@ def test_gemma4_moe_parallel_eager_and_graph_match_independent_dense_reference(t
             dense = norm(x, layer.pre_feedforward_layernorm)
             def project(x, linear):
                 if linear.quantized:
-                    from sparsevllm.quantization.fp8 import fp8_blockwise_linear_reference
+                    from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
                     return fp8_blockwise_linear_reference(
                         x.bfloat16(), linear.weight, linear.weight_scale_inv).float()
                 return F.linear(x, linear.weight.float())

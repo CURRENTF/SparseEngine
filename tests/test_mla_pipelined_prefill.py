@@ -17,7 +17,7 @@ def test_new_lengths_reuse_compiled_partials(monkeypatch, record_property, backe
         pytest.skip("pipelined MLA requires Ampere or newer")
     if backend == "hopper" and torch.cuda.get_device_capability() != (9, 0):
         pytest.skip("TMA/WGMMA MLA requires Hopper")
-    module = import_module(f"sparsevllm.kernels.triton.mla.prefill_{backend}")
+    module = import_module(f"sparseengine.kernels.triton.mla.prefill_{backend}")
     binaries = {"attention": set(), "merge": set()}
 
     def track(kernel, name):
@@ -79,9 +79,9 @@ def test_pipelined_partial_ragged_graph_and_empty_rows(
     if backend == "hopper":
         if torch.cuda.get_device_capability() != (9, 0):
             pytest.skip("TMA/WGMMA MLA requires Hopper")
-        from sparsevllm.kernels.triton.mla.prefill_hopper import attention_partial
+        from sparseengine.kernels.triton.mla.prefill_hopper import attention_partial
     else:
-        from sparsevllm.kernels.triton.mla.prefill_pipelined import attention_partial
+        from sparseengine.kernels.triton.mla.prefill_pipelined import attention_partial
 
     torch.manual_seed(918)
     q = (
@@ -146,7 +146,7 @@ def test_pipelined_partial_ragged_graph_and_empty_rows(
 def test_bound_provider_executes_partial_and_preserves_failure(monkeypatch, tp_size):
     # A previously unprofiled short ragged batch must use the prepared provider,
     # expose its binding report, and propagate launch failures without rerouting.
-    from sparsevllm.operators.mla_attention import MlaAttentionOpSpec, MlaTritonProvider
+    from sparseengine.operators.mla_attention import MlaAttentionOpSpec, MlaTritonProvider
 
     spec = MlaAttentionOpSpec(
         num_q_heads=20, kv_lora_rank=512, rope_dim=64,
@@ -194,13 +194,13 @@ def test_partial_large_storage_offsets(backend):
     if torch.cuda.get_device_capability()[0] < 8:
         pytest.skip("pipelined MLA requires Ampere or newer")
     if backend == "pipelined":
-        from sparsevllm.kernels.triton.mla.prefill_pipelined import attention_partial
+        from sparseengine.kernels.triton.mla.prefill_pipelined import attention_partial
     elif backend == "hopper":
         if torch.cuda.get_device_capability() != (9, 0):
             pytest.skip("TMA/WGMMA MLA requires Hopper")
-        from sparsevllm.kernels.triton.mla.prefill_hopper import attention_partial
+        from sparseengine.kernels.triton.mla.prefill_hopper import attention_partial
     else:
-        from sparsevllm.kernels.triton.mla.prefill import attention_partial
+        from sparseengine.kernels.triton.mla.prefill import attention_partial
     stride = 2**30 + 256
     if torch.cuda.mem_get_info()[0] < 5 * 1024**3:
         pytest.skip("large-address regression requires 5 GiB free")

@@ -1,6 +1,6 @@
 # KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache
 
-> Sparse-vLLM vendors the runtime subset only. The upstream benchmark code is
+> Sparse-Engine vendors the runtime subset only. The upstream benchmark code is
 > intentionally omitted; use `../../benchmark/` for repository-owned runs.
 
 Implementation of [ICML24] [KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache](https://arxiv.org/abs/2402.02750)

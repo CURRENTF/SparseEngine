@@ -25,7 +25,7 @@ for model in glm4.7-flash qwen3-30b-fp8; do
     if [[ "$model" == glm4.7-flash ]]; then gpus=auto:2; fi
     command=(python3 "$package/sweep_decode_capacity.py" --config "$config"
              --repo "$benchmark_repo" --model "$model" --gpus "$gpus"
-             --lanes svllm-omnikv --attempt total2048)
+             --lanes sengine-omnikv --attempt total2048)
     printf 'COMMAND:'; printf ' %q' "${command[@]}"; printf '\n'
     "${command[@]}" 2>&1 | tee "$run_root/$model.run.log"
     printf '%s\t%s\tcompleted\n' "$(date -Is)" "$model" >> "$run_root/status.tsv"

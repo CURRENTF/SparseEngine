@@ -1,6 +1,6 @@
 # 支持的模型
 
-本页汇总 Sparse-vLLM 支持的模型、精度、并行方式和稀疏方法组合。
+本页汇总 Sparse-Engine 支持的模型、精度、并行方式和稀疏方法组合。
 
 `精度`指 checkpoint 的权重格式。`TP`、`DP` 和 `EP` 分别表示 tensor parallelism、data parallelism 和 expert parallelism。勾号表示支持该模式；数字限制表示对应的并行规模必须使用该值。
 

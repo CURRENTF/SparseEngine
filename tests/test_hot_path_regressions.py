@@ -6,12 +6,12 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from sparsevllm.engine.scheduler import Scheduler
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.model_runner import ModelRunner
-from sparsevllm.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
-from sparsevllm.layers.sampler import Sampler
-from sparsevllm.sampling_params import SamplingParams
+from sparseengine.engine.scheduler import Scheduler
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.model_runner import ModelRunner
+from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+from sparseengine.layers.sampler import Sampler
+from sparseengine.sampling_params import SamplingParams
 from test_prefill_schedule_policy import make_scheduler
 
 

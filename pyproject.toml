@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sparsevllm"
+name = "sparseengine"
 version = "0.1.0"
 description = "A sparse-first inference engine for long-context LLM serving"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "Apache-2.0"}
 authors = [
-    {name = "Sparse-vLLM Team"}
+    {name = "Sparse-Engine Team"}
 ]
 dependencies = [
     "fire",
@@ -63,16 +63,16 @@ cu130 = [
 ]
 
 [project.scripts]
-sparsevllm-openai-server = "sparsevllm.entrypoints.openai.api_server:main"
-sparsevllm-openai-router = "sparsevllm.entrypoints.openai.smart_router:main"
-sparsevllm-openai-client = "sparsevllm.entrypoints.openai.client:main"
+sparseengine-openai-server = "sparseengine.entrypoints.openai.api_server:main"
+sparseengine-openai-router = "sparseengine.entrypoints.openai.smart_router:main"
+sparseengine-openai-client = "sparseengine.entrypoints.openai.client:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["sparsevllm*"]
+include = ["sparseengine*"]
 
 [tool.setuptools.package-data]
-sparsevllm = [
+sparseengine = [
     "configs/profiles/*.json",
     "kernels/triton/profiles/*.json",
     "operators/profiles/*.json",

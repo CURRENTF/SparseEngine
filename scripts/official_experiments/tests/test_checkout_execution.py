@@ -106,7 +106,7 @@ def test_boundary_preflight_uses_checkout_without_copying_it(tmp_path, monkeypat
 
 
 def test_session_control_scripts_resolve_from_selected_checkout(tmp_path):
-    config = read(ROOT / "sparsevllm_vs_vortex/session/campaign.json")
+    config = read(ROOT / "sparseengine_vs_vortex/session/campaign.json")
     config["quality"] = config["quality"][:1]
     config["efficiency32"] = []
     cfg = tmp_path / "campaign.json"
@@ -122,7 +122,7 @@ def test_session_control_scripts_resolve_from_selected_checkout(tmp_path):
     paths_file = tmp_path / "paths.json"
     write(paths_file, paths)
     root = tmp_path / "run"
-    run("sparsevllm_vs_vortex/session/build_campaign.py", "--config", cfg,
+    run("sparseengine_vs_vortex/session/build_campaign.py", "--config", cfg,
         "--paths", paths_file, "--root", root, "--prepared", prepared,
         "--source", REPO, "--gpus", "0")
     jobs = read(root / "queued_commands.json")

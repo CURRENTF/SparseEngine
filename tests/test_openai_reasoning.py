@@ -1,7 +1,7 @@
 import pytest
 
-from sparsevllm.entrypoints.openai.reasoning import detect_reasoning_capabilities
-from sparsevllm.entrypoints.openai.reasoning import reasoning_template_kwargs
+from sparseengine.entrypoints.openai.reasoning import detect_reasoning_capabilities
+from sparseengine.entrypoints.openai.reasoning import reasoning_template_kwargs
 
 
 class SwitchableTokenizer:

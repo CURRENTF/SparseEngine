@@ -13,7 +13,7 @@ import time
 import torch
 import triton
 
-from sparsevllm.kernels.triton.mla import (
+from sparseengine.kernels.triton.mla import (
     MlaDecodeLaunchConfig, allocate_mla_decode_workspace,
     run_mla_decode, select_glm_mla_decode_config,
 )

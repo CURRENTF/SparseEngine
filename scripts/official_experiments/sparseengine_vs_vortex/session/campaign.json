@@ -1,0 +1,65 @@
+{
+  "models": {
+    "qwen4": {"name":"Qwen3-4B-Instruct-2507","max_len":262144},
+    "qwen30": {"name":"Qwen3-30B-A3B-Instruct-2507-FP8","max_len":262144},
+    "glm": {"name":"GLM-4.7-Flash","max_len":202752}
+  },
+  "seed": 20260901,
+  "max_new_tokens": 128,
+  "native_runtime": {"gpu_memory_utilization":0.9,"max_num_seqs_in_batch":1,"max_num_seqs_in_gpu":1,"max_num_batched_tokens":8192,"engine_prefill_chunk_size":8192,"decode_graph":true,"decode_graph_capture_sizes":[1],"enable_prefix_caching":false},
+  "profiles": {
+    "qwen4_h2o_32k_budget": {"h2o_decode_budget":4096,"h2o_prefill_budget":8192,"h2o_prefill_score_window":128,"h2o_decode_eviction_interval":128,"h2o_recent_ratio":0.5,"h2o_decode_eviction":true,"h2o_decode_score_fusion":true,"sparse_prefill_score_mode":"probability"},
+    "qwen4_quest_32k_budget": {"sink_keep_tokens":0,"recent_keep_tokens":16,"decode_keep_tokens":4080,"quest_chunk_size":16,"quest_skip_layers":2},
+    "qwen4_vanilla_32k_budget": {},
+    "qwen4_snapkv_32k_budget": {"engine_prefill_chunk_size":2048,"sink_keep_tokens":4,"recent_keep_tokens":32,"decode_keep_tokens":4060,"snapkv_window_size":32,"pool_kernel_size":7,"sparse_prefill_score_mode":"probability"},
+    "qwen4_quest_hisparse_pair": {"sink_keep_tokens":0,"recent_keep_tokens":64,"decode_keep_tokens":4032,"quest_chunk_size":16,"quest_skip_layers":0},
+    "qwen30_snapkv_128k_budget": {"engine_prefill_chunk_size":2048,"sink_keep_tokens":64,"recent_keep_tokens":512,"decode_keep_tokens":7616,"snapkv_window_size":32,"sparse_prefill_score_mode":"probability"},
+    "qwen30_quest_128k_budget": {"sink_keep_tokens":64,"recent_keep_tokens":512,"decode_keep_tokens":1472},
+    "qwen30_omnikv_128k_budget": {"full_attention_layers":[0,3,9,18,22,27,43],"sink_keep_tokens":64,"recent_keep_tokens":512,"decode_keep_tokens":1472,"pool_kernel_size":1},
+    "glm_snapkv_128k_budget": {"engine_prefill_chunk_size":2048,"decode_keep_tokens":7616,"recent_keep_tokens":512,"sink_keep_tokens":64,"snapkv_window_size":32,"sparse_prefill_score_mode":"probability"},
+    "glm_quest_128k_budget": {"decode_keep_tokens":1472,"recent_keep_tokens":512,"sink_keep_tokens":64},
+    "glm_omnikv_128k_budget": {"decode_keep_tokens":1472,"full_attention_layers":[0,3,8,16,19,25,31,37,44],"recent_keep_tokens":512,"sink_keep_tokens":64,"pool_kernel_size":1},
+    "qwen4_tangram_snapkv": {"dtype":"bfloat16","gpu_memory_utilization":0.9,"tensor_parallel_size":1,"max_num_seqs":2,"max_num_batched_tokens":2048,"compression_scorer":"snapkv","compression_budget_scope":"uniform","compression_budget_tokens":4096,"compression_n_sink_tokens":4,"compression_window_size":32,"compression_chunk_size":2048,"compression_scorer_options":{"window":"32","kernel":"7"}},
+    "qwen30_tangram_snapkv": {"dtype":"bfloat16","gpu_memory_utilization":0.9,"tensor_parallel_size":1,"max_num_seqs":2,"max_num_batched_tokens":2048,"compression_scorer":"snapkv","compression_budget_scope":"uniform","compression_budget_tokens":8192,"compression_n_sink_tokens":64,"compression_window_size":512,"compression_chunk_size":2048,"compression_scorer_options":{"window":"32","kernel":"7"}},
+    "qwen4_hisparse_quest": {"algorithm":"quest","backend":"fa3","page_size":16,"sparsity_ratio":0.1232876712328767,"num_recent_pages":4,"min_sparse_prompt_len":0,"enable_cuda_graph_retrieval":true},
+    "qwen30_hisparse_quest": {"algorithm":"quest","backend":"fa3","page_size":16,"sparsity_ratio":0.011764705882352941,"num_recent_pages":32,"min_sparse_prompt_len":0,"enable_cuda_graph_retrieval":true},
+    "qwen30_vllm_vanilla": {"dtype":"bfloat16","gpu_memory_utilization":0.9,"tensor_parallel_size":1,"max_num_seqs":1,"max_num_batched_tokens":8192,"enable_chunked_prefill":true}
+  },
+  "quality": [
+    {"id":"qwen4_h2o_32k_budget_attempt2","model":"qwen4","backend":"native","method":"h2o","profile":"qwen4_h2o_32k_budget"},
+    {"id":"qwen4_quest_32k_budget_attempt2","model":"qwen4","backend":"native","method":"quest","profile":"qwen4_quest_32k_budget"},
+    {"id":"qwen4_vanilla_32k_budget_attempt2","model":"qwen4","backend":"native","method":"vanilla","profile":"qwen4_vanilla_32k_budget"},
+    {"id":"qwen4_snapkv_32k_budget_attempt2","model":"qwen4","backend":"native","method":"snapkv","profile":"qwen4_snapkv_32k_budget"},
+    {"id":"qwen4_quest_hisparse_pair_attempt2","model":"qwen4","backend":"native","method":"quest","profile":"qwen4_quest_hisparse_pair"},
+    {"id":"glm_h2o_32k_budget_attempt2","model":"glm","backend":"native","method":"h2o","profile":"qwen4_h2o_32k_budget"},
+    {"id":"glm_quest_32k_budget_attempt2","model":"glm","backend":"native","method":"quest","profile":"qwen4_quest_32k_budget"},
+    {"id":"glm_vanilla_32k_budget_attempt2","model":"glm","backend":"native","method":"vanilla","profile":"qwen4_vanilla_32k_budget"},
+    {"id":"qwen30_snapkv_128k_budget_attempt2","model":"qwen30","backend":"native","method":"snapkv","profile":"qwen30_snapkv_128k_budget"},
+    {"id":"qwen30_quest_128k_budget_attempt2","model":"qwen30","backend":"native","method":"quest","profile":"qwen30_quest_128k_budget"},
+    {"id":"qwen30_omnikv_128k_budget_attempt2","model":"qwen30","backend":"native","method":"omnikv","profile":"qwen30_omnikv_128k_budget"},
+    {"id":"glm_snapkv_128k_budget_attempt2","model":"glm","backend":"native","method":"snapkv","profile":"glm_snapkv_128k_budget"},
+    {"id":"glm_quest_128k_budget_attempt2","model":"glm","backend":"native","method":"quest","profile":"glm_quest_128k_budget"},
+    {"id":"glm_omnikv_128k_budget_attempt2","model":"glm","backend":"native","method":"omnikv","profile":"glm_omnikv_128k_budget"},
+    {"id":"qwen30_vanilla_attempt2","model":"qwen30","backend":"native","method":"vanilla","profile":"qwen4_vanilla_32k_budget"},
+    {"id":"qwen4_tangram_snapkv_launchfix_contractfix","model":"qwen4","backend":"tangram","method":"snapkv","profile":"qwen4_tangram_snapkv"},
+    {"id":"qwen30_tangram_snapkv_launchfix_contractfix","model":"qwen30","backend":"tangram","method":"snapkv","profile":"qwen30_tangram_snapkv"},
+    {"id":"qwen4_hisparse_quest","model":"qwen4","backend":"hisparse","method":"quest","profile":"qwen4_hisparse_quest"},
+    {"id":"qwen30_hisparse_quest","model":"qwen30","backend":"hisparse","method":"quest","profile":"qwen30_hisparse_quest"},
+    {"id":"qwen4_vortex_h2o_launchfix_contractfix","model":"qwen4","backend":"vortex","method":"h2o","profile":"qwen4_vanilla_32k_budget"},
+    {"id":"qwen4_vortex_quest_launchfix_contractfix","model":"qwen4","backend":"vortex","method":"quest","profile":"qwen4_vanilla_32k_budget"},
+    {"id":"glm_vortex_h2o_launchfix_contractfix","model":"glm","backend":"vortex","method":"h2o","profile":"qwen4_vanilla_32k_budget"},
+    {"id":"glm_vortex_quest_launchfix_contractfix","model":"glm","backend":"vortex","method":"quest","profile":"qwen4_vanilla_32k_budget"},
+    {"id":"qwen30_vllm_vanilla","model":"qwen30","backend":"vllm","method":"vanilla","profile":"qwen30_vllm_vanilla"},
+    {"id":"glm_vllm_vanilla","model":"glm","backend":"vllm","method":"vanilla","profile":"qwen30_vllm_vanilla"}
+  ],
+  "efficiency32": [
+    {"backend":"native","method":"snapkv","label":"native-snapkv","lane":"sengine-snapkv","hyper_params":{"gpu_memory_utilization":0.9,"decode_graph":true,"enable_prefix_caching":false,"max_num_batched_tokens":2048,"engine_prefill_chunk_size":2048,"sink_keep_tokens":4,"recent_keep_tokens":32,"decode_keep_tokens":4060,"snapkv_window_size":32,"pool_kernel_size":7,"sparse_prefill_score_mode":"probability"},"engine_kwargs":{},"quality":"qwen4_snapkv_32k_budget_attempt2","batches":[1,4,8,14]},
+    {"backend":"native","method":"quest","label":"native-quest","lane":"sengine-quest","hyper_params":{"gpu_memory_utilization":0.9,"decode_graph":true,"enable_prefix_caching":false,"max_num_batched_tokens":8192,"engine_prefill_chunk_size":8192,"sink_keep_tokens":0,"recent_keep_tokens":64,"decode_keep_tokens":4032,"quest_chunk_size":16,"quest_skip_layers":0},"engine_kwargs":{},"quality":"qwen4_quest_hisparse_pair_attempt2","batches":[1,4,8,14]},
+    {"backend":"tangram","method":"snapkv","label":"tangram-snapkv","lane":"tangram-snapkv","hyper_params":{"gpu_memory_utilization":0.9,"decode_graph":true,"enable_prefix_caching":false,"max_num_batched_tokens":2048,"engine_prefill_chunk_size":2048},"engine_kwargs":{"dtype":"bfloat16","compression_scorer":"snapkv","compression_budget_scope":"uniform","compression_budget_tokens":4096,"compression_n_sink_tokens":4,"compression_window_size":32,"compression_chunk_size":2048,"compression_scorer_options":{"window":"32","kernel":"7"}},"quality":"qwen4_tangram_snapkv_launchfix_contractfix","batches":[1,4,8,14]},
+    {"backend":"hisparse","method":"quest","label":"hisparse-quest-pr-series","lane":"hisparse-quest","hyper_params":{"gpu_memory_utilization":0.9,"decode_graph":true,"enable_prefix_caching":false,"max_num_batched_tokens":8192,"engine_prefill_chunk_size":8192},"engine_kwargs":{"hisparse_config":{"algorithm":"quest","backend":"fa3","page_size":16,"sparsity_ratio":0.1232876712328767,"num_recent_pages":4,"min_sparse_prompt_len":0,"enable_cuda_graph_retrieval":true},"dtype":"bfloat16"},"quality":"qwen4_hisparse_quest","batches":[1,4,8,14]}
+  ],
+  "quality128": {
+    "qwen3-30b-fp8": {"vllm-vanilla":"qwen30_vllm_vanilla","sengine-vanilla":"qwen30_vanilla_attempt2","sengine-snapkv":"qwen30_snapkv_128k_budget_attempt2","sengine-quest":"qwen30_quest_128k_budget_attempt2","sengine-omnikv":"qwen30_omnikv_128k_budget_attempt2","tangram-snapkv":"qwen30_tangram_snapkv_launchfix_contractfix","hisparse-quest":"qwen30_hisparse_quest"},
+    "glm4.7-flash": {"vllm-vanilla":"glm_vllm_vanilla","sengine-vanilla":"glm_vanilla_32k_budget_attempt2","sengine-snapkv":"glm_snapkv_128k_budget_attempt2","sengine-quest":"glm_quest_128k_budget_attempt2","sengine-omnikv":"glm_omnikv_128k_budget_attempt2"}
+  }
+}

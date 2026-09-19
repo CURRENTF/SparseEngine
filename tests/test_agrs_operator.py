@@ -6,11 +6,11 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from sparsevllm.distributed.collective_runtime import ParallelCollectiveRuntime
-from sparsevllm.distributed.parallel_context import ParallelContext, ParallelGroup
-from sparsevllm.operators import agrs
-from sparsevllm.operators.registry import OpResolver
-from sparsevllm.platforms.interface import DeviceCaps, PlatformEnum
+from sparseengine.distributed.collective_runtime import ParallelCollectiveRuntime
+from sparseengine.distributed.parallel_context import ParallelContext, ParallelGroup
+from sparseengine.operators import agrs
+from sparseengine.operators.registry import OpResolver
+from sparseengine.platforms.interface import DeviceCaps, PlatformEnum
 
 
 def _spec():
@@ -89,7 +89,7 @@ def test_agrs_workspace_survives_graph_replacement_and_closes_once(monkeypatch):
     op = Mock()
     prepare = Mock(return_value=op)
     monkeypatch.setattr(
-        "sparsevllm.distributed.moe_communication.prepare_parallel_agrs", prepare
+        "sparseengine.distributed.moe_communication.prepare_parallel_agrs", prepare
     )
     runtime.prepare()
     monkeypatch.setattr(

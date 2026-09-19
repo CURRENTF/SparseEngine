@@ -11,8 +11,8 @@ engine 无法为 prompt 或 prompt chunk 分配足够的 KV slot。请提高 `gp
 ## TensorRT-LLM DeepGEMM 编译缓存
 
 CUDA worker 使用独立的 TensorRT-LLM DeepGEMM 缓存目录，避免冷启动时并发编译写入。
-缓存根目录依次取 `SPARSEVLLM_TRTLLM_DG_CACHE_ROOT`、`TRTLLM_DG_CACHE_DIR`、
-`${XDG_CACHE_HOME:-~/.cache}/sparsevllm/trtllm-deepgemm`。两个显式变量都表示根目录；
+缓存根目录依次取 `SPARSEENGINE_TRTLLM_DG_CACHE_ROOT`、`TRTLLM_DG_CACHE_DIR`、
+`${XDG_CACHE_HOME:-~/.cache}/sparseengine/trtllm-deepgemm`。两个显式变量都表示根目录；
 每个 worker 独占一个带文件锁的子目录，并在启动时打印实际路径。主目录空间有限时，应将根目录设在可写的数据盘。
 
 并发 worker（包括 rank 相同的不同服务实例）在整个进程生命周期持有各自的文件锁。

@@ -5,13 +5,13 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-from sparsevllm.distributed import (
+from sparseengine.distributed import (
     ParallelCollectiveRuntime,
     ParallelTopology,
     init_parallel_context,
     reset_parallel_context,
 )
-from sparsevllm.utils.context import reset_context, set_context
+from sparseengine.utils.context import reset_context, set_context
 
 
 def _cuda_graph_collective_worker(

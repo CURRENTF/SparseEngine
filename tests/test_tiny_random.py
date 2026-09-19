@@ -7,7 +7,7 @@ import pytest
 import torch
 from transformers import Qwen3Config
 
-from sparsevllm.debug.tiny_random import (
+from sparseengine.debug.tiny_random import (
     apply_tiny_random_overrides,
     build_tiny_random_hf_model,
     initialize_sparse_model,
@@ -68,7 +68,7 @@ def test_tiny_random_rejects_unknown_override(tmp_path):
 
 
 def test_tiny_random_requires_config_when_enabled(monkeypatch):
-    monkeypatch.delenv("SPARSEVLLM_TINY_RANDOM_CONFIG", raising=False)
+    monkeypatch.delenv("SPARSEENGINE_TINY_RANDOM_CONFIG", raising=False)
 
     with pytest.raises(ValueError, match="requires a JSON override file"):
         resolve_tiny_random_settings(enabled=True, config_path=None, seed=0)
@@ -93,16 +93,16 @@ def test_tiny_random_hf_initialization_is_deterministic(tmp_path):
 
 def test_normal_config_import_does_not_import_tiny_random_module():
     env = dict(os.environ)
-    env.pop("SPARSEVLLM_TINY_RANDOM", None)
-    env.pop("SPARSEVLLM_TINY_RANDOM_CONFIG", None)
-    env.pop("SPARSEVLLM_TINY_RANDOM_SEED", None)
+    env.pop("SPARSEENGINE_TINY_RANDOM", None)
+    env.pop("SPARSEENGINE_TINY_RANDOM_CONFIG", None)
+    env.pop("SPARSEENGINE_TINY_RANDOM_SEED", None)
     completed = subprocess.run(
         [
             sys.executable,
             "-c",
             (
-                "import sys; import sparsevllm.config; "
-                "assert 'sparsevllm.debug.tiny_random' not in sys.modules"
+                "import sys; import sparseengine.config; "
+                "assert 'sparseengine.debug.tiny_random' not in sys.modules"
             ),
         ],
         check=False,

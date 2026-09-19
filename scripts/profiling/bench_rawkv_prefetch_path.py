@@ -13,7 +13,7 @@ from statistics import median
 import torch
 from flash_attn import flash_attn_func
 
-from sparsevllm.engine.cache_manager.raw_kv_offload import RawKVOffloadBuffer
+from sparseengine.engine.cache_manager.raw_kv_offload import RawKVOffloadBuffer
 
 
 def parse_int_list(value: str) -> list[int]:

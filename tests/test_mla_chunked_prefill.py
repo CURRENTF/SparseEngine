@@ -4,15 +4,15 @@ from dataclasses import replace
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.base import (
+from sparseengine.engine.cache_manager.base import (
     AttentionViewMeta,
     MlaLatentPayload,
     PrefillComputeView,
     PrefillScoreRequest,
 )
-from sparsevllm.kernels.triton.mla.prefill import attention_partial
-from sparsevllm.operators.mla_attention import MlaAttentionOpSpec, MlaSglFa3Provider
-from sparsevllm.operators.mla_prefill import ChunkedMlaPrefill
+from sparseengine.kernels.triton.mla.prefill import attention_partial
+from sparseengine.operators.mla_attention import MlaAttentionOpSpec, MlaSglFa3Provider
+from sparseengine.operators.mla_prefill import ChunkedMlaPrefill
 
 
 def partial_provider(backend, spec, device, batch_size):
@@ -21,8 +21,8 @@ def partial_provider(backend, spec, device, batch_size):
     if backend == "prepared":
         if torch.cuda.get_device_capability(device)[0] < 8:
             pytest.skip("pipelined MLA requires Ampere or newer")
-        from sparsevllm import platforms
-        from sparsevllm.operators.mla_prefill_attention import resolve_mla_prefill
+        from sparseengine import platforms
+        from sparseengine.operators.mla_prefill_attention import resolve_mla_prefill
 
         prepared = resolve_mla_prefill(spec, platforms.current_platform.get_device_caps(device.index))
 
@@ -35,7 +35,7 @@ def partial_provider(backend, spec, device, batch_size):
         return SimpleNamespace(
             run_prefill_chunk=partial, prefill_workspace_bytes=prepared.workspace_bytes,
         )
-    from sparsevllm.kernels.external.sgl.fa3 import sgl_fa3_device_support
+    from sparseengine.kernels.external.sgl.fa3 import sgl_fa3_device_support
 
     supported, reason = sgl_fa3_device_support(device.index)
     if not supported:
@@ -299,7 +299,7 @@ def test_history_budget_is_bounded_and_plan_released():
     # temporary startup cache's mapping after runtime retirement.
     import weakref
 
-    from sparsevllm.operators.mla_prefill import estimate_mla_prefill_workspace_bytes
+    from sparseengine.operators.mla_prefill import estimate_mla_prefill_workspace_bytes
 
     spec = MlaAttentionOpSpec(
         num_q_heads=20,

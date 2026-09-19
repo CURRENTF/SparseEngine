@@ -7,18 +7,18 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.llm_engine import LLMEngine
-from sparsevllm.multimodal.inputs import (
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.llm_engine import LLMEngine
+from sparseengine.multimodal.inputs import (
     MultiModalInputProcessor,
     ProcessedMultiModalPrompt,
     normalize_messages,
 )
-from sparsevllm.multimodal.runtime import MultiModalRuntime, MultiModalState
-from sparsevllm.models.qwen3_5_multimodal import qwen35_mrope_positions
-from sparsevllm.operators.qwen35_mrope import Qwen35MRotaryEmbedding
-from sparsevllm.sampling_params import SamplingParams
-from sparsevllm.utils.context import get_context, set_context
+from sparseengine.multimodal.runtime import MultiModalRuntime, MultiModalState
+from sparseengine.models.qwen3_5_multimodal import qwen35_mrope_positions
+from sparseengine.operators.qwen35_mrope import Qwen35MRotaryEmbedding
+from sparseengine.sampling_params import SamplingParams
+from sparseengine.utils.context import get_context, set_context
 
 
 def test_normalize_openai_multimodal_parts():
@@ -288,7 +288,7 @@ def test_multimodal_registration_error_survives_failed_rollback():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize("score_ndim", [2, 3])
 def test_gemma4_multimodal_context_attention_matches_reference(score_ndim):
-    from sparsevllm.kernels.triton.gemma4_multimodal_context_attention import (
+    from sparseengine.kernels.triton.gemma4_multimodal_context_attention import (
         gemma4_multimodal_context_attention,
     )
 

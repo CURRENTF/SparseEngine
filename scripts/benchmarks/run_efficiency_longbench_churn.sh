@@ -6,7 +6,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-SYSTEMS="${1:-svllm-vanilla,svllm-snapkv,vllm-vanilla}" # comma-separated
+SYSTEMS="${1:-sengine-vanilla,sengine-snapkv,vllm-vanilla}" # comma-separated
 MODEL_NAME="${2:-qwen3_30b}"
 GPUS="${3:-6,7}"
 SAMPLES_PER_TASK="${SAMPLES_PER_TASK:-8}"
@@ -21,8 +21,8 @@ case "${SPARSE_PREFILL_SCORE_MODE}" in
 esac
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-DATA_ROOT="${SPARSEVLLM_LONGBENCH_DATA_DIR:-${SPARSEVLLM_DATA_DIR:-data/LongBench}}"
-BASE_OUT="${SPARSEVLLM_OUTPUT_DIR:-outputs}/longbench_churn_$(date +%Y%m%d_%H%M%S)"
+DATA_ROOT="${SPARSEENGINE_LONGBENCH_DATA_DIR:-${SPARSEENGINE_DATA_DIR:-data/LongBench}}"
+BASE_OUT="${SPARSEENGINE_OUTPUT_DIR:-outputs}/longbench_churn_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "${BASE_OUT}"
 
 case "${MODEL_NAME}" in
@@ -54,10 +54,10 @@ export CUDA_VISIBLE_DEVICES="${GPUS}"
 export PYTHONPATH="${REPO_ROOT}:${REPO_ROOT}/src:${PYTHONPATH:-}"
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 export PATH="${CUDA_HOME}/bin:${PATH}"
-export SPARSEVLLM_DATA_DIR="${DATA_ROOT}"
-export SPARSEVLLM_LONGBENCH_DATA_DIR="${DATA_ROOT}"
+export SPARSEENGINE_DATA_DIR="${DATA_ROOT}"
+export SPARSEENGINE_LONGBENCH_DATA_DIR="${DATA_ROOT}"
 export TOKENIZERS_PARALLELISM="false"
-export PROFILER_SVLLM="1"
+export PROFILER_SENGINE="1"
 
 MON_PID=""
 cleanup_monitor() {
@@ -121,11 +121,11 @@ for SYS in "${SYS_ARR[@]}"; do
       --batch_size 8
   else
     case "${SYS_TRIM}" in
-      svllm-vanilla)
+      sengine-vanilla)
         SPARSE_METHOD="vanilla"
         HPARAMS="{\"tensor_parallel_size\": ${TP_SIZE}, \"gpu_memory_utilization\": 0.85, \"decode_graph\": true}"
         ;;
-      svllm-snapkv)
+      sengine-snapkv)
         SPARSE_METHOD="snapkv"
         HPARAMS="{\"tensor_parallel_size\": ${TP_SIZE}, \"gpu_memory_utilization\": 0.85, \"snapkv_window_size\": 64, \"sparse_prefill_score_mode\": \"${SPARSE_PREFILL_SCORE_MODE}\", \"sink_keep_tokens\": 64, \"decode_keep_tokens\": 2048, \"recent_keep_tokens\": 64, \"pool_kernel_size\": 7, \"decode_graph\": true}"
         ;;
@@ -148,7 +148,7 @@ for SYS in "${SYS_ARR[@]}"; do
       --top_k 1 \
       --batch_size 8
 
-    # Run Eval for Sparse-vLLM
+    # Run Eval for Sparse-Engine
     "${PYTHON_BIN}" "${REPO_ROOT}/benchmark/long_bench/eval.py" --path "${SYS_OUT}"
   fi
 

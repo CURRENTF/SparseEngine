@@ -8,23 +8,23 @@ import pytest
 import torch
 from transformers import Glm4MoeLiteConfig
 
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.engine.cache_manager import LayerBatchStates
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
-from sparsevllm.engine.cache_manager.methods.rkv import RKVCacheManager
-from sparsevllm.engine.cache_manager.standard import StandardCacheManager
-from sparsevllm.engine.cache_manager.storage import MlaLatentStorage
-from sparsevllm.engine.cache_manager.methods.streamingllm import (
+from sparseengine.config import RuntimeLayout
+from sparseengine.engine.cache_manager import LayerBatchStates
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.engine.cache_manager.methods.rkv import RKVCacheManager
+from sparseengine.engine.cache_manager.standard import StandardCacheManager
+from sparseengine.engine.cache_manager.storage import MlaLatentStorage
+from sparseengine.engine.cache_manager.methods.streamingllm import (
     StreamingLLMCacheManager,
 )
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.sparse_controller import (
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.sparse_controller import (
     LayerBatchSparseState,
     SparseController,
 )
-from sparsevllm.engine.sparse_methods.snapkv import SnapKVRuntime
-from sparsevllm.engine.sparse_methods.streamingllm import StreamingLLMRuntime
-from sparsevllm.utils.context import reset_context, set_context
+from sparseengine.engine.sparse_methods.snapkv import SnapKVRuntime
+from sparseengine.engine.sparse_methods.streamingllm import StreamingLLMRuntime
+from sparseengine.utils.context import reset_context, set_context
 
 from glm_test_helpers import _single_rank_parallel_context
 
@@ -88,11 +88,11 @@ def test_glm_rkv_query_cache_allocates_and_records_full_qk_head_width():
     )
     with (
         patch(
-            "sparsevllm.engine.cache_manager.base.platforms.get_current_platform",
+            "sparseengine.engine.cache_manager.base.platforms.get_current_platform",
             return_value=cpu_platform,
         ),
         patch(
-            "sparsevllm.engine.cache_manager.methods.snapkv.create_attention_cache_storage",
+            "sparseengine.engine.cache_manager.methods.snapkv.create_attention_cache_storage",
             return_value=SimpleNamespace(),
         ),
         patch.object(SnapKVCacheManager, "allocate_kv_cache", autospec=True),
@@ -350,7 +350,7 @@ def test_omnikv_observation_selects_mla_latent_active_slots():
 def test_snapkv_latent_score_handoff_preserves_final_window_and_accumulation():
     # Precomputed MLA scores must enter the same final-chunk accumulator and
     # selection lifecycle as explicit KV, without attempting another QK kernel.
-    from sparsevllm.engine.cache_manager.base import (
+    from sparseengine.engine.cache_manager.base import (
         AttentionViewMeta,
         PrefillComputeView,
     )

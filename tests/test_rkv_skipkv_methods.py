@@ -3,15 +3,15 @@ import unittest
 
 import torch
 
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.engine.cache_manager.methods.rkv import RKVCacheManager
-from sparsevllm.engine.cache_manager.methods.skipkv import (
+from sparseengine.config import RuntimeLayout
+from sparseengine.engine.cache_manager.methods.rkv import RKVCacheManager
+from sparseengine.engine.cache_manager.methods.skipkv import (
     SkipKVCacheManager,
     SkipKVSentence,
     SkipKVSequenceState,
 )
-from sparsevllm.engine.activation_controller import ActivationController
-from sparsevllm.engine.sequence import Sequence
+from sparseengine.engine.activation_controller import ActivationController
+from sparseengine.engine.sequence import Sequence
 
 
 class RKVSkipKVMethodTest(unittest.TestCase):

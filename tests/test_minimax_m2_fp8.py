@@ -6,17 +6,17 @@ import torch
 import torch.nn.functional as F
 from safetensors.torch import save_file
 
-from sparsevllm.layers.linear import ReplicatedLinear
-from sparsevllm.layers.rotary_embedding import (
+from sparseengine.layers.linear import ReplicatedLinear
+from sparseengine.layers.rotary_embedding import (
     RotaryEmbedding,
     apply_partial_rotary_emb,
     apply_rotary_emb,
 )
-from sparsevllm.quantization.fp8 import (
+from sparseengine.quantization.fp8 import (
     fp8_blockwise_dequantize,
     fp8_blockwise_linear_reference,
 )
-from sparsevllm.utils.loader import load_model
+from sparseengine.utils.loader import load_model
 
 
 def _reference_quantization():
@@ -122,7 +122,7 @@ class _StrictQuantizedModel(torch.nn.Module):
         super().__init__()
         context = SimpleNamespace(tp_rank=0, tp_size=1)
         with patch(
-            "sparsevllm.layers.linear.get_parallel_context",
+            "sparseengine.layers.linear.get_parallel_context",
             return_value=context,
         ):
             self.proj = ReplicatedLinear(

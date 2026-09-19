@@ -93,24 +93,24 @@ class OpenAISmartRouterGpuSmokeTest(unittest.TestCase):
         self.assertIn("prefix match", summary["error"])
         self.assertEqual(summary["served_model_name"], "router-smoke-model")
 
-    @unittest.skipUnless(_env_flag("SPARSEVLLM_ROUTER_GPU_TEST"), "set SPARSEVLLM_ROUTER_GPU_TEST=1 to run")
+    @unittest.skipUnless(_env_flag("SPARSEENGINE_ROUTER_GPU_TEST"), "set SPARSEENGINE_ROUTER_GPU_TEST=1 to run")
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for the real router GPU smoke")
     def test_real_two_worker_router_smoke_on_gpus(self):
-        model = os.getenv("SPARSEVLLM_ROUTER_GPU_MODEL")
+        model = os.getenv("SPARSEENGINE_ROUTER_GPU_MODEL")
         if not model:
-            self.fail("SPARSEVLLM_ROUTER_GPU_MODEL must point to a local model path.")
+            self.fail("SPARSEENGINE_ROUTER_GPU_MODEL must point to a local model path.")
         if not Path(model).exists():
-            self.fail(f"SPARSEVLLM_ROUTER_GPU_MODEL does not exist: {model}")
+            self.fail(f"SPARSEENGINE_ROUTER_GPU_MODEL does not exist: {model}")
 
-        gpus = _split_csv("SPARSEVLLM_ROUTER_GPU_GPUS")
+        gpus = _split_csv("SPARSEENGINE_ROUTER_GPU_GPUS")
         if len(gpus) != 2:
-            self.fail("SPARSEVLLM_ROUTER_GPU_GPUS must contain exactly two GPU ids, for example '2,3'.")
+            self.fail("SPARSEENGINE_ROUTER_GPU_GPUS must contain exactly two GPU ids, for example '2,3'.")
 
-        methods = os.getenv("SPARSEVLLM_ROUTER_GPU_METHODS", "omnikv,snapkv")
-        ports = os.getenv("SPARSEVLLM_ROUTER_GPU_PORTS", "19181,19182")
-        router_port = os.getenv("SPARSEVLLM_ROUTER_GPU_ROUTER_PORT", "19180")
-        output_root = Path(os.getenv("SPARSEVLLM_ROUTER_GPU_OUTPUT_ROOT", tempfile.gettempdir()))
-        output_dir = output_root / "sparsevllm_router_gpu_smoke"
+        methods = os.getenv("SPARSEENGINE_ROUTER_GPU_METHODS", "omnikv,snapkv")
+        ports = os.getenv("SPARSEENGINE_ROUTER_GPU_PORTS", "19181,19182")
+        router_port = os.getenv("SPARSEENGINE_ROUTER_GPU_ROUTER_PORT", "19180")
+        output_root = Path(os.getenv("SPARSEENGINE_ROUTER_GPU_OUTPUT_ROOT", tempfile.gettempdir()))
+        output_dir = output_root / "sparseengine_router_gpu_smoke"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         command = [
@@ -129,17 +129,17 @@ class OpenAISmartRouterGpuSmokeTest(unittest.TestCase):
             "--output-dir",
             str(output_dir),
             "--max-model-len",
-            os.getenv("SPARSEVLLM_ROUTER_GPU_MAX_MODEL_LEN", "4096"),
+            os.getenv("SPARSEENGINE_ROUTER_GPU_MAX_MODEL_LEN", "4096"),
             "--prefix-words",
-            os.getenv("SPARSEVLLM_ROUTER_GPU_PREFIX_WORDS", "512"),
+            os.getenv("SPARSEENGINE_ROUTER_GPU_PREFIX_WORDS", "512"),
             "--busy-requests",
-            os.getenv("SPARSEVLLM_ROUTER_GPU_BUSY_REQUESTS", "2"),
+            os.getenv("SPARSEENGINE_ROUTER_GPU_BUSY_REQUESTS", "2"),
             "--busy-max-tokens",
-            os.getenv("SPARSEVLLM_ROUTER_GPU_BUSY_MAX_TOKENS", "64"),
+            os.getenv("SPARSEENGINE_ROUTER_GPU_BUSY_MAX_TOKENS", "64"),
             "--balance-requests",
-            os.getenv("SPARSEVLLM_ROUTER_GPU_BALANCE_REQUESTS", "3"),
+            os.getenv("SPARSEENGINE_ROUTER_GPU_BALANCE_REQUESTS", "3"),
             "--random-requests",
-            os.getenv("SPARSEVLLM_ROUTER_GPU_RANDOM_REQUESTS", "4"),
+            os.getenv("SPARSEENGINE_ROUTER_GPU_RANDOM_REQUESTS", "4"),
             "--require-prefix-route",
             "--require-overload-reroute",
         ]
@@ -147,11 +147,11 @@ class OpenAISmartRouterGpuSmokeTest(unittest.TestCase):
             "command": command,
             "cwd": str(Path.cwd()),
             "env": {
-                "SPARSEVLLM_ROUTER_GPU_MODEL": model,
-                "SPARSEVLLM_ROUTER_GPU_GPUS": ",".join(gpus),
-                "SPARSEVLLM_ROUTER_GPU_METHODS": methods,
-                "SPARSEVLLM_ROUTER_GPU_PORTS": ports,
-                "SPARSEVLLM_ROUTER_GPU_ROUTER_PORT": router_port,
+                "SPARSEENGINE_ROUTER_GPU_MODEL": model,
+                "SPARSEENGINE_ROUTER_GPU_GPUS": ",".join(gpus),
+                "SPARSEENGINE_ROUTER_GPU_METHODS": methods,
+                "SPARSEENGINE_ROUTER_GPU_PORTS": ports,
+                "SPARSEENGINE_ROUTER_GPU_ROUTER_PORT": router_port,
             },
         }
         with (output_dir / "pytest_invocation.json").open("w", encoding="utf-8") as f:
@@ -165,7 +165,7 @@ class OpenAISmartRouterGpuSmokeTest(unittest.TestCase):
             cwd=Path.cwd(),
             env=env,
             check=True,
-            timeout=float(os.getenv("SPARSEVLLM_ROUTER_GPU_TIMEOUT_S", "900")),
+            timeout=float(os.getenv("SPARSEENGINE_ROUTER_GPU_TIMEOUT_S", "900")),
         )
 
         with (output_dir / "router_smoke_summary.json").open("r", encoding="utf-8") as f:

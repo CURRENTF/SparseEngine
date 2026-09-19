@@ -4,10 +4,10 @@ This repository includes repo-local Codex skills.
 
 ## Available skills
 
-- `add-sparse-method`: Add or refactor a first-class Sparse-vLLM sparse method following this repo's architecture. Use when Codex needs to introduce a new `sparse_method`, move method logic out of `attention.py` or `utils/`, add method-specific cache metadata or decode-time view building, and preserve the cache-manager-first design. File: `.agents/skills/add-sparse-method/SKILL.md`
-- `code-review`: Review Sparse-vLLM diffs for correctness, sparse-runtime and operator architecture, scheduling semantics, reproducibility, performance, and tests. Use when reviewing PRs, git diffs, sparse method integrations, operator/provider or kernel changes, cache-manager or scheduler changes, benchmark/evaluation scripts, OpenAI serving changes, or when the user asks for a code review. File: `.agents/skills/code-review/SKILL.md`
+- `add-sparse-method`: Add or refactor a first-class Sparse-Engine sparse method following this repo's architecture. Use when Codex needs to introduce a new `sparse_method`, move method logic out of `attention.py` or `utils/`, add method-specific cache metadata or decode-time view building, and preserve the cache-manager-first design. File: `.agents/skills/add-sparse-method/SKILL.md`
+- `code-review`: Review Sparse-Engine diffs for correctness, sparse-runtime and operator architecture, scheduling semantics, reproducibility, performance, and tests. Use when reviewing PRs, git diffs, sparse method integrations, operator/provider or kernel changes, cache-manager or scheduler changes, benchmark/evaluation scripts, OpenAI serving changes, or when the user asks for a code review. File: `.agents/skills/code-review/SKILL.md`
 - `review-operator-organization`: Review operator/provider boundaries, device capability selection, kernel ownership, dependency compatibility, weight layouts, fallback semantics, and validation. Use for changes under `operators/`, `platforms/`, Triton kernels, external kernel integrations, or model-to-operator call sites. File: `.agents/skills/review-operator-organization/SKILL.md`
-- `optimize-sparsevllm-kernel`: Find, implement, tune, profile, and integrate Sparse-vLLM GPU kernels across Triton, TileLang, CUDA/CuTe, and external SGL providers. Use for kernel hotspots, fusion, correctness baselines, microbenchmarks, Nsight Compute analysis, provider integration, or matched end-to-end performance validation. File: `.agents/skills/optimize-sparsevllm-kernel/SKILL.md`
+- `optimize-sparseengine-kernel`: Find, implement, tune, profile, and integrate Sparse-Engine GPU kernels across Triton, TileLang, CUDA/CuTe, and external SGL providers. Use for kernel hotspots, fusion, correctness baselines, microbenchmarks, Nsight Compute analysis, provider integration, or matched end-to-end performance validation. File: `.agents/skills/optimize-sparseengine-kernel/SKILL.md`
 - `paper-efficiency`: Standardize paper efficiency comparisons and capacity sweeps using shared entrypoints, explicit defaults, and boundary-only decode timing. Use for paper benchmarks and deciding whether results can share a figure, not figure-only styling. File: `.agents/skills/paper-efficiency/SKILL.md`
 
 ## How to use
@@ -16,11 +16,11 @@ This repository includes repo-local Codex skills.
 - In this repo, invoke the review skill as `$code-review`.
 - Invoke focused operator reviews as `$review-operator-organization`;
   `$code-review` loads it automatically for relevant diffs.
-- Invoke the end-to-end kernel workflow as `$optimize-sparsevllm-kernel`; it
+- Invoke the end-to-end kernel workflow as `$optimize-sparseengine-kernel`; it
   loads only the selected DSL and profiling references.
 - Invoke `$paper-efficiency` for paper-level engine efficiency comparisons.
-- Keep method-specific runtime state in `src/sparsevllm/engine/cache_manager/`.
-- Keep `src/sparsevllm/layers/attention.py` generic and hook new methods through shared cache-manager interfaces when possible.
+- Keep method-specific runtime state in `src/sparseengine/engine/cache_manager/`.
+- Keep `src/sparseengine/layers/attention.py` generic and hook new methods through shared cache-manager interfaces when possible.
 
 # Task Running Rules
 
@@ -60,7 +60,7 @@ use the documented Nsight diagnostic for kernel-timeline attribution.
   Do not add per-step CUDA synchronization to request TTFT/TPOT measurements:
   timestamp token publication events and preserve the engine's execution rhythm.
   The old
-  `scripts/benchmarks/bench_sparse_vllm.py` command remains a compatibility
+  `scripts/benchmarks/bench_sparse_engine.py` command remains a compatibility
   wrapper; new callers should use the canonical microbench path.
 - TTFT and TPOT distributions pool individual measured requests across
   iterations, reporting mean/P50/P95/P99. TPOT is `(finish-first)/(O-1)` for
@@ -113,7 +113,7 @@ use the documented Nsight diagnostic for kernel-timeline attribution.
    not enablement whitelists. Performance claims still require measurements.
 4. Do not narrow an upstream provider's correctness domain because local
    hardware or shape coverage is incomplete. Validate the adapter and the
-   Sparse-vLLM-specific boundary, and record upstream-declared support separately
+   Sparse-Engine-specific boundary, and record upstream-declared support separately
    from locally validated correctness and performance evidence.
 5. Resolve and prepare providers before execution. Unsupported candidates may
    be rejected during resolution, but a prepare, JIT, warmup, or execution

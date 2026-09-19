@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.engine.async_scheduling.execution import AsyncExecution, DeviceLogprobs
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.sampling_params import SamplingParams
+from sparseengine.engine.async_scheduling.execution import AsyncExecution, DeviceLogprobs
+from sparseengine.engine.sequence import Sequence
+from sparseengine.sampling_params import SamplingParams
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')

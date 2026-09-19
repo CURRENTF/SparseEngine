@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from sparsevllm.kernels.triton.sglang_gemma4_decode_attention import (
+from sparseengine.kernels.triton.sglang_gemma4_decode_attention import (
     sglang_gemma4_decode,
 )
 

@@ -6,10 +6,10 @@ import torch
 import pytest
 from torch.utils._python_dispatch import TorchDispatchMode
 
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.layers.sampler import Sampler
-from sparsevllm.sampling_params import SamplingParams
-from sparsevllm.sampling_params import resolve_eos_token_ids
+from sparseengine.engine.sequence import Sequence
+from sparseengine.layers.sampler import Sampler
+from sparseengine.sampling_params import SamplingParams
+from sparseengine.sampling_params import resolve_eos_token_ids
 
 
 class SamplerTest(unittest.TestCase):
@@ -248,7 +248,7 @@ class SamplerTest(unittest.TestCase):
 
         seq.append_token(2)
         with patch(
-            "sparsevllm.engine.sequence.torch.tensor",
+            "sparseengine.engine.sequence.torch.tensor",
             side_effect=AssertionError("singleton update must not allocate a tensor"),
         ):
             repetition_ids = seq.repetition_penalty_token_ids_tensor(
@@ -263,7 +263,7 @@ class SamplerTest(unittest.TestCase):
 
         seq.append_token(3)
         with patch(
-            "sparsevllm.engine.sequence.torch.tensor",
+            "sparseengine.engine.sequence.torch.tensor",
             side_effect=AssertionError("singleton update must not allocate a tensor"),
         ):
             repetition_ids = seq.repetition_penalty_token_ids_tensor(
@@ -350,7 +350,7 @@ def test_unfiltered_sampling_preserves_distribution_and_mixed_greedy(device):
 
 def test_runner_selects_unfiltered_sampling_from_host_parameters():
     from types import SimpleNamespace
-    from sparsevllm.engine.model_runner import ModelRunner
+    from sparseengine.engine.model_runner import ModelRunner
 
     runner = object.__new__(ModelRunner)
     runner.sampler = Sampler()

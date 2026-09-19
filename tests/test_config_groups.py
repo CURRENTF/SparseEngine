@@ -3,11 +3,11 @@ from types import SimpleNamespace
 import torch
 import pytest
 
-from sparsevllm.config import Config as PublicConfig
-from sparsevllm.configs import Config
-from sparsevllm.configs.model import _normalize_hf_config_dtype
-from sparsevllm.configs.groups import SparseMethodConfig
-from sparsevllm.configs.sparse import _normalize_h2o, _normalize_sparse_prefill_score
+from sparseengine.config import Config as PublicConfig
+from sparseengine.configs import Config
+from sparseengine.configs.model import _normalize_hf_config_dtype
+from sparseengine.configs.groups import SparseMethodConfig
+from sparseengine.configs.sparse import _normalize_h2o, _normalize_sparse_prefill_score
 
 
 def test_public_config_import_remains_compatible():
@@ -81,7 +81,7 @@ def test_h2o_online_eviction_still_validates_probability_window():
 
 
 def test_mla_h2o_approximation_warns_once_without_changing_prefill_window(monkeypatch):
-    from sparsevllm.utils import log
+    from sparseengine.utils import log
 
     monkeypatch.setattr(log, "_seen_messages", set())
     messages = []
@@ -114,7 +114,7 @@ def test_mla_h2o_approximation_warns_once_without_changing_prefill_window(monkey
 
 
 def test_omnikv_offload_rejects_other_methods():
-    from sparsevllm.configs.sparse import normalize_sparse_method_name
+    from sparseengine.configs.sparse import normalize_sparse_method_name
 
     config = SparseMethodConfig(sparse_method="h2o", enable_omnikv_offload=True)
     with pytest.raises(ValueError, match="enable_omnikv_offload requires"):
@@ -123,7 +123,7 @@ def test_omnikv_offload_rejects_other_methods():
 
 @pytest.mark.parametrize("tokens", [-1, True, 1.5])
 def test_omnikv_cache_rejects_invalid_capacity(tokens):
-    from sparsevllm.configs.sparse import normalize_sparse_method_name
+    from sparseengine.configs.sparse import normalize_sparse_method_name
 
     config = SparseMethodConfig(
         sparse_method="omnikv",
@@ -135,7 +135,7 @@ def test_omnikv_cache_rejects_invalid_capacity(tokens):
 
 
 def test_omnikv_cache_requires_host_backing():
-    from sparsevllm.configs.sparse import normalize_sparse_method_name
+    from sparseengine.configs.sparse import normalize_sparse_method_name
 
     config = SparseMethodConfig(
         sparse_method="omnikv", omnikv_offload_cache_tokens=1024

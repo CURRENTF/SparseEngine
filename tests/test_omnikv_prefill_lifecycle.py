@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.methods.omnikv.manager import OmniKVCacheManager
-from sparsevllm.operators.indexed_host_copy import gather_prefill_history
-from sparsevllm.utils.context import get_context
+from sparseengine.engine.cache_manager.methods.omnikv.manager import OmniKVCacheManager
+from sparseengine.operators.indexed_host_copy import gather_prefill_history
+from sparseengine.utils.context import get_context
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")

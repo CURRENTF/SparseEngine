@@ -3,7 +3,7 @@ import sys
 import time
 import torch
 
-from sparsevllm.kernels.triton.omnikv_fused import build_omnikv_keep_and_slots
+from sparseengine.kernels.triton.omnikv_fused import build_omnikv_keep_and_slots
 
 
 def reference_build(topk_indices, hist_lens, recent_chunk_lens, buffer_req_to_token_slots, req_indices, num_sink):

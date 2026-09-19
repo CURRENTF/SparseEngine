@@ -4,10 +4,10 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.engine.async_scheduling.execution import AsyncDrainRequired, AsyncExecution
-from sparsevllm.engine.async_scheduling.scheduler import AsyncScheduler, execution_snapshot
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.sampling_params import SamplingParams
+from sparseengine.engine.async_scheduling.execution import AsyncDrainRequired, AsyncExecution
+from sparseengine.engine.async_scheduling.scheduler import AsyncScheduler, execution_snapshot
+from sparseengine.engine.sequence import Sequence
+from sparseengine.sampling_params import SamplingParams
 from test_prefill_schedule_policy import FakeMemoryOracle, make_scheduler
 
 
@@ -205,8 +205,8 @@ def test_cpu_token_dependency_retires_before_snapshotting_next_input():
 
 
 def test_async_submission_runs_state_transitions_before_context_is_reset():
-    from sparsevllm.engine.model_runner import ModelRunner
-    from sparsevllm.utils.context import get_context, reset_context, set_context
+    from sparseengine.engine.model_runner import ModelRunner
+    from sparseengine.utils.context import get_context, reset_context, set_context
     calls = []
     runner = SimpleNamespace(
         _async_submitting=True,
@@ -241,8 +241,8 @@ def test_cpu_history_boundary_allows_nonpublishing_prefill_chunks():
 def test_async_configuration_resolves_automatic_and_explicit_execution(tmp_path, monkeypatch,
                                                                        requested, streams, expected):
     from transformers import Qwen3Config
-    from sparsevllm.config import Config
-    from sparsevllm.platforms import device_runtime
+    from sparseengine.config import Config
+    from sparseengine.platforms import device_runtime
     Qwen3Config(hidden_size=128, intermediate_size=256, num_hidden_layers=2,
                 num_attention_heads=4, num_key_value_heads=2, head_dim=32,
                 vocab_size=256, max_position_embeddings=1024).save_pretrained(tmp_path)

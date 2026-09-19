@@ -133,7 +133,7 @@ def compare_vllm(args):
         return q, k, v, cq, ck
 
     args.output_dir.mkdir(parents=True, exist_ok=False)
-    from sparsevllm.kernels.triton.mla.prefill_pipelined import attention_partial
+    from sparseengine.kernels.triton.mla.prefill_pipelined import attention_partial
 
     candidate = attention_partial
     if args.candidate_module:
@@ -142,11 +142,11 @@ def compare_vllm(args):
     elif args.candidate_kernel == "pipelined-split":
         candidate = partial(attention_partial, split_kv=True)
     elif args.candidate_kernel == "hopper":
-        from sparsevllm.kernels.triton.mla.prefill_hopper import attention_partial
+        from sparseengine.kernels.triton.mla.prefill_hopper import attention_partial
 
         candidate = partial(attention_partial, split_kv=True)
     elif args.candidate_kernel == "provider":
-        from sparsevllm.operators.mla_attention import (
+        from sparseengine.operators.mla_attention import (
             MlaAttentionOpSpec,
             MlaTritonProvider,
         )
@@ -213,7 +213,7 @@ def compare_vllm(args):
                     "vllm": partial(vllm_prefill, q, k, v, cq, ck, qn, kn, causal),
                 }
                 if args.include_old:
-                    from sparsevllm.kernels.triton.mla.prefill import attention_partial as old_partial
+                    from sparseengine.kernels.triton.mla.prefill import attention_partial as old_partial
                     calls["old"] = partial(old_partial, q, k, v, cq, ck, qn, kn, scale=SCALE, causal=causal)
                 errors = {}
                 cold_ms = {}
@@ -334,18 +334,18 @@ def main():
             parser.error("the matched GLM vLLM comparison requires 20 heads")
         return compare_vllm(args)
     module_name = "prefill_pipelined" if args.git_kernel == "pipelined" else "prefill"
-    prefill = importlib.import_module(f"sparsevllm.kernels.triton.mla.{module_name}")
-    from sparsevllm.kernels.triton.context_flashattention_nopad import context_attention_fwd
+    prefill = importlib.import_module(f"sparseengine.kernels.triton.mla.{module_name}")
+    from sparseengine.kernels.triton.context_flashattention_nopad import context_attention_fwd
 
     root = args.output_dir
     root.mkdir(parents=True, exist_ok=True)
     if (root / "run_manifest.json").exists() or (root / "raw_samples.jsonl").exists():
         raise FileExistsError("Use a new output directory to preserve previous results")
-    path = f"src/sparsevllm/kernels/triton/mla/{module_name}.py"
+    path = f"src/sparseengine/kernels/triton/mla/{module_name}.py"
     source = git("show", f"{args.baseline_ref}:{path}") + "\n"
     baseline_path = root / "baseline_prefill.py"
     baseline_path.write_text(source)
-    spec = importlib.util.spec_from_file_location("sparsevllm.kernels.triton.mla.baseline_prefill", baseline_path)
+    spec = importlib.util.spec_from_file_location("sparseengine.kernels.triton.mla.baseline_prefill", baseline_path)
     baseline = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(baseline)
     props = torch.cuda.get_device_properties(0)

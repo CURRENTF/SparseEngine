@@ -133,10 +133,10 @@ YaRN's effective context length is `original_max_position_embeddings × factor`;
 
 ## Benchmark adapter
 
-Text benchmarks share `benchmark/model_adapters/sparsevllm.py`. It accepts the
+Text benchmarks share `benchmark/model_adapters/sparseengine.py`. It accepts the
 same public parameter names, constructs the native engine, and exposes a small
 generation callable for LongBench, MathBench, NIAH, and RULER core. SCBench uses
-its native `sparsevllm` attention type. There is no `--backend hf` option.
+its native `sparseengine` attention type. There is no `--backend hf` option.
 
 ## Decode reservation window
 

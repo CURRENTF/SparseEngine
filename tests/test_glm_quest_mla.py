@@ -4,21 +4,21 @@ from types import SimpleNamespace
 
 import torch
 
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.engine.cache_manager import (
+from sparseengine.config import RuntimeLayout
+from sparseengine.engine.cache_manager import (
     LayerBatchStates,
     MlaLatentPayload,
     MlaLatentSelectionQuery,
     MlaLatentWrite,
     SparseSelection,
 )
-from sparsevllm.engine.cache_manager.methods.quest import QuestCacheManager
-from sparsevllm.engine.cache_manager.storage import MlaLatentStorage
-from sparsevllm.operators.quest_selection import (
+from sparseengine.engine.cache_manager.methods.quest import QuestCacheManager
+from sparseengine.engine.cache_manager.storage import MlaLatentStorage
+from sparseengine.operators.quest_selection import (
     QuestPageSelectionOpSpec,
     TorchQuestPageSelectionProvider,
 )
-from sparsevllm.utils.context import reset_context, set_context
+from sparseengine.utils.context import reset_context, set_context
 
 
 def test_quest_mla_fused_query_matches_expanded_logits_and_bounds_each_page():

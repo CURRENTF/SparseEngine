@@ -11,11 +11,11 @@ import time
 from plot_decode_capacity import validate_measurement
 
 PACKAGE = Path(__file__).resolve().parent
-FLAG = "SPARSEVLLM_DISABLE_TILE_MLA_SPLIT_PROFILE"
+FLAG = "SPARSEENGINE_DISABLE_TILE_MLA_SPLIT_PROFILE"
 
 
 def require_experiment_patch(repo):
-    source = repo / "src/sparsevllm/kernels/tilelang/mla/runtime.py"
+    source = repo / "src/sparseengine/kernels/tilelang/mla/runtime.py"
     if FLAG not in source.read_text():
         raise ValueError("This historical ablation requires the archived profile-bypass.patch "
                          "on its measured runtime source; the temporary engine switch was removed.")
@@ -38,7 +38,7 @@ def main():
     save(root / "config.json", config)
     env = dict(os.environ, PYTHONPATH=f"{repo}:{repo / 'src'}", HF_HUB_OFFLINE="1",
                TOKENIZERS_PARALLELISM="false")
-    env.pop("SPARSEVLLM_PLATFORM", None)
+    env.pop("SPARSEENGINE_PLATFORM", None)
     for key in ("TRITON_CACHE_DIR", "TORCHINDUCTOR_CACHE_DIR", "CUDA_CACHE_PATH", "TILELANG_CACHE_DIR"):
         path = root / "cache" / key.lower()
         path.mkdir(parents=True)
@@ -124,14 +124,14 @@ def main():
             case_env = dict(env, **{FLAG: "0" if variant == "profile" else "1"})
             with socket.socket() as listener:
                 listener.bind(("127.0.0.1", 0))
-                case_env["SPARSEVLLM_MASTER_PORT"] = str(listener.getsockname()[1])
-            command = prefix + ["-u", "benchmark/microbench.py", "--engine", "sparsevllm",
+                case_env["SPARSEENGINE_MASTER_PORT"] = str(listener.getsockname()[1])
+            command = prefix + ["-u", "benchmark/microbench.py", "--engine", "sparseengine",
                 "--model_path", config["model"], "--lengths", str(length), "--output_len", str(output),
                 "--batch_sizes", str(batch), "--methods", "omnikv", "--hyper_params", "@" + str(path / "hyper_params.json"),
                 "--synchronize_step_timing", "--require_full_decode_batch", "--decode_warmup_steps_after_full", "8" if case.get("smoke") else "32",
                 "--output_dir", str(path)]
             save(path / "command.json", {"command": command, "env": {key: case_env[key] for key in
-                (FLAG, "CUDA_VISIBLE_DEVICES", "SPARSEVLLM_MASTER_PORT", "PYTHONPATH")}})
+                (FLAG, "CUDA_VISIBLE_DEVICES", "SPARSEENGINE_MASTER_PORT", "PYTHONPATH")}})
             status(name, "running", variant=variant, batch=batch)
             execute(command, path / "run.log", case_env)
             measured = validate_measurement(path / "performance.jsonl", batch, {"input_len": length, "output_len": output})

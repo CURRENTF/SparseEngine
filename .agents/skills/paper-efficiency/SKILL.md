@@ -1,6 +1,6 @@
 ---
 name: paper-efficiency
-description: Standardize Sparse-vLLM paper efficiency comparisons, capacity sweeps, and reuse of results in figures. Use for 论文效率测试、跨引擎吞吐对比、最大并发扫描 and their measurement protocols; not isolated kernel microbenchmarks or figure-only styling.
+description: Standardize Sparse-Engine paper efficiency comparisons, capacity sweeps, and reuse of results in figures. Use for 论文效率测试、跨引擎吞吐对比、最大并发扫描 and their measurement protocols; not isolated kernel microbenchmarks or figure-only styling.
 ---
 
 # Paper Efficiency

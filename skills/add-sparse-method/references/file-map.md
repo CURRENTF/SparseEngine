@@ -1,28 +1,28 @@
 # File Map
 
-Use this map to decide which repo files must change when adding a new Sparse-vLLM method.
+Use this map to decide which repo files must change when adding a new Sparse-Engine method.
 
 ## Always Review
 
-- `src/sparsevllm/configs/groups.py` and `src/sparsevllm/configs/runtime.py`
-- `src/sparsevllm/engine/cache_manager/base.py`
-- `src/sparsevllm/layers/attention.py`
-- `src/sparsevllm/engine/sparse_controller.py`
+- `src/sparseengine/configs/groups.py` and `src/sparseengine/configs/runtime.py`
+- `src/sparseengine/engine/cache_manager/base.py`
+- `src/sparseengine/layers/attention.py`
+- `src/sparseengine/engine/sparse_controller.py`
 - `README.md`
 
 ## Add a First-Class Method
 
 Touch these files when the method becomes a supported `sparse_method`.
 
-- `src/sparsevllm/configs/groups.py` or `src/sparsevllm/configs/runtime.py`
+- `src/sparseengine/configs/groups.py` or `src/sparseengine/configs/runtime.py`
   Add config fields, validation, and defaults.
-- `src/sparsevllm/engine/cache_manager/<method>.py`
+- `src/sparseengine/engine/cache_manager/<method>.py`
   Put method state, metadata, cache layout, and decode-time hooks here.
-- `src/sparsevllm/engine/cache_manager/base.py`
+- `src/sparseengine/engine/cache_manager/base.py`
   Register `CacheManager.create(...)` routing and add generic hooks only if the existing hooks are insufficient.
-- `src/sparsevllm/engine/cache_manager/__init__.py`
+- `src/sparseengine/engine/cache_manager/__init__.py`
   Export the new cache manager when appropriate.
-- `src/sparsevllm/engine/activation_controller.py`
+- `src/sparseengine/engine/activation_controller.py`
   Put method-specific hidden-state steering or activation capture here, with
   `SparseController` owning the lifecycle and model files calling only a generic
   hook.
@@ -31,7 +31,7 @@ Touch these files when the method becomes a supported `sparse_method`.
 
 ## Touch `SparseController` Only for Controller Work
 
-Edit `src/sparsevllm/engine/sparse_controller.py` when the method:
+Edit `src/sparseengine/engine/sparse_controller.py` when the method:
 
 - reuses observed attention scores
 - needs cross-layer propagation
@@ -47,7 +47,7 @@ hook.
 
 ## Touch `attention.py` Only for Generic Hooks
 
-Edit `src/sparsevllm/layers/attention.py` when you need to:
+Edit `src/sparseengine/layers/attention.py` when you need to:
 
 - call a new generic cache-manager hook
 - wire a new shared kernel path
@@ -57,7 +57,7 @@ Do not bury a full method implementation in `attention.py`.
 
 ## Add Kernel Code Only When Needed
 
-Touch `src/sparsevllm/kernels/triton/` or another explicit kernel module when:
+Touch `src/sparseengine/kernels/triton/` or another explicit kernel module when:
 
 - the existing decode or prefill kernels are the bottleneck
 - the method requires a new layout-aware fused operator

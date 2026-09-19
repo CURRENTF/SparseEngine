@@ -24,9 +24,9 @@ if str(SRC_ROOT) not in sys.path:
 from benchmark.multimodal.video_qa import streamingbench as streaming
 from benchmark.multimodal.video_qa.datasets import load_video_qa_rows
 
-DEFAULT_MODEL_ROOT = Path(os.getenv("SPARSEVLLM_MODEL_ROOT", PROJECT_ROOT / "models"))
-DEFAULT_DATA_ROOT = Path(os.getenv("SPARSEVLLM_DATA_DIR", PROJECT_ROOT / "data"))
-DEFAULT_OUTPUT_ROOT = Path(os.getenv("SPARSEVLLM_OUTPUT_DIR", PROJECT_ROOT / "outputs"))
+DEFAULT_MODEL_ROOT = Path(os.getenv("SPARSEENGINE_MODEL_ROOT", PROJECT_ROOT / "models"))
+DEFAULT_DATA_ROOT = Path(os.getenv("SPARSEENGINE_DATA_DIR", PROJECT_ROOT / "data"))
+DEFAULT_OUTPUT_ROOT = Path(os.getenv("SPARSEENGINE_OUTPUT_DIR", PROJECT_ROOT / "outputs"))
 
 DEFAULT_DATASET_DIRS = {
     "mvbench": str(DEFAULT_DATA_ROOT / "MVBench_hf"),

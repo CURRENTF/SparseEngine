@@ -22,7 +22,7 @@ if str(SRC_ROOT) not in sys.path:
 
 # Where to append scbench_eval.log. Default to repo-local outputs unless overridden.
 BASE_PATH = os.environ.get(
-    "SPARSEVLLM_OUTPUT_DIR",
+    "SPARSEENGINE_OUTPUT_DIR",
     str(REPO_ROOT / "outputs"),
 )
 
@@ -61,7 +61,7 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils.import_utils import _is_package_available
 
-SPARSEVLLM_ATTN_TYPE = "sparsevllm"
+SPARSEENGINE_ATTN_TYPE = "sparseengine"
 
 LLM = None
 SamplingParams = None
@@ -197,7 +197,7 @@ def _write_jsonl(records: list[dict[str, Any]], path: Path, *, append: bool = Tr
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def _flush_sparsevllm_prefix_trace(
+def _flush_sparseengine_prefix_trace(
     model: Any,
     path: Path,
     *,
@@ -226,7 +226,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _write_sparsevllm_prefix_summary(trace_path: Path, summary_path: Path) -> dict[str, Any]:
+def _write_sparseengine_prefix_summary(trace_path: Path, summary_path: Path) -> dict[str, Any]:
     records = _read_jsonl(trace_path)
     success = [record for record in records if record.get("status") == "success"]
     failures = [record for record in records if record.get("status") != "success"]
@@ -292,14 +292,14 @@ def _write_sparsevllm_prefix_summary(trace_path: Path, summary_path: Path) -> di
     return summary
 
 
-def _maybe_write_sparsevllm_prefix_summary(
+def _maybe_write_sparseengine_prefix_summary(
     model: Any,
     trace_path: Path,
     summary_path: Path,
 ) -> dict[str, Any] | None:
     if not hasattr(model, "pop_prefix_cache_trace_records"):
         return None
-    return _write_sparsevllm_prefix_summary(trace_path, summary_path)
+    return _write_sparseengine_prefix_summary(trace_path, summary_path)
 
 
 class SparseVLLMSCBenchSearch:
@@ -374,7 +374,7 @@ class SparseVLLMSCBenchSearch:
         turn_idx: int,
         reusable_prefix_tokens: int,
     ) -> str:
-        from sparsevllm import SamplingParams as SparseSamplingParams
+        from sparseengine import SamplingParams as SparseSamplingParams
 
         prompt_token_ids = [int(token_id) for token_id in prompt_token_ids]
         max_tokens = int(max_tokens)
@@ -410,7 +410,7 @@ class SparseVLLMSCBenchSearch:
             while not self.llm.is_finished():
                 if step_count >= self.max_steps:
                     raise RuntimeError(
-                        f"Sparse-vLLM SCBench request exceeded max_steps={self.max_steps}."
+                        f"Sparse-Engine SCBench request exceeded max_steps={self.max_steps}."
                     )
                 step_count += 1
                 finished_outputs, num_tokens = self.llm.step()
@@ -421,7 +421,7 @@ class SparseVLLMSCBenchSearch:
                 if num_tokens == 0:
                     zero_progress_steps += 1
                     if zero_progress_steps >= 50:
-                        raise RuntimeError("Sparse-vLLM scheduler made no progress for 50 steps.")
+                        raise RuntimeError("Sparse-Engine scheduler made no progress for 50 steps.")
                 else:
                     zero_progress_steps = 0
 
@@ -932,7 +932,7 @@ def _run_scbench_worker(
                     case["task"] = eg["task"]
                 preds.append(case)
             dump_jsonl(preds, output_path)
-            _flush_sparsevllm_prefix_trace(
+            _flush_sparseengine_prefix_trace(
                 model,
                 trace_path,
                 data_name=data_name,
@@ -1026,8 +1026,8 @@ def load_model(
         )
     # tok.pad_token = tok.eos_token
 
-    if attn_type == SPARSEVLLM_ATTN_TYPE:
-        from sparsevllm import LLM as SparseLLM
+    if attn_type == SPARSEENGINE_ATTN_TYPE:
+        from sparseengine import LLM as SparseLLM
 
         sparse_hyper_param = hyper_param.copy()
         scbench_max_steps = int(sparse_hyper_param.pop("scbench_max_steps", 200_000))
@@ -1042,7 +1042,7 @@ def load_model(
 
         llm = SparseLLM(model_name, **sparse_hyper_param)
         llm = SparseVLLMSCBenchSearch(llm, tok, max_steps=scbench_max_steps)
-        print("Sparse-vLLM model and tokenizer loaded.")
+        print("Sparse-Engine model and tokenizer loaded.")
         return llm, tok
 
     if attn_type == "vllm_blend":
@@ -1240,7 +1240,7 @@ if __name__ == "__main__":
                 for rank in range(args.ws)
             ]
             _merge_rank_jsonl(merged_path, shard_paths)
-            if args.attn_type == SPARSEVLLM_ATTN_TYPE:
+            if args.attn_type == SPARSEENGINE_ATTN_TYPE:
                 trace_path = _prefix_trace_path(result_dir, data_name, use_scdq, use_llmlingua)
                 trace_shard_paths = [
                     _prefix_trace_path(
@@ -1253,7 +1253,7 @@ if __name__ == "__main__":
                     for rank in range(args.ws)
                 ]
                 _merge_prefix_trace_jsonl(trace_path, trace_shard_paths)
-                _write_sparsevllm_prefix_summary(
+                _write_sparseengine_prefix_summary(
                     trace_path,
                     _prefix_summary_path(result_dir, data_name, use_scdq, use_llmlingua),
                 )
@@ -1387,7 +1387,7 @@ if __name__ == "__main__":
                         case["task"] = eg["task"]
                     preds.append(case)
                 dump_jsonl(preds, output_path)
-                _flush_sparsevllm_prefix_trace(
+                _flush_sparseengine_prefix_trace(
                     model,
                     trace_path,
                     data_name=data_name,
@@ -1402,7 +1402,7 @@ if __name__ == "__main__":
                 max_seq_length=max_seq_length,
                 scdq_mode=scdq_mode,
             )
-            _maybe_write_sparsevllm_prefix_summary(model, trace_path, trace_summary_path)
+            _maybe_write_sparseengine_prefix_summary(model, trace_path, trace_summary_path)
             results[data_name] = score
 
     print("==== Results ====")

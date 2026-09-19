@@ -6,25 +6,25 @@ import pytest
 import torch
 from torch import nn
 
-from sparsevllm.kernels.external.flashinfer.gdn import (
+from sparseengine.kernels.external.flashinfer.gdn import (
     _GDN_PREFILL_REQUIRED_ARGUMENTS,
     _gdn_prefill_op,
     flashinfer_chunk_gated_delta_rule,
     flashinfer_gdn_prefill_support,
 )
-from sparsevllm.models.gdn_runtime import (
+from sparseengine.models.gdn_runtime import (
     bind_gated_delta_rule_op,
     build_gated_delta_rule_op,
 )
-from sparsevllm.operators.gated_delta_rule import (
+from sparseengine.operators.gated_delta_rule import (
     GATED_DELTA_RULE_REGISTRY,
     FlashInferGatedDeltaRuleProvider,
     GatedDeltaRuleOpSpec,
     PreparedGatedDeltaRuleOp,
     TritonGatedDeltaRuleProvider,
 )
-from sparsevllm.operators.registry import OpResolver
-from sparsevllm.platforms.interface import DeviceCaps, PlatformEnum
+from sparseengine.operators.registry import OpResolver
+from sparseengine.platforms.interface import DeviceCaps, PlatformEnum
 
 
 def _spec(**overrides) -> GatedDeltaRuleOpSpec:
@@ -73,7 +73,7 @@ def test_flashinfer_gdn_is_upstream_default_on_declared_architectures(
     compute_capability,
 ):
     with patch(
-        "sparsevllm.operators.gated_delta_rule.flashinfer_gdn_prefill_support",
+        "sparseengine.operators.gated_delta_rule.flashinfer_gdn_prefill_support",
         return_value=(True, "FlashInfer GDN available"),
     ) as support:
         resolved = OpResolver(GATED_DELTA_RULE_REGISTRY).resolve(
@@ -89,7 +89,7 @@ def test_flashinfer_gdn_is_upstream_default_on_declared_architectures(
 @pytest.mark.parametrize("tp_size", [1, 2, 4])
 def test_sm120_qwen35_gva_topologies_select_flashinfer(tp_size):
     with patch(
-        "sparsevllm.operators.gated_delta_rule.flashinfer_gdn_prefill_support",
+        "sparseengine.operators.gated_delta_rule.flashinfer_gdn_prefill_support",
         return_value=(True, "FlashInfer GDN available"),
     ):
         resolved = OpResolver(GATED_DELTA_RULE_REGISTRY).resolve(
@@ -118,7 +118,7 @@ def test_flashinfer_gdn_rejects_contracts_outside_declared_support(
     reason,
 ):
     with patch(
-        "sparsevllm.operators.gated_delta_rule.flashinfer_gdn_prefill_support",
+        "sparseengine.operators.gated_delta_rule.flashinfer_gdn_prefill_support",
         return_value=(True, "FlashInfer GDN available"),
     ):
         resolved = OpResolver(GATED_DELTA_RULE_REGISTRY).resolve(spec, caps)
@@ -154,14 +154,14 @@ def test_flashinfer_gdn_project_minimum_accepts_additive_optional_parameter():
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.flashinfer.gdn.flashinfer_kernel_support",
+                "sparseengine.kernels.external.flashinfer.gdn.flashinfer_kernel_support",
                 return_value=(
                     True,
                     "flashinfer-python 0.6.15 GDN prefill is available",
                 ),
             ),
             patch(
-                "sparsevllm.kernels.external.flashinfer.gdn.importlib.import_module",
+                "sparseengine.kernels.external.flashinfer.gdn.importlib.import_module",
                 return_value=module,
             ),
         ):
@@ -202,11 +202,11 @@ def test_flashinfer_prefill_adapter_converts_log_gate_and_state_contract():
 
     with (
         patch(
-            "sparsevllm.operators.gated_delta_rule.l2norm_fwd",
+            "sparseengine.operators.gated_delta_rule.l2norm_fwd",
             side_effect=lambda tensor: tensor,
         ) as normalize,
         patch(
-            "sparsevllm.operators.gated_delta_rule.flashinfer_chunk_gated_delta_rule",
+            "sparseengine.operators.gated_delta_rule.flashinfer_chunk_gated_delta_rule",
             return_value=(output, final_state),
         ) as kernel,
     ):
@@ -248,9 +248,9 @@ def test_flashinfer_adapter_normalizes_sequence_offsets(dtype, strided):
     gates = torch.ones(3, 2)
     kernel = Mock(return_value=(q, state))
     with (
-        patch("sparsevllm.kernels.external.flashinfer.gdn._gdn_prefill_op",
+        patch("sparseengine.kernels.external.flashinfer.gdn._gdn_prefill_op",
               return_value=(kernel, "available")),
-        patch("sparsevllm.kernels.external.flashinfer.gdn.torch.cuda.get_device_capability",
+        patch("sparseengine.kernels.external.flashinfer.gdn.torch.cuda.get_device_capability",
               return_value=(9, 0)),
     ):
         flashinfer_chunk_gated_delta_rule(q, q, q, gates, gates, state, offsets)
@@ -276,11 +276,11 @@ def test_flashinfer_prefill_adapter_rejects_non_fp32_final_state():
 
     with (
         patch(
-            "sparsevllm.kernels.external.flashinfer.gdn._gdn_prefill_op",
+            "sparseengine.kernels.external.flashinfer.gdn._gdn_prefill_op",
             return_value=(kernel, "available"),
         ),
         patch(
-            "sparsevllm.kernels.external.flashinfer.gdn."
+            "sparseengine.kernels.external.flashinfer.gdn."
             "torch.cuda.get_device_capability",
             return_value=(12, 0),
         ),
@@ -363,7 +363,7 @@ def test_flashinfer_prefill_matches_independent_triton_provider(use_cp, token_co
 
     # Exercise both real upstream kernels, independent of the auto heuristic.
     with patch(
-        "sparsevllm.operators.gated_delta_rule.flashinfer_chunk_gated_delta_rule",
+        "sparseengine.operators.gated_delta_rule.flashinfer_chunk_gated_delta_rule",
         side_effect=lambda *args, **kwargs: flashinfer_chunk_gated_delta_rule(
             *args, **kwargs, use_cp=use_cp),
     ):
@@ -412,7 +412,7 @@ def test_bound_decode_calls_fused_raw_gating_kernel_without_dispatch():
     output = torch.randn(4, 1, 4, 128, dtype=torch.bfloat16)
 
     with patch(
-        "sparsevllm.operators.gated_delta_rule.fused_recurrent_gated_delta_rule",
+        "sparseengine.operators.gated_delta_rule.fused_recurrent_gated_delta_rule",
         return_value=(output, state),
     ) as kernel:
         actual = provider.run_decode(
@@ -456,7 +456,7 @@ def test_triton_prefill_provider_expands_qk_to_value_heads():
     output = torch.randn_like(v)
 
     with patch(
-        "sparsevllm.operators.gated_delta_rule.chunk_gated_delta_rule",
+        "sparseengine.operators.gated_delta_rule.chunk_gated_delta_rule",
         return_value=(output, state),
     ) as kernel:
         actual = provider.run_prefill(
@@ -536,7 +536,7 @@ def test_model_runtime_builds_and_binds_one_shared_gdn_operator():
     root.second.bind_gated_delta_rule_op = Mock()
 
     with patch(
-        "sparsevllm.models.gdn_runtime.prepare_gated_delta_rule_op",
+        "sparseengine.models.gdn_runtime.prepare_gated_delta_rule_op",
         return_value=prepared,
     ) as prepare:
         actual = build_gated_delta_rule_op(

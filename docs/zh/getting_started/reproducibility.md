@@ -1,6 +1,6 @@
 # 可复现性
 
-使用本页的稳定 checklist 复现 Sparse-vLLM 实验。不要把本地 run ledger 放入仓库；面向仓库的结果需要证据时，应引用原始 run artifact path。
+使用本页的稳定 checklist 复现 Sparse-Engine 实验。不要把本地 run ledger 放入仓库；面向仓库的结果需要证据时，应引用原始 run artifact path。
 
 ## 环境
 
@@ -18,7 +18,7 @@ README 包含当前安装命令。预期 baseline 为：
   `selection_basis`、provider metadata 和 CUDA compute capability。数值正确性与
   性能结论必须引用独立 validation artifact；上游默认选择不等价于本地性能
   benchmark 证据。FP8 provider 在 warmup 期间不会下载 Hub kernel。
-- RMSNorm 默认使用 `SPARSEVLLM_RMSNORM_PROVIDER=auto`，在已安装时优先选择 FlashInfer。设为 `triton` 可强制使用本地 Triton kernel；设为 `flashinfer` 可明确要求 FlashInfer。
+- RMSNorm 默认使用 `SPARSEENGINE_RMSNORM_PROVIDER=auto`，在已安装时优先选择 FlashInfer。设为 `triton` 可强制使用本地 Triton kernel；设为 `flashinfer` 可明确要求 FlashInfer。
 
 每次报告 benchmark 时，都应记录 CUDA 版本、GPU 类型和数量、visible GPU ID、branch、commit 以及相关未提交改动。
 
@@ -32,9 +32,9 @@ Base model 与 DeltaKV compressor checkpoint 必须匹配。公开 compressor ch
 
 LongBench 和 MathBench 从环境变量读取数据根目录：
 
-- `SPARSEVLLM_OUTPUT_DIR`：benchmark prediction 和 log 的 output root。
-- `SPARSEVLLM_DATA_DIR`：通用 benchmark dataset root。
-- `SPARSEVLLM_LONGBENCH_DATA_DIR`：包含 `data/*.jsonl` 的 LongBench root。
+- `SPARSEENGINE_OUTPUT_DIR`：benchmark prediction 和 log 的 output root。
+- `SPARSEENGINE_DATA_DIR`：通用 benchmark dataset root。
+- `SPARSEENGINE_LONGBENCH_DATA_DIR`：包含 `data/*.jsonl` 的 LongBench root。
 - `SCBENCH_LOCAL_DATA_DIR`：standard SCBench 文件的可选 local root。
 - `SCBENCH_PREPROCESSED_ROOT`：包含 SCBench 预处理 `<task>.parquet` 文件的 root。
 
@@ -56,14 +56,14 @@ Benchmark 入口不假设 host-specific dataset path。缺少必需 data root �
 
 命令、manifest、`LLM(...)` 与内部配置都应原样使用上述名称。不要再使用 `engine_prefill_chunk_size`、`sparse_method`、`model_cls`、`compressor_path`、`deltakv_checkpoint_path`、`num_top_tokens` 或 `seq_chunk_size` 等旧 key。规范 contract 参见[运行时参数语义](../configuration/runtime-parameter-semantics.md)。
 
-Sparse-vLLM 要求显式 integer keep budget；ratio 必须在启动前换算为 token count。
+Sparse-Engine 要求显式 integer keep budget；ratio 必须在启动前换算为 token count。
 
 ## Smoke Check
 
 运行长 benchmark 前先执行小规模命令：
 
 ```bash
-PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_vllm.py \
+PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_engine.py \
   --model_path <LOCAL_BASE_MODEL> \
   --lengths 1024 \
   --batch_sizes 1 \
@@ -72,10 +72,10 @@ PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_vllm.py \
   --hyper_params '{"gpu_memory_utilization":0.8,"engine_prefill_chunk_size":512}'
 ```
 
-基于 compressor 的 DeltaKV Sparse-vLLM smoke test：
+基于 compressor 的 DeltaKV Sparse-Engine smoke test：
 
 ```bash
-PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_vllm.py \
+PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_engine.py \
   --model_path <LOCAL_BASE_MODEL> \
   --lengths 1024 \
   --batch_sizes 2 \

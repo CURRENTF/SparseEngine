@@ -4,15 +4,15 @@ import pytest
 import torch
 
 from glm_test_helpers import _glm_config, _single_rank_parallel_context
-from sparsevllm.engine.cache_manager.storage import (
+from sparseengine.engine.cache_manager.storage import (
     ExplicitKVStorage,
     HeterogeneousExplicitKVStorage,
     MlaLatentStorage,
 )
-from sparsevllm.engine.startup import prefill_history
-from sparsevllm.platforms.cpu import CpuPlatform
-from sparsevllm.platforms.interface import AllocatorStats
-from sparsevllm.utils.context import get_context, set_context
+from sparseengine.engine.startup import prefill_history
+from sparseengine.platforms.cpu import CpuPlatform
+from sparseengine.platforms.interface import AllocatorStats
+from sparseengine.utils.context import get_context, set_context
 
 
 @pytest.mark.parametrize("layout", ["explicit", "mla", "heterogeneous"])
@@ -67,8 +67,8 @@ def test_history_probe_runs_one_full_batch_and_restores_runtime(
             return AllocatorStats(current_allocated_bytes=100, peak_allocated_bytes=self.peak)
 
     platform = Platform()
-    monkeypatch.setattr("sparsevllm.platforms._current_platform", platform)
-    monkeypatch.setattr("sparsevllm.engine.startup.profiling.release_unused_device_memory", lambda _: None)
+    monkeypatch.setattr("sparseengine.platforms._current_platform", platform)
+    monkeypatch.setattr("sparseengine.engine.startup.profiling.release_unused_device_memory", lambda _: None)
     config = _glm_config(sparse_method="h2o", enable_prefix_caching=False)
     config.max_num_batched_tokens = token_budget
     config.max_model_len = max_model_len

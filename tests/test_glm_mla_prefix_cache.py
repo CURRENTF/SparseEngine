@@ -6,20 +6,20 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.engine.cache_manager import (
+from sparseengine.config import RuntimeLayout
+from sparseengine.engine.cache_manager import (
     AttentionViewMeta,
     LayerBatchStates,
     PrefillComputeView,
 )
-from sparsevllm.engine.cache_manager.methods.h2o import H2OCacheManager
-from sparsevllm.engine.cache_manager.methods.rkv import RKVCacheManager
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
-from sparsevllm.engine.cache_manager.storage import MlaLatentStorage
-from sparsevllm.engine.chain_cache import ChainCacheCoordinator
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.sparse_controller import SparseController
-from sparsevllm.engine.sparse_methods.snapkv import SnapKVRuntime
+from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
+from sparseengine.engine.cache_manager.methods.rkv import RKVCacheManager
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.engine.cache_manager.storage import MlaLatentStorage
+from sparseengine.engine.chain_cache import ChainCacheCoordinator
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.sparse_controller import SparseController
+from sparseengine.engine.sparse_methods.snapkv import SnapKVRuntime
 
 
 def _latent_chain_manager(manager_type, method: str):

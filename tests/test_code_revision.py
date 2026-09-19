@@ -3,22 +3,22 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from sparsevllm.utils.code_revision import _verified_source_repo_root
-from sparsevllm.utils.code_revision import code_revision_info
+from sparseengine.utils.code_revision import _verified_source_repo_root
+from sparseengine.utils.code_revision import code_revision_info
 
 
 class CodeRevisionTest(unittest.TestCase):
     def tearDown(self):
         code_revision_info.cache_clear()
 
-    @patch("sparsevllm.utils.code_revision._git_command", return_value=None)
-    @patch("sparsevllm.utils.code_revision.version", return_value="0.1.0")
+    @patch("sparseengine.utils.code_revision._git_command", return_value=None)
+    @patch("sparseengine.utils.code_revision.version", return_value="0.1.0")
     def test_uses_published_distribution_name(self, mock_version, _mock_git):
         code_revision_info.cache_clear()
 
         revision = code_revision_info()
 
-        mock_version.assert_called_once_with("sparsevllm")
+        mock_version.assert_called_once_with("sparseengine")
         self.assertEqual(revision["package_version"], "0.1.0")
         self.assertIsNone(revision["git_commit"])
 
@@ -28,7 +28,7 @@ class CodeRevisionTest(unittest.TestCase):
             module_path = (
                 source_root
                 / "src"
-                / "sparsevllm"
+                / "sparseengine"
                 / "utils"
                 / "code_revision.py"
             )
@@ -36,7 +36,7 @@ class CodeRevisionTest(unittest.TestCase):
             module_path.touch()
 
             with patch(
-                "sparsevllm.utils.code_revision._git_value",
+                "sparseengine.utils.code_revision._git_value",
                 return_value=str(Path(tmp)),
             ):
                 repo_root = _verified_source_repo_root(module_path)
@@ -49,7 +49,7 @@ class CodeRevisionTest(unittest.TestCase):
             module_path = (
                 source_root
                 / "src"
-                / "sparsevllm"
+                / "sparseengine"
                 / "utils"
                 / "code_revision.py"
             )
@@ -57,7 +57,7 @@ class CodeRevisionTest(unittest.TestCase):
             module_path.touch()
 
             with patch(
-                "sparsevllm.utils.code_revision._git_value",
+                "sparseengine.utils.code_revision._git_value",
                 return_value=str(source_root),
             ):
                 repo_root = _verified_source_repo_root(module_path)

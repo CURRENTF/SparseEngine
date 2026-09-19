@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from sparsevllm.kernels.triton.h2o_score import h2o_headwise_softmax_accumulate
+from sparseengine.kernels.triton.h2o_score import h2o_headwise_softmax_accumulate
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")

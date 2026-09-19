@@ -9,7 +9,7 @@ import torch
 import sys
 sys.path.insert(0, 'src')
 
-from sparsevllm.layers.rotary_embedding import apply_rotary_emb, reverse_rotary_emb
+from sparseengine.layers.rotary_embedding import apply_rotary_emb, reverse_rotary_emb
 
 
 def test_derope_basic():
@@ -58,7 +58,7 @@ def test_derope_with_real_rope():
     print("测试 2: 与 RotaryEmbedding 类配合使用")
     print("=" * 60)
     
-    from sparsevllm.layers.rotary_embedding import get_rope
+    from sparseengine.layers.rotary_embedding import get_rope
     
     head_dim = 128
     max_position = 4096

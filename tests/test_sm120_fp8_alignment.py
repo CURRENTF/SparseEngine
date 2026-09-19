@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import torch
 
-from sparsevllm.operators.fp8_linear import (
+from sparseengine.operators.fp8_linear import (
     FlashInferGroupwiseSm120Fp8LinearProvider,
     Fp8LinearSpec,
 )
@@ -33,11 +33,11 @@ def test_flashinfer_sm120_groupwise_pads_unaligned_rows_before_gemm():
 
     with (
         patch(
-            "sparsevllm.kernels.external.sgl.moe.sgl_per_token_group_quant_8bit",
+            "sparseengine.kernels.external.sgl.moe.sgl_per_token_group_quant_8bit",
             side_effect=quantize,
         ),
         patch(
-            "sparsevllm.kernels.external.flashinfer.fp8_linear.flashinfer_fp8_nt_groupwise_sm120",
+            "sparseengine.kernels.external.flashinfer.fp8_linear.flashinfer_fp8_nt_groupwise_sm120",
             side_effect=gemm,
         ),
     ):

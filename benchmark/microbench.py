@@ -19,7 +19,7 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from benchmark.efficiency.metrics import PipelinedDecodeWindow, decode_window_fields, stage_throughput
-from sparsevllm.method_registry import (
+from sparseengine.method_registry import (
     CANONICAL_SPARSE_METHODS,
     PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
     get_default_prefill_schedule_policy,
@@ -62,7 +62,7 @@ def _load_json_arg(value: str) -> dict[str, Any]:
 
 
 def _build_engine_hyper_params(args) -> dict[str, Any]:
-    # Keep benchmark defaults stable (do not rely on sparsevllm.Config defaults).
+    # Keep benchmark defaults stable (do not rely on sparseengine.Config defaults).
     hyper_params: dict[str, Any] = {
         "decode_graph": True,
         "gpu_memory_utilization": 0.8,
@@ -70,8 +70,8 @@ def _build_engine_hyper_params(args) -> dict[str, Any]:
     }
 
     hyper_params.update(_load_json_arg(args.hyper_params))
-    if getattr(args, "engine", "sparsevllm") == "sparsevllm":
-        from sparsevllm.config import Config
+    if getattr(args, "engine", "sparseengine") == "sparseengine":
+        from sparseengine.config import Config
         hyper_params.setdefault("decode_reservation_tokens", Config.decode_reservation_tokens)
 
     return hyper_params
@@ -142,18 +142,18 @@ def _selected_env_snapshot() -> dict[str, str]:
     keys = [
         "CUDA_VISIBLE_DEVICES",
         "PYTHONPATH",
-        "SVLLM_BENCHMARK_OUTPUT_DIR",
-        "SVLLM_BENCHMARK_DATA_DIR",
-        "SPARSEVLLM_OUTPUT_DIR",
-        "SPARSEVLLM_DATA_DIR",
-        "SPARSEVLLM_FAKE_ATTENTION",
-        "SPARSEVLLM_FAKE_PREFILL_ATTENTION",
-        "SPARSEVLLM_FAKE_DECODE_ATTENTION",
-        "SPARSEVLLM_FAKE_ATTENTION_MODE",
-        "SPARSEVLLM_ALLOW_FAKE_ATTENTION",
-        "SPARSEVLLM_LONG_PREFILL_OFFLOAD_MIN_TOKENS",
-        "SPARSEVLLM_RAWKV_BUFFER_MODE",
-        "SPARSEVLLM_RAWKV_PREFETCH",
+        "SENGINE_BENCHMARK_OUTPUT_DIR",
+        "SENGINE_BENCHMARK_DATA_DIR",
+        "SPARSEENGINE_OUTPUT_DIR",
+        "SPARSEENGINE_DATA_DIR",
+        "SPARSEENGINE_FAKE_ATTENTION",
+        "SPARSEENGINE_FAKE_PREFILL_ATTENTION",
+        "SPARSEENGINE_FAKE_DECODE_ATTENTION",
+        "SPARSEENGINE_FAKE_ATTENTION_MODE",
+        "SPARSEENGINE_ALLOW_FAKE_ATTENTION",
+        "SPARSEENGINE_LONG_PREFILL_OFFLOAD_MIN_TOKENS",
+        "SPARSEENGINE_RAWKV_BUFFER_MODE",
+        "SPARSEENGINE_RAWKV_PREFETCH",
     ]
     return {key: os.environ[key] for key in keys if key in os.environ}
 
@@ -337,7 +337,7 @@ def _write_output_dir(args, rows: list[dict[str, Any]]) -> None:
     }
 
     report_lines = [
-        "# Sparse-vLLM Microbenchmark",
+        "# Sparse-Engine Microbenchmark",
         "",
         f"- Model: `{args.model_path}`",
         f"- Methods: `{args.methods}`",
@@ -498,11 +498,11 @@ def _completed_output_records(outputs, output_len):
 
 
 def benchmark_task(method, length, bs, args, results_dict):
-    if getattr(args, "engine", "sparsevllm") in ("hisparse", "vortex"):
+    if getattr(args, "engine", "sparseengine") in ("hisparse", "vortex"):
         from benchmark.hisparse_microbench import benchmark_decode_stage
         benchmark_decode_stage(method, length, bs, args, results_dict)
         return
-    if getattr(args, "engine", "sparsevllm") == "vllm":
+    if getattr(args, "engine", "sparseengine") == "vllm":
         from benchmark.vllm_microbench import benchmark_decode_stage
         benchmark_decode_stage(method, length, bs, args, results_dict)
         return
@@ -572,7 +572,7 @@ def benchmark_task(method, length, bs, args, results_dict):
         hyper_params.setdefault("max_num_seqs_in_batch", int(bs))
         hyper_params.setdefault("max_decoding_seqs", int(bs))
         
-        from sparsevllm import LLM, SamplingParams
+        from sparseengine import LLM, SamplingParams
         engine_kwargs = {
             **hyper_params,
             "max_model_len": m_len,
@@ -601,7 +601,7 @@ def benchmark_task(method, length, bs, args, results_dict):
         wave_decode_gap_steps = int(getattr(args, "wave_decode_gap_steps", 0) or 0)
 
         # --- 关键修改：重置并开始正式测量 ---
-        from sparsevllm.utils.profiler import profiler
+        from sparseengine.utils.profiler import profiler
         profiler.reset()
         
         torch.cuda.synchronize()
@@ -847,7 +847,7 @@ def benchmark_task(method, length, bs, args, results_dict):
             "length": int(length),
             "batch_size": int(bs),
             "prefill_tp": prefill_tp or 0.0,
-            "engine": "sparsevllm",
+            "engine": "sparseengine",
             "actual_decode_peak": actual_decode_peak,
             "completed_requests": completed_requests,
             "output_len": int(args.output_len),
@@ -939,9 +939,9 @@ def benchmark_task(method, length, bs, args, results_dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Professional benchmark for sparsevllm.")
+    parser = argparse.ArgumentParser(description="Professional benchmark for sparseengine.")
     parser.add_argument("--model_path", type=str, required=True, help="Path to the model")
-    parser.add_argument("--engine", choices=("sparsevllm", "vllm", "hisparse", "vortex"), default="sparsevllm")
+    parser.add_argument("--engine", choices=("sparseengine", "vllm", "hisparse", "vortex"), default="sparseengine")
     parser.add_argument("--engine_kwargs", default="{}", help="External-engine constructor options, JSON or @file; workload/timing keys remain protected.")
     parser.add_argument("--backend_label", default=None)
     parser.add_argument("--require_full_decode_batch", action="store_true",
@@ -1041,7 +1041,7 @@ def main():
     
     args = parser.parse_args()
     args.engine_kwargs_dict = _load_json_arg(args.engine_kwargs)
-    if args.engine == "sparsevllm" and (args.engine_kwargs_dict or args.backend_label):
+    if args.engine == "sparseengine" and (args.engine_kwargs_dict or args.backend_label):
         parser.error("engine_kwargs/backend_label are for external stage adapters only")
     if args.engine in ("hisparse", "vortex") and not args.output_dir:
         parser.error("HiSparse stage adapter requires --output_dir for worker-side raw steps")

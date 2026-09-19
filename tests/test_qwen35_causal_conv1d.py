@@ -2,7 +2,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from sparsevllm.kernels.triton.qwen3_5.causal_conv1d import causal_conv1d_fn
+from sparseengine.kernels.triton.qwen3_5.causal_conv1d import causal_conv1d_fn
 
 
 pytestmark = pytest.mark.skipif(

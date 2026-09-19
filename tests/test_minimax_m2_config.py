@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from sparsevllm.config import Config
+from sparseengine.config import Config
 
 
 def _quantization_config(**overrides):
@@ -60,7 +60,7 @@ def _make_config(tmp_path, hf_config=None, **kwargs):
     if hf_config is None:
         hf_config = _official_config()
     with patch(
-        "sparsevllm.configs.runtime.AutoConfig.from_pretrained",
+        "sparseengine.configs.runtime.AutoConfig.from_pretrained",
         return_value=hf_config,
     ):
         return Config(model=str(tmp_path), **kwargs)

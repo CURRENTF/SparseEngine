@@ -11,8 +11,8 @@ from types import SimpleNamespace
 import torch
 import triton
 
-from sparsevllm.engine.sparse_methods.base import SparseMethodRuntime
-from sparsevllm.operators.omnikv_score import OmniKVScoreSpec, prepare_omnikv_score_provider
+from sparseengine.engine.sparse_methods.base import SparseMethodRuntime
+from sparseengine.operators.omnikv_score import OmniKVScoreSpec, prepare_omnikv_score_provider
 
 
 def baseline(raw, lengths, sink, recent, scale, dtype):

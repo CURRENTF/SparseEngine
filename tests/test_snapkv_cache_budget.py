@@ -4,15 +4,15 @@ from unittest.mock import patch
 import pytest
 import torch
 
-import sparsevllm.platforms as platforms
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.engine.cache_manager.base import CacheManager
-from sparsevllm.engine.cache_manager.methods.rkv import RKVCacheManager
-from sparsevllm.engine.cache_manager.methods.snapkv import (
+import sparseengine.platforms as platforms
+from sparseengine.config import RuntimeLayout
+from sparseengine.engine.cache_manager.base import CacheManager
+from sparseengine.engine.cache_manager.methods.rkv import RKVCacheManager
+from sparseengine.engine.cache_manager.methods.snapkv import (
     SnapKVCacheManager,
     resolve_snapkv_cache_capacity,
 )
-from sparsevllm.platforms.cpu import CpuPlatform
+from sparseengine.platforms.cpu import CpuPlatform
 
 
 def _parallel_context():

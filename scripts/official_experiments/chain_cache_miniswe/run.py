@@ -49,7 +49,7 @@ def get(url):
 
 def prepare(args):
     setting = read(args.setting)
-    setting["backend"] = getattr(args, "backend", "sparsevllm")
+    setting["backend"] = getattr(args, "backend", "sparseengine")
     # Each concurrency has an immutable root; methods are never silently retuned.
     concurrency = args.concurrency
     if not 1 <= concurrency <= 256:
@@ -113,7 +113,7 @@ def environment(python):
     env = os.environ.copy()
     env["PATH"] = str(Path(python).parent) + os.pathsep + env.get("PATH", "")
     env["PYTHONPATH"] = os.pathsep.join((str(REPO / "src"), str(REPO), env.get("PYTHONPATH", "")))
-    env["OPENAI_API_KEY"] = "local-sparsevllm"
+    env["OPENAI_API_KEY"] = "local-sparseengine"
     return python, env
 
 
@@ -221,7 +221,7 @@ def serve(args):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", args.port))
     hardware = idle_pair(args.gpus)
-    backend = read(args.root / "setting.json").get("backend", "sparsevllm")
+    backend = read(args.root / "setting.json").get("backend", "sparseengine")
     if backend == "vllm":
         if args.method != "vanilla-prefix":
             raise ValueError("The upstream vLLM comparison only supports vanilla-prefix")
@@ -244,7 +244,7 @@ def serve(args):
             command.append("--enable-expert-parallel")
         env["MINISWE_REQUEST_LOG_DIR"] = str((directory / "server_requests").resolve())
     else:
-        command = [python, "-m", "sparsevllm.entrypoints.openai.api_server", "--model", str(model),
+        command = [python, "-m", "sparseengine.entrypoints.openai.api_server", "--model", str(model),
                "--served-model-name", advertised, "--host", "127.0.0.1", "--port", str(args.port),
                "--engine-kwargs", str((args.root / args.method / "engine.json").resolve()),
                "--request-log-dir", str((directory / "server_requests").resolve())]
@@ -595,7 +595,7 @@ def main():
     p = sub.add_parser("prepare")
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--setting", type=Path, default=HERE / "setting.json")
-    p.add_argument("--backend", choices=("sparsevllm", "vllm"), default="sparsevllm")
+    p.add_argument("--backend", choices=("sparseengine", "vllm"), default="sparseengine")
     p.add_argument("--concurrency", type=int, default=64,
                    help="Target concurrent MiniSWE agents; use a fresh root for each value")
     p.add_argument("--engine-concurrency", type=int,

@@ -29,7 +29,7 @@ TARGETS = {
 
 def make_case(operation, size, module=None, *, strided=False, quest_backend=None):
     """Return the serving wrapper (minmax: internal stage) and its oracle check."""
-    module = module or importlib.import_module("sparsevllm.kernels.triton." + MODULES[operation])
+    module = module or importlib.import_module("sparseengine.kernels.triton." + MODULES[operation])
     device = "cuda"
     torch.manual_seed(123 + size)
     if operation == "omnikv":

@@ -10,10 +10,10 @@ pytest.importorskip(
     reason="prefix offload engine tests require the prefix-offload extra",
 )
 
-from sparsevllm import LLM, SamplingParams
+from sparseengine import LLM, SamplingParams
 
 
-MODEL_ENV = "SPARSEVLLM_TP2_PREFIX_OFFLOAD_MODEL"
+MODEL_ENV = "SPARSEENGINE_TP2_PREFIX_OFFLOAD_MODEL"
 
 
 def _logical_prefix_signature(summary: dict[str, object]) -> list[tuple[object, ...]]:

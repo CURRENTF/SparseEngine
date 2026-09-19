@@ -14,7 +14,7 @@ except ImportError:
     ATTN_TYPES = ["hf", "vllm", "vllm_blend", "vllm_kv", "inf_llm"]
     KV_TYPES = ["dense", "retr_attn", "kivi"]
 
-for attn_type in ("sparsevllm",):
+for attn_type in ("sparseengine",):
     if attn_type not in ATTN_TYPES:
         ATTN_TYPES.append(attn_type)
 

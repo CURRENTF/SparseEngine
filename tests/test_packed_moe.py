@@ -2,10 +2,10 @@ from types import SimpleNamespace
 
 import torch
 
-from sparsevllm.layers.packed_moe import PackedMoeExperts
-from sparsevllm.models.minimax_m2 import MiniMaxM2PackedExperts
-from sparsevllm.models.qwen3_moe import Qwen3MoePackedExperts
-from sparsevllm.operators.moe import TritonMoeProvider
+from sparseengine.layers.packed_moe import PackedMoeExperts
+from sparseengine.models.minimax_m2 import MiniMaxM2PackedExperts
+from sparseengine.models.qwen3_moe import Qwen3MoePackedExperts
+from sparseengine.operators.moe import TritonMoeProvider
 
 
 def _parallel_context(*, tp_rank=0, tp_size=1, ep_rank=0, ep_size=1):

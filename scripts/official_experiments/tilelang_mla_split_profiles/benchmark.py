@@ -17,7 +17,7 @@ import traceback
 
 import torch
 
-from sparsevllm.kernels.tilelang.mla.runtime import (
+from sparseengine.kernels.tilelang.mla.runtime import (
     TileMlaDecodeKernel, TileMlaLaunchConfig,
 )
 

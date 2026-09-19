@@ -1,0 +1,23 @@
+# Claw-Eval config template for a local Sparse-Engine OpenAI-compatible server.
+#
+# The runner script writes a concrete copy into its run directory after setting
+# SPARSEENGINE_OPENAI_BASE_URL, SPARSEENGINE_CLAW_MODEL_ID, and CLAW_EVAL_TRACE_DIR.
+model:
+  api_key: ${SPARSEENGINE_OPENAI_API_KEY}
+  base_url: ${SPARSEENGINE_OPENAI_BASE_URL}
+  model_id: ${SPARSEENGINE_CLAW_MODEL_ID}
+  context_window: ${SPARSEENGINE_CONTEXT_WINDOW}
+
+judge:
+  api_key: ${OPENROUTER_API_KEY}
+  base_url: ${CLAW_EVAL_JUDGE_BASE_URL}
+  model_id: ${CLAW_EVAL_JUDGE_MODEL}
+  enabled: true
+
+defaults:
+  trace_dir: ${CLAW_EVAL_TRACE_DIR}
+  tasks_dir: tasks
+
+sandbox:
+  enabled: false
+  image: ${CLAW_EVAL_SANDBOX_IMAGE}

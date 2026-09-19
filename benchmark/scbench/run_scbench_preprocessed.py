@@ -11,7 +11,7 @@ from typing import Any
 
 THIS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = THIS_DIR.parent.parent
-BASE_PATH = os.environ.get("SPARSEVLLM_OUTPUT_DIR", str(REPO_ROOT / "outputs"))
+BASE_PATH = os.environ.get("SPARSEENGINE_OUTPUT_DIR", str(REPO_ROOT / "outputs"))
 
 sys.path.append(str(REPO_ROOT / "src"))
 

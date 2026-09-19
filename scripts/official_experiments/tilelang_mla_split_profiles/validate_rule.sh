@@ -30,7 +30,7 @@ for ((attempt=0; attempt<90; attempt++)); do
 done
 test -f "$RUN_ROOT/guard-ready.json"
 git rev-parse HEAD > "$RUN_ROOT/git-head.txt"
-git diff -- src/sparsevllm/kernels/tilelang/mla/runtime.py src/sparsevllm/operators/mla_attention.py \
+git diff -- src/sparseengine/kernels/tilelang/mla/runtime.py src/sparseengine/operators/mla_attention.py \
     tests/test_tilelang_mla_kernel.py tests/test_tilelang_mla_operator.py > "$RUN_ROOT/change.patch"
 printf 'gpu-tests\trunning\n' >> "$RUN_ROOT/status.tsv"
 python -m pytest -q tests/test_tilelang_mla_kernel.py --junitxml="$RUN_ROOT/gpu-tests.xml" \

@@ -3,7 +3,7 @@ import pytest
 import torch
 import triton
 
-from sparsevllm.kernels.triton.omnikv_score import launch_omnikv_decode_scores
+from sparseengine.kernels.triton.omnikv_score import launch_omnikv_decode_scores
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 
@@ -84,7 +84,7 @@ def test_head_normalization_cannot_be_replaced_by_raw_head_max():
 def test_prepared_provider_keeps_observers_and_old_graph_storage_independent():
     # Later observers share raw QK but must not overwrite earlier reduced scores.
     # Growing/clearing the prepared provider must not invalidate captured graphs.
-    from sparsevllm.operators.omnikv_score import OmniKVScoreSpec, prepare_omnikv_score_provider
+    from sparseengine.operators.omnikv_score import OmniKVScoreSpec, prepare_omnikv_score_provider
 
     raw = torch.randn(2, 3, 4099, device='cuda') * 16
     lengths = torch.tensor([4099, 1234], device='cuda', dtype=torch.int32)
@@ -114,7 +114,7 @@ def test_prepared_provider_keeps_observers_and_old_graph_storage_independent():
 
 @pytest.mark.parametrize('raw_dtype', [torch.float16, torch.bfloat16])
 def test_prepared_provider_handles_extreme_logits_and_noncontiguous_lengths(raw_dtype):
-    from sparsevllm.operators.omnikv_score import OmniKVScoreSpec, prepare_omnikv_score_provider
+    from sparseengine.operators.omnikv_score import OmniKVScoreSpec, prepare_omnikv_score_provider
 
     raw = torch.tensor([[[10000., -10000., 9992., 0.], [-10000., 10000., 0., 9992.]]], device='cuda', dtype=raw_dtype).expand(2, -1, -1)
     lengths = torch.tensor([4, 99, 0, 99], device='cuda', dtype=torch.int64)[::2]
@@ -124,7 +124,7 @@ def test_prepared_provider_handles_extreme_logits_and_noncontiguous_lengths(raw_
 
 
 def test_prepared_provider_empty_candidate_capacity():
-    from sparsevllm.operators.omnikv_score import OmniKVScoreSpec, prepare_omnikv_score_provider
+    from sparseengine.operators.omnikv_score import OmniKVScoreSpec, prepare_omnikv_score_provider
 
     raw = torch.full((1, 2, 4), float('nan'), device='cuda')
     lengths = torch.tensor([4], device='cuda', dtype=torch.int32)

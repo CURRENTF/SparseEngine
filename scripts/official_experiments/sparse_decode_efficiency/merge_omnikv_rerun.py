@@ -38,9 +38,9 @@ def main():
             (model, lane) for model in config["models"] for lane in LANES}:
         raise ValueError("Original campaign is missing curves")
     for curve in curves:
-        if curve["lane"] == "svllm-omnikv":
+        if curve["lane"] == "sengine-omnikv":
             candidates = list((args.rerun_root / curve["model"]).glob(
-                "*/svllm-omnikv/capacity.json"))
+                "*/sengine-omnikv/capacity.json"))
             if len(candidates) != 1:
                 raise ValueError(f"Ambiguous or missing rerun for {curve['model']}")
             boundary = read(candidates[0])

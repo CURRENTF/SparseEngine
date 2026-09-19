@@ -1,7 +1,7 @@
 # DeltaKV
 
 DeltaKV compresses the KV cache for long-context inference. This repo contains
-only the native Sparse-vLLM inference path and native benchmark integration.
+only the native Sparse-Engine inference path and native benchmark integration.
 
 ## Inference
 
@@ -14,7 +14,7 @@ Set `sparse_method` to one of:
 
 For DeltaKV inference, also pass
 `deltakv_checkpoint_path="/path/to/local/trained_compressor_dir_or_file"`.
-The current Sparse-vLLM DeltaKV runtime is compressor-backed; missing
+The current Sparse-Engine DeltaKV runtime is compressor-backed; missing
 checkpoints are for construction-only tests, not reportable benchmark runs.
 
 DeltaKV knobs you may need:
@@ -27,8 +27,8 @@ DeltaKV knobs you may need:
 
 ## Slim Runtime
 
-The Sparse-vLLM DeltaKV runtime uses the cache-manager implementation under
-`src/sparsevllm/engine/cache_manager/`. It keeps full layers according to
+The Sparse-Engine DeltaKV runtime uses the cache-manager implementation under
+`src/sparseengine/engine/cache_manager/`. It keeps full layers according to
 `full_attention_layers`, stores compressor residual state for sparse layers, and
 uses graph-stable metadata for decode.
 
@@ -39,7 +39,7 @@ Quick throughput smoke:
 
 ```bash
 CUDA_VISIBLE_DEVICES=7 PYTHONPATH=$PWD/src \
-python scripts/benchmarks/bench_sparse_vllm.py \
+python scripts/benchmarks/bench_sparse_engine.py \
   --model_path <MODEL_ROOT>/Qwen2.5-7B-Instruct-1M \
   --lengths 1024 \
   --batch_sizes 2 \
@@ -54,7 +54,7 @@ python scripts/benchmarks/bench_sparse_vllm.py \
 Compressor training is maintained in
 [CURRENTF/DeltaKV](https://github.com/CURRENTF/DeltaKV). Use that repository to
 prepare training data, train compressor checkpoints, and run training
-ablations. Sparse-vLLM consumes compatible checkpoints for inference and
+ablations. Sparse-Engine consumes compatible checkpoints for inference and
 benchmarking.
 
 ## Evaluate on LongBench
@@ -85,4 +85,4 @@ Notes:
 - Public compressor checkpoints are listed in [Getting Started](../getting_started/README.md#deltakv-checkpoints).
 - `deltakv_checkpoint_path` can point to a local directory or a single checkpoint file.
 - The loader scans `*.safetensors` first, then `*.bin` and `*.pt`.
-- Split-KV checkpoints (`k_compress_*` / `v_compress_*`) are not supported by the Sparse-vLLM loader.
+- Split-KV checkpoints (`k_compress_*` / `v_compress_*`) are not supported by the Sparse-Engine loader.

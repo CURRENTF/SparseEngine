@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sparsevllm.utils.compilation_guard import (
+from sparseengine.utils.compilation_guard import (
     RuntimeCompilationError,
     RuntimeCompilationGuard,
     validate_compilation_limit,
@@ -126,7 +126,7 @@ def test_flashinfer_legacy_and_split_specs_enforce_budget_and_restore(class_name
 
 
 def test_backend_imported_after_arm_is_instrumented(tmp_path, monkeypatch):
-    import sparsevllm.utils.compilation_guard as module
+    import sparseengine.utils.compilation_guard as module
 
     name = "guard_test_backend"
     (tmp_path / f"{name}.py").write_text("loaded = True\n")
@@ -145,7 +145,7 @@ def test_backend_imported_after_arm_is_instrumented(tmp_path, monkeypatch):
 
 
 def test_runner_arms_each_rank_without_resetting_budget():
-    from sparsevllm.engine.model_runner import ModelRunner
+    from sparseengine.engine.model_runner import ModelRunner
 
     runner = object.__new__(ModelRunner)
     runner.config = SimpleNamespace(runtime_compilation_limit=1)

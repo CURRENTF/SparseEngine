@@ -7,24 +7,24 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from sparsevllm.kernels.external.sgl.moe import (
+from sparseengine.kernels.external.sgl.moe import (
     _sgl_fp8_group_quant_op,
     sgl_fp8_group_quantization_support,
     sgl_moe_align_block_size,
     sgl_moe_alignment_support,
 )
-from sparsevllm.kernels.external.support import (
+from sparseengine.kernels.external.support import (
     ExternalKernelContractError,
     ExternalKernelFamilyError,
     KernelFamilyState,
 )
-from sparsevllm.kernels.triton.moe import fused_moe, moe_align_block_size
-from sparsevllm.kernels.triton.sgl_fused_moe import (
+from sparseengine.kernels.triton.moe import fused_moe, moe_align_block_size
+from sparseengine.kernels.triton.sgl_fused_moe import (
     sgl_fused_moe,
     sgl_glm47_moe_profile_support,
     sgl_moe_profile_support,
 )
-from sparsevllm.operators.moe import _sgl_moe_align_block_size
+from sparseengine.operators.moe import _sgl_moe_align_block_size
 
 
 def _torch_local_moe(
@@ -414,7 +414,7 @@ def test_sgl_fp8_group_quantization_accepts_pinned_contract() -> None:
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.sgl.moe.sgl_kernel_support",
+                "sparseengine.kernels.external.sgl.moe.sgl_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", return_value=module),
@@ -432,7 +432,7 @@ def test_sgl_fp8_group_quantization_rejects_schema_drift() -> None:
     try:
         with (
             patch(
-                "sparsevllm.kernels.external.sgl.moe.sgl_kernel_support",
+                "sparseengine.kernels.external.sgl.moe.sgl_kernel_support",
                 return_value=(True, "available"),
             ),
             patch("importlib.import_module", return_value=module),

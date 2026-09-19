@@ -1,7 +1,7 @@
 import unittest
 from dataclasses import fields
 
-from sparsevllm.config import Config
+from sparseengine.config import Config
 
 
 class RuntimeParamNamingTest(unittest.TestCase):
@@ -54,19 +54,19 @@ class RuntimeParamNamingTest(unittest.TestCase):
         self.assertTrue(config_fields.isdisjoint(legacy))
 
     def test_unknown_runtime_parameter_fails_at_engine_boundary(self):
-        from sparsevllm import LLM
+        from sparseengine import LLM
 
-        with self.assertRaisesRegex(ValueError, "Unknown Sparse-vLLM config keys"):
+        with self.assertRaisesRegex(ValueError, "Unknown Sparse-Engine config keys"):
             LLM("/tmp/unused-model", vllm_sparse_method="omnikv")
 
     def test_keep_token_budgets_reject_ratio_values(self):
-        from sparsevllm import LLM
+        from sparseengine import LLM
 
         with self.assertRaisesRegex(ValueError, "integer token count"):
             LLM("/tmp/unused-model", decode_keep_tokens=0.17)
 
     def test_internal_derived_fields_are_not_public_inputs(self):
-        from sparsevllm import LLM
+        from sparseengine import LLM
 
         for key in (
             "quest_token_budget",
@@ -75,7 +75,7 @@ class RuntimeParamNamingTest(unittest.TestCase):
             "resolved_cache_sparse_method",
         ):
             with self.subTest(key=key):
-                with self.assertRaisesRegex(ValueError, "Unknown Sparse-vLLM config keys"):
+                with self.assertRaisesRegex(ValueError, "Unknown Sparse-Engine config keys"):
                     LLM("/tmp/unused-model", **{key: 1})
 
 

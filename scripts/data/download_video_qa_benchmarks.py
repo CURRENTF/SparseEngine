@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Download video QA benchmark metadata or full media.")
     parser.add_argument("--benchmark", default="all", choices=["all", *sorted(DATASETS)])
     parser.add_argument("--scope", default="metadata", choices=["metadata", "full"])
-    parser.add_argument("--data_root", default=os.getenv("SPARSEVLLM_DATA_DIR", DEFAULT_DATA_ROOT))
+    parser.add_argument("--data_root", default=os.getenv("SPARSEENGINE_DATA_DIR", DEFAULT_DATA_ROOT))
     parser.add_argument("--cache_dir", default=DEFAULT_HF_CACHE)
     parser.add_argument("--max_workers", type=int, default=4)
     parser.add_argument("--local_dir", default="", help="Override local dir for single-benchmark downloads.")

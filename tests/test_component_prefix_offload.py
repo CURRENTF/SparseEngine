@@ -3,21 +3,21 @@
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.methods.quest import QuestPrefixBlockPayload
-from sparsevllm.engine.cache_manager.offload.prefix_components import (
+from sparseengine.engine.cache_manager.methods.quest import QuestPrefixBlockPayload
+from sparseengine.engine.cache_manager.offload.prefix_components import (
     ComponentPrefixOffloadController,
     ComponentPrefixPool,
     prefix_block_bytes,
     storage_prefix_components,
 )
-from sparsevllm.engine.cache_manager.standard import StandardPrefixBlockPayload
-from sparsevllm.engine.cache_manager.storage import (
+from sparseengine.engine.cache_manager.standard import StandardPrefixBlockPayload
+from sparseengine.engine.cache_manager.storage import (
     ExplicitKVStorage,
     HeterogeneousExplicitKVStorage,
     MlaLatentStorage,
 )
-from sparsevllm.engine.cache_manager.storage.components import CacheComponentSpec
-from sparsevllm.engine.prefix_cache import PrefixCacheBlock, RadixPrefixIndex
+from sparseengine.engine.cache_manager.storage.components import CacheComponentSpec
+from sparseengine.engine.prefix_cache import PrefixCacheBlock, RadixPrefixIndex
 
 
 def _storage(kind):
@@ -187,7 +187,7 @@ def test_batched_component_transfer_preserves_rows_under_graph(
     dtype, width, components
 ):
     """Batching must preserve component identity, masked tails, and replay indices."""
-    from sparsevllm.operators.indexed_host_copy import (
+    from sparseengine.operators.indexed_host_copy import (
         make_pointer_table,
         transfer_components,
     )

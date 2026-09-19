@@ -4,13 +4,13 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.distributed.parallel_context import ParallelGroup
-from sparsevllm.engine.cache_manager.base import LayerBatchStates
-from sparsevllm.engine.cache_manager.methods.rkv import RKVCacheManager
-from sparsevllm.engine.cache_manager.methods.rkv_scoring import rkv_head_scores
-from sparsevllm.engine.sparse_methods.base import SparseStepContext
-from sparsevllm.engine.sparse_methods.rkv import RKVRuntime
+from sparseengine.config import RuntimeLayout
+from sparseengine.distributed.parallel_context import ParallelGroup
+from sparseengine.engine.cache_manager.base import LayerBatchStates
+from sparseengine.engine.cache_manager.methods.rkv import RKVCacheManager
+from sparseengine.engine.cache_manager.methods.rkv_scoring import rkv_head_scores
+from sparseengine.engine.sparse_methods.base import SparseStepContext
+from sparseengine.engine.sparse_methods.rkv import RKVRuntime
 from tests.test_static_eviction_compaction import _page_table_manager
 
 
@@ -234,8 +234,8 @@ def test_cuda_scores_match_independent_oracle(dtype):
 
 
 def test_legacy_approximation_config_is_rejected():
-    from sparsevllm.configs.groups import SparseMethodConfig
-    from sparsevllm.configs.sparse import _normalize_rkv
+    from sparseengine.configs.groups import SparseMethodConfig
+    from sparseengine.configs.sparse import _normalize_rkv
     config = SparseMethodConfig(sparse_method="rkv", rkv_redundancy_window=64)
     with pytest.raises(ValueError, match="full resident domain"):
         _normalize_rkv(config)
@@ -259,7 +259,7 @@ def test_long_prompt_admission_reserves_until_buffer_boundary():
 
 
 def test_decode_workspace_does_not_consume_small_prefill_profiling_pool(monkeypatch):
-    from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+    from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
     manager = object.__new__(RKVCacheManager)
     manager.config = SimpleNamespace(startup_cache_phase="profiling", rkv_score_chunk_mb=64)
     manager._rkv_query_cache_bytes = lambda: 1024**2
@@ -276,7 +276,7 @@ def test_decode_workspace_does_not_consume_small_prefill_profiling_pool(monkeypa
 
 def test_long_prompt_workspace_rejected_before_cache_allocation(monkeypatch):
     """A small retention budget must not hide an unscorable first long prompt."""
-    from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+    from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
     manager = object.__new__(RKVCacheManager)
     manager.config = SimpleNamespace(startup_cache_phase="serving", max_model_len=4096,
                                     rkv_observation_tokens=8, rkv_score_chunk_mb=1)
@@ -290,7 +290,7 @@ def test_long_prompt_workspace_rejected_before_cache_allocation(monkeypatch):
 
 def test_workspace_plan_acceptance_executes_against_independent_oracle():
     """The startup planner and execution must agree even at a tight tile budget."""
-    from sparsevllm.engine.cache_manager.methods.rkv_scoring import rkv_score_tiles
+    from sparseengine.engine.cache_manager.methods.rkv_scoring import rkv_score_tiles
     torch.manual_seed(7)
     keys = torch.randn(1, 2, 23, 8)
     queries = torch.randn(1, 4, 3, 8)

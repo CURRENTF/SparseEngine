@@ -4,13 +4,13 @@ from unittest.mock import patch
 import pytest
 import torch
 
-import sparsevllm.engine.llm_engine as llm_engine
-import sparsevllm.engine.model_runner as model_runner
-from sparsevllm.kernels.external.required import (
+import sparseengine.engine.llm_engine as llm_engine
+import sparseengine.engine.model_runner as model_runner
+from sparseengine.kernels.external.required import (
     validate_required_cuda_kernel_families,
     validate_required_cuda_kernel_metadata,
 )
-from sparsevllm.kernels.external.support import (
+from sparseengine.kernels.external.support import (
     KernelFamilyHealth,
     KernelFamilyState,
 )
@@ -32,7 +32,7 @@ def _health(
 def test_required_cuda_binary_validation_accepts_healthy_families() -> None:
     with (
         patch(
-            "sparsevllm.kernels.external.required.flashinfer_kernel_health",
+            "sparseengine.kernels.external.required.flashinfer_kernel_health",
             return_value=_health(
                 "flashinfer-python",
                 KernelFamilyState.READY,
@@ -40,7 +40,7 @@ def test_required_cuda_binary_validation_accepts_healthy_families() -> None:
             ),
         ),
         patch(
-            "sparsevllm.kernels.external.required.sgl_kernel_health",
+            "sparseengine.kernels.external.required.sgl_kernel_health",
             return_value=_health(
                 "sglang-kernel",
                 KernelFamilyState.READY,
@@ -54,7 +54,7 @@ def test_required_cuda_binary_validation_accepts_healthy_families() -> None:
 def test_required_cuda_binary_validation_reports_all_unhealthy_families() -> None:
     with (
         patch(
-            "sparsevllm.kernels.external.required.flashinfer_kernel_health",
+            "sparseengine.kernels.external.required.flashinfer_kernel_health",
             return_value=_health(
                 "flashinfer-python",
                 KernelFamilyState.ABSENT,
@@ -62,7 +62,7 @@ def test_required_cuda_binary_validation_reports_all_unhealthy_families() -> Non
             ),
         ),
         patch(
-            "sparsevllm.kernels.external.required.sgl_kernel_health",
+            "sparseengine.kernels.external.required.sgl_kernel_health",
             return_value=_health(
                 "sglang-kernel",
                 KernelFamilyState.BROKEN,
@@ -83,7 +83,7 @@ def test_required_cuda_binary_validation_reports_all_unhealthy_families() -> Non
 def test_required_cuda_metadata_validation_reports_unhealthy_families() -> None:
     with (
         patch(
-            "sparsevllm.kernels.external.required.flashinfer_kernel_metadata_health",
+            "sparseengine.kernels.external.required.flashinfer_kernel_metadata_health",
             return_value=_health(
                 "flashinfer-python",
                 KernelFamilyState.ABSENT,
@@ -91,7 +91,7 @@ def test_required_cuda_metadata_validation_reports_unhealthy_families() -> None:
             ),
         ),
         patch(
-            "sparsevllm.kernels.external.required.sgl_kernel_metadata_health",
+            "sparseengine.kernels.external.required.sgl_kernel_metadata_health",
             return_value=_health(
                 "sglang-kernel",
                 KernelFamilyState.READY,
@@ -130,10 +130,10 @@ def test_gpu_engine_validates_metadata_before_starting_workers() -> None:
 def test_model_runner_validates_binaries_after_selecting_rank_device(monkeypatch, tmp_path) -> None:
     import os
     from pathlib import Path
-    from sparsevllm.kernels.external.flashinfer import jit_cache
+    from sparseengine.kernels.external.flashinfer import jit_cache
 
     monkeypatch.setattr(jit_cache, "_configured_cache", None)
-    monkeypatch.delenv("SPARSEVLLM_TRTLLM_DG_CACHE_ROOT", raising=False)
+    monkeypatch.delenv("SPARSEENGINE_TRTLLM_DG_CACHE_ROOT", raising=False)
     monkeypatch.setenv("TRTLLM_DG_CACHE_DIR", str(tmp_path))
     events: list[tuple[str, object]] = []
 

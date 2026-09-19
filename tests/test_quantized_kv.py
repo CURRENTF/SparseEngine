@@ -8,15 +8,15 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.configs.kv_quant import validate_quantized_kv
-from sparsevllm.engine.cache_manager.quantized_pages import QuantizedPagePool
-from sparsevllm.engine.cache_manager.storage.quantized_kv import (
+from sparseengine.configs.kv_quant import validate_quantized_kv
+from sparseengine.engine.cache_manager.quantized_pages import QuantizedPagePool
+from sparseengine.engine.cache_manager.storage.quantized_kv import (
     QuantizedKVStorage, gaussian_codebook, orthogonal_rotation,
 )
-from sparsevllm.kernels.triton.quantized_kv import encode_pages, quantized_decode_append, materialize_sequence, quantized_decode
-from sparsevllm.operators.decode_attention import DecodeAttentionOpSpec, DECODE_ATTENTION_REGISTRY
-from sparsevllm.operators.registry import OpResolver
-from sparsevllm.platforms.interface import DeviceCaps, PlatformEnum
+from sparseengine.kernels.triton.quantized_kv import encode_pages, quantized_decode_append, materialize_sequence, quantized_decode
+from sparseengine.operators.decode_attention import DecodeAttentionOpSpec, DECODE_ATTENTION_REGISTRY
+from sparseengine.operators.registry import OpResolver
+from sparseengine.platforms.interface import DeviceCaps, PlatformEnum
 
 
 def test_failed_append_is_atomic_and_release_reuses_pages():
@@ -88,8 +88,8 @@ def test_unsupported_storage_contract_fails_before_allocation(changes, match):
 def test_parallel_budget_matches_local_attention_heads(tmp_path, method, graph):
     """TP halves head-owned storage; changing EP must not change attention KV."""
     from transformers import Qwen3MoeConfig
-    from sparsevllm.config import Config
-    from sparsevllm.engine.startup.capacity import profiling_kv_budget_bytes
+    from sparseengine.config import Config
+    from sparseengine.engine.startup.capacity import profiling_kv_budget_bytes
 
     hf = Qwen3MoeConfig(hidden_size=256, intermediate_size=512,
                         moe_intermediate_size=256, num_hidden_layers=2,
@@ -114,7 +114,7 @@ def test_parallel_budget_matches_local_attention_heads(tmp_path, method, graph):
 def test_quantization_preserves_model_parallel_validation(tmp_path):
     """Opening quantization must not bypass illegal head/expert shards or model DP."""
     from transformers import Qwen3MoeConfig
-    from sparsevllm.config import Config
+    from sparseengine.config import Config
 
     Qwen3MoeConfig(hidden_size=256, intermediate_size=512, moe_intermediate_size=256,
                    num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
@@ -278,10 +278,10 @@ def _unpack_page(payload, page, *, key):
 def test_manager_chunk_append_and_free_preserve_history(tmp_path, kernel_device, method):
     """Exercise real config/factory and raw-tail transitions across chunk boundaries."""
     from transformers import LlamaConfig
-    from sparsevllm.config import Config
-    from sparsevllm.distributed.parallel_context import ParallelContext, ParallelGroup
-    from sparsevllm.engine.cache_manager import CacheManager, ExplicitKVWrite, SparseSelection
-    from sparsevllm.engine.sequence import Sequence
+    from sparseengine.config import Config
+    from sparseengine.distributed.parallel_context import ParallelContext, ParallelGroup
+    from sparseengine.engine.cache_manager import CacheManager, ExplicitKVWrite, SparseSelection
+    from sparseengine.engine.sequence import Sequence
 
     if kernel_device.type == "cpu" and method == "fp8_kv":
         pytest.skip("FP8 conversion requires CUDA; Triton interpreter has a known rounding bug")
@@ -293,7 +293,7 @@ def test_manager_chunk_append_and_free_preserve_history(tmp_path, kernel_device,
                     max_num_seqs_in_batch=2, max_decoding_seqs=2, max_num_seqs_in_gpu=2,
                     decode_graph=False)
     group = ParallelGroup(None, (0,), 0, 1)
-    from sparsevllm.engine.startup.capacity import profiling_kv_budget_bytes, profiling_kv_slots
+    from sparseengine.engine.startup.capacity import profiling_kv_budget_bytes, profiling_kv_slots
     config.startup_cache_phase = "profiling"
     manager = CacheManager.create(config, ParallelContext(world=group, attn_tp=group, moe_ep=group, attn_dp=group, moe_tp=group),
                                   allocation_budget_bytes=profiling_kv_budget_bytes(config, profiling_kv_slots(config)))
@@ -466,7 +466,7 @@ def test_gqa_head_shards_match_unsharded_quantization(kernel_device, method, bit
                                          ("kivi", 2, 256), ("turboquant", 3, 64), ("fp8_kv", 8, 64)])
 def test_provider_graph_replay_reads_live_lengths_and_rows(kernel_device, method, bits, d):
     """Catch stale inactive splits when a large captured grid changes live lengths."""
-    from sparsevllm.operators.decode_attention import QuantizedPagesDecodeAttentionProvider
+    from sparseengine.operators.decode_attention import QuantizedPagesDecodeAttentionProvider
 
     if kernel_device.type != "cuda":
         pytest.skip("requires CUDA Graph replay")

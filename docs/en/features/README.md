@@ -1,6 +1,6 @@
 # Features
 
-This directory collects the sparse-method docs that define Sparse-vLLM
+This directory collects the sparse-method docs that define Sparse-Engine
 behavior.
 
 - [Supported Models](supported-models.md)

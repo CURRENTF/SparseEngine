@@ -11,7 +11,7 @@ import torch
 from benchmark.multimodal.video_qa import audit_livevlm_table4 as livevlm_audit
 from benchmark.multimodal.video_qa import streamingbench
 from benchmark.multimodal.image_qa import vqav2
-from sparsevllm.config import Config
+from sparseengine.config import Config
 
 
 class ResearchFailFastTest(unittest.TestCase):
@@ -405,18 +405,18 @@ class ResearchFailFastTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no annotator answers"):
             vqav2.validate_vqav2_row(no_gt, split="validation", source="unit")
 
-    def test_sparsevllm_raw_config_fallback_is_not_allowed(self):
+    def test_sparseengine_raw_config_fallback_is_not_allowed(self):
         with tempfile.TemporaryDirectory() as tmp:
             model_dir = Path(tmp)
             (model_dir / "config.json").write_text(
                 '{"model_type": "qwen2", "dtype": "float16", "max_position_embeddings": 32768}\n',
                 encoding="utf-8",
             )
-            with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", side_effect=RuntimeError("boom")):
+            with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", side_effect=RuntimeError("boom")):
                 with self.assertRaisesRegex(RuntimeError, "Refusing to silently fall back"):
                     Config(model=str(model_dir))
 
-    def test_sparsevllm_rejects_unsupported_model_type(self):
+    def test_sparseengine_rejects_unsupported_model_type(self):
         hf_config = SimpleNamespace(
             model_type="deepseek_v2",
             dtype=torch.float16,
@@ -426,11 +426,11 @@ class ResearchFailFastTest(unittest.TestCase):
             num_hidden_layers=2,
         )
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=hf_config):
-                with self.assertRaisesRegex(NotImplementedError, "Unsupported Sparse-vLLM model_type"):
+            with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=hf_config):
+                with self.assertRaisesRegex(NotImplementedError, "Unsupported Sparse-Engine model_type"):
                     Config(model=tmp)
 
-    def test_sparsevllm_deltakv_requires_checkpoint_path(self):
+    def test_sparseengine_deltakv_requires_checkpoint_path(self):
         hf_config = SimpleNamespace(
             model_type="qwen2",
             dtype=torch.float16,
@@ -440,7 +440,7 @@ class ResearchFailFastTest(unittest.TestCase):
             num_hidden_layers=2,
         )
         with tempfile.TemporaryDirectory() as tmp:
-            with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=hf_config):
+            with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=hf_config):
                 with self.assertRaisesRegex(ValueError, "requires deltakv_checkpoint_path"):
                     Config(model=tmp, sparse_method="deltakv")
                 with self.assertRaisesRegex(ValueError, "requires deltakv_checkpoint_path"):
@@ -456,8 +456,8 @@ class ResearchFailFastTest(unittest.TestCase):
                 )
                 self.assertEqual(cfg.sparse_method, "deltakv")
 
-    def test_sparsevllm_missing_model_dir_has_clear_error(self):
-        missing = "/tmp/sparsevllm-definitely-missing-model-dir"
+    def test_sparseengine_missing_model_dir_has_clear_error(self):
+        missing = "/tmp/sparseengine-definitely-missing-model-dir"
         with self.assertRaisesRegex(FileNotFoundError, "Model directory does not exist"):
             Config(model=missing)
 

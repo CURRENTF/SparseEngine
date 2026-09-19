@@ -13,7 +13,7 @@ from pathlib import Path
 
 import torch
 import triton
-from sparsevllm.kernels.triton.quest_decode_view import _score_quest_pages_kernel
+from sparseengine.kernels.triton.quest_decode_view import _score_quest_pages_kernel
 
 def current_score_with_warps(
     query: torch.Tensor,
@@ -134,8 +134,8 @@ def measure(variants, root, tag):
     return result
 
 def moe(root):
-    from sparsevllm.operators.moe import FlashInferCutlassFp8MoeProvider, TritonUpGateFp8MoeProvider, MoeOpSpec
-    from sparsevllm.quantization.fp8 import fp8_blockwise_linear_reference
+    from sparseengine.operators.moe import FlashInferCutlassFp8MoeProvider, TritonUpGateFp8MoeProvider, MoeOpSpec
+    from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
     e,h,i,k=128,2048,768,8
     w13=torch.randn(e,2*i,h,device='cuda').to(torch.float8_e4m3fn)
     w2=torch.randn(e,h,i,device='cuda').to(torch.float8_e4m3fn)
@@ -169,7 +169,7 @@ def moe(root):
     return results
 
 def score(root):
-    from sparsevllm.operators.quest_scoring import QuestPageScoreSpec, resolve_quest_page_score_provider
+    from sparseengine.operators.quest_scoring import QuestPageScoreSpec, resolve_quest_page_score_provider
     provider = resolve_quest_page_score_provider(
         QuestPageScoreSpec(torch.bfloat16, 32, 4, 128, True), device_index=0,
     )
@@ -190,18 +190,18 @@ def score(root):
 
 def score_general(root, shapes, dtype, working_set_copies=1, metadata_sharing="disjoint"):
     """Compare complete score callables for caller-specified tensor contracts."""
-    from sparsevllm.kernels.triton.quest_decode_view import score_quest_pages
-    from sparsevllm.kernels.triton.quest_page_score import (
+    from sparseengine.kernels.triton.quest_decode_view import score_quest_pages
+    from sparseengine.kernels.triton.quest_page_score import (
         score_quest_pages_tensorcore,
         score_quest_pages_vector,
     )
-    from sparsevllm.operators.quest_scoring import (
+    from sparseengine.operators.quest_scoring import (
         QuestPageScoreSpec,
         TensorCoreQuestPageScoreProvider,
         resolve_quest_page_score_provider,
     )
 
-    from sparsevllm import platforms
+    from sparseengine import platforms
 
     caps = platforms.current_platform.get_device_caps(0)
     results = {}

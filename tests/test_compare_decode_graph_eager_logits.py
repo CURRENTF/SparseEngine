@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.engine.decode_cuda_graph import DecodeCudaGraphKey, DecodeCudaGraphState
+from sparseengine.engine.decode_cuda_graph import DecodeCudaGraphKey, DecodeCudaGraphState
 
 from scripts.debug.compare_decode_graph_eager_logits import (
     _build_method_trigger_evidence,

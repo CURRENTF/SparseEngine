@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Standardized Synthetic Length Sweep & Micro-Efficiency Benchmark for Sparse-vLLM & vLLM."""
+"""Standardized Synthetic Length Sweep & Micro-Efficiency Benchmark for Sparse-Engine & vLLM."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ from benchmark.efficiency.workload import (
     derive_trace_seed,
     trace_metadata,
 )
-from benchmark.sparsevllm_regression.manifest import (
+from benchmark.sparseengine_regression.manifest import (
     validate_omnikv_benchmark_config,
 )
 
@@ -489,7 +489,7 @@ def _resolve_sparse_probe_protocol(
     hyper_params.setdefault("expert_parallel_size", getattr(args, "expert_parallel_size", 1))
     hyper_params.setdefault("gpu_memory_utilization", args.gpu_memory_utilization)
     hyper_params.setdefault("decode_graph", True)
-    from sparsevllm.config import Config
+    from sparseengine.config import Config
     hyper_params.setdefault("decode_reservation_tokens", Config.decode_reservation_tokens)
     hyper_params.setdefault("max_num_batched_tokens", args.max_num_batched_tokens)
     hyper_params.setdefault("engine_prefill_chunk_size", 8192)
@@ -546,7 +546,7 @@ def _resolve_sparse_probe_protocol(
         "sparse_budget": sparse_budget,
         "max_num_batched_tokens": int(hyper_params["max_num_batched_tokens"]),
     }
-    protocol_label = f"sparsevllm-{args.sparse_method}"
+    protocol_label = f"sparseengine-{args.sparse_method}"
     if args.sparse_method == "snapkv":
         protocol_label += (
             f"-{protocol['score_mode']}-budget{protocol['sparse_budget']}"
@@ -629,16 +629,16 @@ def _resident_sequence_rows(
     )
 
 
-def run_sparsevllm_probe(
+def run_sparseengine_probe(
     args: argparse.Namespace,
     model_specs: ModelArchitectureSpecs,
 ) -> list[dict[str, Any]]:
     import torch
-    from sparsevllm import LLM, SamplingParams
-    from sparsevllm.utils.profiler import profiler
+    from sparseengine import LLM, SamplingParams
+    from sparseengine.utils.profiler import profiler
 
     if args.scenario == "churn":
-        return run_sparsevllm_churn(args, model_specs)
+        return run_sparseengine_churn(args, model_specs)
 
     results = []
     output_dir = Path(args.output_dir)
@@ -671,7 +671,7 @@ def run_sparsevllm_probe(
         ),
     }
 
-    print(f"[Sparse-vLLM Probe] Initializing LLM with method={args.sparse_method}, max_model_len={max_len_needed}...")
+    print(f"[Sparse-Engine Probe] Initializing LLM with method={args.sparse_method}, max_model_len={max_len_needed}...")
     llm = LLM(args.model_path, **engine_kwargs)
 
     for p_len in args.prompt_lens:
@@ -816,7 +816,7 @@ def run_sparsevllm_probe(
                             expected = int(seq_to_request[seq_id].output_len)
                             if generated != expected:
                                 raise RuntimeError(
-                                    f"Sparse-vLLM generated {generated} tokens for seq_id={seq_id}, "
+                                    f"Sparse-Engine generated {generated} tokens for seq_id={seq_id}, "
                                     f"expected {expected}."
                                 )
                         ttft_ms = float(timing_metrics["ttft_ms"])
@@ -839,14 +839,14 @@ def run_sparsevllm_probe(
                                     **timing,
                                     "seq_id": seq_id,
                                     "timing_source": (
-                                        "sparsevllm_wave_workload_arrival_step_publication_v1" if wave_size
-                                        else "sparsevllm_step_token_publication_no_extra_sync_v1"),
+                                        "sparseengine_wave_workload_arrival_step_publication_v1" if wave_size
+                                        else "sparseengine_step_token_publication_no_extra_sync_v1"),
                                 }
                             )
                         profiler_snap = profiler.snapshot()
 
                         rec = {
-                            "engine": "sparsevllm",
+                            "engine": "sparseengine",
                             "sparse_method": args.sparse_method,
                             "scenario": "fixed_batch",
                             "prompt_len": p_len,
@@ -890,7 +890,7 @@ def run_sparsevllm_probe(
                             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                         _append_request_samples(
                             output_dir,
-                            engine="sparsevllm",
+                            engine="sparseengine",
                             sparse_method=args.sparse_method,
                             scenario="fixed_batch",
                             prompt_len=p_len,
@@ -923,7 +923,7 @@ def run_sparsevllm_probe(
                 ]
 
                 summary_row = {
-                    "engine": "sparsevllm",
+                    "engine": "sparseengine",
                     "sparse_method": args.sparse_method,
                     "scenario": "fixed_batch",
                     "prompt_len": p_len,
@@ -970,13 +970,13 @@ def run_sparsevllm_probe(
     return results
 
 
-def run_sparsevllm_churn(
+def run_sparseengine_churn(
     args: argparse.Namespace,
     model_specs: ModelArchitectureSpecs,
 ) -> list[dict[str, Any]]:
     import torch
-    from sparsevllm import LLM, SamplingParams
-    from sparsevllm.utils.profiler import profiler
+    from sparseengine import LLM, SamplingParams
+    from sparseengine.utils.profiler import profiler
     from benchmark.efficiency.metrics import scheduler_phase_metrics
 
     results: list[dict[str, Any]] = []
@@ -1000,7 +1000,7 @@ def run_sparsevllm_churn(
             ),
         }
         print(
-            "[Sparse-vLLM Churn] Initializing "
+            "[Sparse-Engine Churn] Initializing "
             f"method={args.sparse_method}, max_concurrency={concurrency}..."
         )
         engine_init_started = time.perf_counter()
@@ -1084,7 +1084,7 @@ def run_sparsevllm_churn(
                                 )
                                 if seq_id in seq_to_request:
                                     raise RuntimeError(
-                                        f"Duplicate Sparse-vLLM churn sequence ID: {seq_id}."
+                                        f"Duplicate Sparse-Engine churn sequence ID: {seq_id}."
                                     )
                                 seq_to_request[seq_id] = request
                                 arrival_times[seq_id] = time.perf_counter()
@@ -1132,7 +1132,7 @@ def run_sparsevllm_churn(
                             ):
                                 if observed != expected_seq_ids:
                                     raise RuntimeError(
-                                        f"Sparse-vLLM churn {name} coverage mismatch: "
+                                        f"Sparse-Engine churn {name} coverage mismatch: "
                                         f"missing={sorted(expected_seq_ids - observed)}, "
                                         f"unexpected={sorted(observed - expected_seq_ids)}."
                                     )
@@ -1142,7 +1142,7 @@ def run_sparsevllm_churn(
                                 generated = generated_counts[seq_id]
                                 if generated != request.output_len:
                                     raise RuntimeError(
-                                        f"Sparse-vLLM churn seq_id={seq_id} generated "
+                                        f"Sparse-Engine churn seq_id={seq_id} generated "
                                         f"{generated} tokens, expected {request.output_len}."
                                     )
                                 first = first_token_times[seq_id]
@@ -1154,7 +1154,7 @@ def run_sparsevllm_churn(
                                         **request_metrics(
                                             first - arrival_times[seq_id], finished - first, generated
                                         ),
-                                        "timing_source": "sparsevllm_step_token_publication_no_extra_sync_v1",
+                                        "timing_source": "sparseengine_step_token_publication_no_extra_sync_v1",
                                     }
                                 )
 
@@ -1171,7 +1171,7 @@ def run_sparsevllm_churn(
                             )
                             profiler_snap = profiler.snapshot()
                             record = {
-                                "engine": "sparsevllm",
+                                "engine": "sparseengine",
                                 "sparse_method": args.sparse_method,
                                 "scenario": "oversubscribed_churn",
                                 "prompt_len": p_len,
@@ -1212,7 +1212,7 @@ def run_sparsevllm_churn(
                                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                             _append_request_samples(
                                 output_dir,
-                                engine="sparsevllm",
+                                engine="sparseengine",
                                 sparse_method=args.sparse_method,
                                 scenario="oversubscribed_churn",
                                 prompt_len=p_len,
@@ -1243,7 +1243,7 @@ def run_sparsevllm_churn(
                     ]
                     results.append(
                         {
-                            "engine": "sparsevllm",
+                            "engine": "sparseengine",
                             "sparse_method": args.sparse_method,
                             "scenario": "oversubscribed_churn",
                             "prompt_len": p_len,
@@ -1822,7 +1822,7 @@ def run_vllm_churn(
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Standardized Synthetic Length Sweep & Efficiency Probe.")
-    parser.add_argument("--engine", type=str, choices=["sparsevllm", "vllm", "hisparse", "vortex"], default="sparsevllm")
+    parser.add_argument("--engine", type=str, choices=["sparseengine", "vllm", "hisparse", "vortex"], default="sparseengine")
     parser.add_argument("--model-path", type=str, required=True, help="Model path or HF name")
     parser.add_argument("--sparse-method", type=str, default="vanilla",
                         help="Sparse method name; fixed-batch vLLM accepts vanilla or explicitly configured snapkv.")
@@ -1859,13 +1859,13 @@ def parse_args():
         "--expert-parallel-size",
         type=int,
         default=1,
-        help="Sparse-vLLM expert parallel size.",
+        help="Sparse-Engine expert parallel size.",
     )
     parser.add_argument(
         "--max-num-batched-tokens",
         type=int,
         default=65536,
-        help="Matched scheduler token budget used by Sparse-vLLM and vLLM.",
+        help="Matched scheduler token budget used by Sparse-Engine and vLLM.",
     )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--prefill-wave-size", type=int, default=0,
@@ -1921,7 +1921,7 @@ def main():
             _parse_json_arg(args.engine_kwargs).get("data_parallel_size", 1)
         ) > 1:
             raise ValueError("vLLM DP currently supports fixed request-mode probes only")
-        if args.engine == "sparsevllm" and int(
+        if args.engine == "sparseengine" and int(
             _parse_json_arg(args.hyper_params).get("data_parallel_size", 1)
         ) > 1:
             raise ValueError("DP attention currently supports request-mode probes only")
@@ -1940,7 +1940,7 @@ def main():
         raise ValueError("Invalid decode-only window length or warmup")
     if args.prefill_wave_size < 0 or (
         args.prefill_wave_size
-        and (args.engine != "sparsevllm" or args.sparse_method != "h2o" or args.scenario != "fixed")
+        and (args.engine != "sparseengine" or args.sparse_method != "h2o" or args.scenario != "fixed")
     ):
         raise ValueError("--prefill-wave-size requires native H2O with --scenario fixed")
     for name in ("prompt_lens", "output_lens", "batch_sizes"):
@@ -2030,8 +2030,8 @@ def main():
                 "CUDA_VISIBLE_DEVICES",
                 "NCCL_DEBUG",
                 "VLLM_USE_V1",
-                "PROFILER_SVLLM",
-                "SPARSEVLLM_SYNC_DEVICE",
+                "PROFILER_SENGINE",
+                "SPARSEENGINE_SYNC_DEVICE",
             )
             if key in os.environ
         },
@@ -2053,7 +2053,7 @@ def main():
             "phase_throughput_contract": (
                 "diagnostic windows only, not execution stages; "
                 "first-token window: prompt tokens / maximum arrival-to-first-token "
-                "duration (Sparse-vLLM churn: submission-to-last-first-token); "
+                "duration (Sparse-Engine churn: submission-to-last-first-token); "
                 "batch decode window: generated tokens after each first token / "
                 "first-first-token-to-last-completion window; request TPOT: mean "
                 "per-request (finish-first)/(generated-1); TPOT-equivalent concurrent "
@@ -2083,8 +2083,8 @@ def main():
         requested_scenario = args.scenario
         for scenario in scenarios:
             args.scenario = scenario
-            if args.engine == "sparsevllm":
-                summary_rows.extend(run_sparsevllm_probe(args, model_specs))
+            if args.engine == "sparseengine":
+                summary_rows.extend(run_sparseengine_probe(args, model_specs))
             else:
                 summary_rows.extend(run_vllm_probe(args, model_specs))
         args.scenario = requested_scenario

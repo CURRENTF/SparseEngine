@@ -24,7 +24,7 @@
 ```bash
 CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$PWD:$PWD/src" python3 \
   benchmark/efficiency/bench_probe.py \
-  --engine sparsevllm --sparse-method vanilla --model-path "<MODEL_PATH>" \
+  --engine sparseengine --sparse-method vanilla --model-path "<MODEL_PATH>" \
   --tensor-parallel-size 1 --monitor-gpus 0 \
   --scenario fixed --prompt-lens 4096 --output-lens 32 --batch-sizes 1 \
   --num-warmups 0 --num-iters 1 --output-dir "<NEW_RUN_DIR>"
@@ -33,7 +33,7 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$PWD:$PWD/src" python3 \
 完整参数用 `python3 benchmark/efficiency/bench_probe.py --help` 查询。
 `--monitor-gpus` 是物理 GPU ID，须与 `CUDA_VISIBLE_DEVICES` 对齐。
 Probe 默认每个 scheduler 的 `max_num_batched_tokens=65536`。
-Sparse-vLLM 独立默认 `engine_prefill_chunk_size=8192`，可通过
+Sparse-Engine 独立默认 `engine_prefill_chunk_size=8192`，可通过
 `--hyper-params` 覆盖；调度 token 总预算与 prefill chunk size 是两个独立参数。
 当前 vLLM 适配器没有对应的独立 chunk size 参数，其切块受可用调度 token 预算约束。
 跨拓扑比较须记录这一差异，以及每 replica 和全局的预算。
@@ -52,12 +52,12 @@ sink/recent/selected/full layers，同名预算不保证相同工作量或质量
 - [Probe wrapper](../../../scripts/benchmarks/run_efficiency_probe.sh)：
   `SYSTEMS MODEL_NAME_OR_PATH PHYSICAL_GPU_IDS`；变量及模型别名以脚本为准。
   别名固定 TP，自定义路径默认 TP2；显式拓扑用 Python CLI。
-  稀疏参数来自 [regression manifest](../../../benchmark/sparsevllm_regression/manifest.json)；
+  稀疏参数来自 [regression manifest](../../../benchmark/sparseengine_regression/manifest.json)；
   OmniKV 无校准条目会失败，可显式提供 `BENCH_MANIFEST_MODEL_ID` 或
   `OMNIKV_FULL_ATTENTION_LAYERS`，单层配置需要显式消融开关。
 - [Unified suite](../../../scripts/benchmarks/run_unified_efficiency_suite.sh)：
   参数顺序是 `GPUS SYSTEMS MODEL_NAME`，运行 synthetic 与 LongBench；
-  数据目录用 `SPARSEVLLM_LONGBENCH_DATA_DIR`，最终检查 `suite_status.json`。
+  数据目录用 `SPARSEENGINE_LONGBENCH_DATA_DIR`，最终检查 `suite_status.json`。
 - [Nsight 诊断](../../../scripts/benchmarks/run_efficiency_profile.sh)：
   标准测试发现可疑 case 后使用，参数为 `SYSTEM MODEL_PATH GPUS`。
   当前 wrapper 支持 vanilla/SnapKV/vLLM vanilla、默认 TP2；
@@ -112,8 +112,8 @@ sink/recent/selected/full layers，同名预算不保证相同工作量或质量
 
 请求统计契约 `per_request_distribution_v3` 合并各 iteration 的逐请求样本，
 报告 mean/P50/P95/P99；旧批次最大 TTFT 均值为 `batch_max_ttft_ms_mean`。
-Sparse-vLLM 在 step 返回观测 token，不额外逐步同步，标记
-`sparsevllm_step_token_publication_no_extra_sync_v1`；vLLM 的
+Sparse-Engine 在 step 返回观测 token，不额外逐步同步，标记
+`sparseengine_step_token_publication_no_extra_sync_v1`；vLLM 的
 legacy finished_time / V1 last_token_ts 按 `timing_source` 区分。
 它们是引擎事件，不是 HTTP 客户端延迟；观测边界不一致时不能直接比较。
 
@@ -140,7 +140,7 @@ decode 排除 prefill 产生的 token；逻辑输入不等于实际计算量。
 
 | 模式 | 当前范围与限制 |
 | --- | --- |
-| 默认请求 probe | Sparse-vLLM / vLLM，fixed/churn，显式 TP；模型能力另行约束 |
+| 默认请求 probe | Sparse-Engine / vLLM，fixed/churn，显式 TP；模型能力另行约束 |
 | 原生连续 decode | 已实现逐 rank 边界同步，不以 TP1 为永久限制；当前编排 DP1，TP/EP 受模型和引擎能力约束 |
 | vLLM / Tangram 连续 decode | 已实现 async 队列边界排空；外部版本和模型须逐组合 smoke；无 wave admission |
 | HiSparse QuEST 连续 decode | 已实现 TP1 overlap 队列边界排空；不是 MLA 适配，无 wave admission |

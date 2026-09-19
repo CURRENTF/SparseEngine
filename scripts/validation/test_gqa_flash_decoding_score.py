@@ -1,8 +1,8 @@
 import torch
 import numpy as np
 # 分别导入两个版本的 kernel
-from sparsevllm.kernels.triton.flash_decoding_stage1 import flash_decode_stage1_with_score as flash_decode_v1
-from sparsevllm.kernels.triton.gqa_flash_decoding_stage1 import flash_decode_stage1_with_score as flash_decode_gqa
+from sparseengine.kernels.triton.flash_decoding_stage1 import flash_decode_stage1_with_score as flash_decode_v1
+from sparseengine.kernels.triton.gqa_flash_decoding_stage1 import flash_decode_stage1_with_score as flash_decode_gqa
 
 def test_gqa_flash_decoding_score():
     torch.manual_seed(42)

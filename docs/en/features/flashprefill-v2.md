@@ -36,7 +36,7 @@ MAX_JOBS=8 python -m pip install ./flashprefill_ops --no-build-isolation
 ```
 
 Package absence, an incompatible version, or binary load failure is reported
-at provider resolution. Sparse-vLLM does not silently replace the requested
+at provider resolution. Sparse-Engine does not silently replace the requested
 sparse semantics with a dense provider.
 
 ## Configure

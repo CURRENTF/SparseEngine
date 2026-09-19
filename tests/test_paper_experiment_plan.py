@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from scripts.official_experiments.sparsevllm_vs_vortex.prepare_runs import (
+from scripts.official_experiments.sparseengine_vs_vortex.prepare_runs import (
     build_outputs,
 )
 
@@ -69,7 +69,7 @@ def test_duplicate_configs_or_job_targets_are_not_silently_overwritten(tmp_path,
 def test_quality_smoke_failure_never_starts_full_cohort(tmp_path, monkeypatch):
     # Consolidating the phase runner must not turn a failed smoke into a full run.
     from types import SimpleNamespace
-    from scripts.official_experiments.sparsevllm_vs_vortex.session import run_quality
+    from scripts.official_experiments.sparseengine_vs_vortex.session import run_quality
     prepared = tmp_path / 'prepared.json'
     prepared.write_text(json.dumps({'identity': {'token_buckets': [{'samples': 1}]},
         'samples': [{'sample': {'_id': 'a'}, 'prompt_tokens': 4, 'index': 0}]}))
@@ -93,7 +93,7 @@ def test_external_quality_failure_cleans_up_only_owned_server(tmp_path, monkeypa
     # The separate server process group must not outlive a failing quality job.
     from contextlib import nullcontext
     from types import SimpleNamespace
-    from scripts.official_experiments.sparsevllm_vs_vortex.session import serve_quality
+    from scripts.official_experiments.sparseengine_vs_vortex.session import serve_quality
     spec = tmp_path / 'server.json'
     spec.write_text(json.dumps({'output': str(tmp_path / 'output'),
         'server_command': ['server'], 'server_cwd': str(tmp_path),

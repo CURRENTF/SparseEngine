@@ -8,7 +8,7 @@ CUDA Graph 验证通过，不代表延迟已达到可用水平。请将两者视
 整体效率问题；仅启用 CUDA Graph 也未解决 TurboQuant 的性能问题。
 
 ```python
-from sparsevllm import LLM
+from sparseengine import LLM
 
 llm = LLM(
     model_path,

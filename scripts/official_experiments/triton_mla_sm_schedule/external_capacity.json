@@ -2,7 +2,7 @@
   "output_root": "${EXTERNAL_OUTPUT_ROOT}",
   "scratch_root": "${EXTERNAL_SCRATCH_ROOT}",
   "conda": "${CONDA_EXE}",
-  "native_env": "${SPARSE_VLLM_ENV}",
+  "native_env": "${SPARSE_ENGINE_ENV}",
   "vllm_env": "${VLLM_ENV}",
   "input_len": 131072, "output_len": 2048,
   "gpu_memory_utilization": 0.9, "case_timeout_s": 14400,

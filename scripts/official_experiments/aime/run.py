@@ -173,7 +173,7 @@ def main():
             manifest["methods"][method] = {"status": "running", "hardware": idle_gpus(args.gpus, setting["engine"]["tensor_parallel_size"])}
             write(root / "manifest.json", manifest)
             env = dict(os.environ, CUDA_VISIBLE_DEVICES=args.gpus,
-                       SPARSEVLLM_OUTPUT_DIR=str(directory), ENABLE_THINKING="1" if evaluation["enable_thinking"] else "0")
+                       SPARSEENGINE_OUTPUT_DIR=str(directory), ENABLE_THINKING="1" if evaluation["enable_thinking"] else "0")
             with (directory / "run.log").open("w") as log:
                 run_command(command, env, log, args.timeout)
             folders = list(directory.glob("benchmark/math_bench/pred/aime/*"))

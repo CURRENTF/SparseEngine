@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Self-contained generators for the Sparse-vLLM RULER core regression set.
+"""Self-contained generators for the Sparse-Engine RULER core regression set.
 
 The task contracts, prompts, and default complexity settings follow NVIDIA
 RULER (commit c3f5e3b4f87f97e048793bb510a3a6b19a46bf3a).  This module deliberately

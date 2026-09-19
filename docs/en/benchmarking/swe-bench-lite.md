@@ -48,8 +48,8 @@ Concurrency does not need to change.
 
 The opt-in memory guard requires Linux cgroup v2, a local Docker daemon, and
 the writable-layer guard enabled. Export
-`SPARSEVLLM_DOCKER_MEMORY_LIMIT_BYTES`, `SPARSEVLLM_DOCKER_MEMORY_PARENT`, and
-`SPARSEVLLM_DOCKER_MEMORY_EVENTS` (the OOM JSONL path). In the MiniSWE extra
+`SPARSEENGINE_DOCKER_MEMORY_LIMIT_BYTES`, `SPARSEENGINE_DOCKER_MEMORY_PARENT`, and
+`SPARSEENGINE_DOCKER_MEMORY_EVENTS` (the OOM JSONL path). In the MiniSWE extra
 config, set `environment.run_args` to matching `--memory`, `--memory-swap`,
 and `--cgroup-parent` values. Set memory and memory-swap to the same size to
 disable container swap. Omit `--rm`: the guard needs Docker's OOM metadata
@@ -62,17 +62,17 @@ The same memory limits are applied to official scorer containers, whose
 failures remain reported by the upstream scorer. Record these limits with the
 run, since resource failures affect the score.
 
-## Sparse-vLLM Server
+## Sparse-Engine Server
 
-Start `sparsevllm.entrypoints.openai.api_server` as a separate long-running
+Start `sparseengine.entrypoints.openai.api_server` as a separate long-running
 process. A typical command is:
 
 ```bash
 CUDA_VISIBLE_DEVICES=2 \
 PYTHONPATH=$PWD/src \
-python -m sparsevllm.entrypoints.openai.api_server \
+python -m sparseengine.entrypoints.openai.api_server \
   --model <MODEL_PATH> \
-  --served-model-name sparsevllm-swe \
+  --served-model-name sparseengine-swe \
   --host 127.0.0.1 \
   --port 18000 \
   --engine-kwargs /path/to/engine_kwargs.json \
@@ -96,9 +96,9 @@ secrets in it.
 
 ```json
 {
-  "command": "python -m sparsevllm.entrypoints.openai.api_server --model <MODEL_PATH> --served-model-name sparsevllm-swe --host 127.0.0.1 --port 18000 --engine-kwargs /path/to/engine_kwargs.json",
+  "command": "python -m sparseengine.entrypoints.openai.api_server --model <MODEL_PATH> --served-model-name sparseengine-swe --host 127.0.0.1 --port 18000 --engine-kwargs /path/to/engine_kwargs.json",
   "model_path": "<MODEL_PATH>",
-  "served_model_name": "sparsevllm-swe",
+  "served_model_name": "sparseengine-swe",
   "cuda_visible_devices": "2",
   "server_port": 18000,
   "engine_kwargs": {
@@ -119,21 +119,21 @@ server.
 ## One-Instance Smoke
 
 Run one instance before committing to all 300. `openai/` is the LiteLLM
-provider prefix; `sparsevllm-swe` is the exact model name advertised by the
-server. Sparse-vLLM does not require authentication, but LiteLLM expects a
+provider prefix; `sparseengine-swe` is the exact model name advertised by the
+server. Sparse-Engine does not require authentication, but LiteLLM expects a
 non-empty OpenAI key, so use a dummy local value.
 
 ```bash
-export OPENAI_API_KEY=local-sparsevllm
+export OPENAI_API_KEY=local-sparseengine
 
 SWE_BENCH_PYTHON=/path/to/swebench-env/bin/python \
 bash scripts/benchmarks/run_swe_bench_lite.sh \
   --stage all \
   --swe-bench-dir ../SWE-bench \
-  --run-dir /path/to/outputs/swe-bench-lite/sparsevllm-smoke \
-  --model openai/sparsevllm-swe \
+  --run-dir /path/to/outputs/swe-bench-lite/sparseengine-smoke \
+  --model openai/sparseengine-swe \
   --api-base http://127.0.0.1:18000/v1 \
-  --served-model-name sparsevllm-swe \
+  --served-model-name sparseengine-swe \
   --server-manifest /path/to/server_manifest.json \
   --slice 0:1 \
   --batch-size 1 \
@@ -157,16 +157,16 @@ conservative generation concurrency and raise `--mini-workers` only after the
 server is stable under simultaneous tool-calling requests.
 
 ```bash
-export OPENAI_API_KEY=local-sparsevllm
+export OPENAI_API_KEY=local-sparseengine
 
 SWE_BENCH_PYTHON=/path/to/swebench-env/bin/python \
 bash scripts/benchmarks/run_swe_bench_lite.sh \
   --stage all \
   --swe-bench-dir ../SWE-bench \
-  --run-dir /path/to/outputs/swe-bench-lite/sparsevllm-lite300 \
-  --model openai/sparsevllm-swe \
+  --run-dir /path/to/outputs/swe-bench-lite/sparseengine-lite300 \
+  --model openai/sparseengine-swe \
   --api-base http://127.0.0.1:18000/v1 \
-  --served-model-name sparsevllm-swe \
+  --served-model-name sparseengine-swe \
   --server-manifest /path/to/server_manifest.json \
   --batch-size 50 \
   --mini-workers 1 \
@@ -191,10 +191,10 @@ semantic arguments and change only `--stage` and operational worker counts:
 ```bash
 COMMON_ARGS=(
   --swe-bench-dir ../SWE-bench
-  --run-dir /path/to/outputs/swe-bench-lite/sparsevllm-lite300
-  --model openai/sparsevllm-swe
+  --run-dir /path/to/outputs/swe-bench-lite/sparseengine-lite300
+  --model openai/sparseengine-swe
   --api-base http://127.0.0.1:18000/v1
-  --served-model-name sparsevllm-swe
+  --served-model-name sparseengine-swe
   --server-manifest /path/to/server_manifest.json
   --batch-size 50
   --step-limit 80
@@ -213,7 +213,7 @@ bash scripts/benchmarks/run_swe_bench_lite.sh \
 # Requires only completed artifacts in the run directory.
 bash scripts/benchmarks/run_swe_bench_lite.sh \
   --stage summarize \
-  --run-dir /path/to/outputs/swe-bench-lite/sparsevllm-lite300
+  --run-dir /path/to/outputs/swe-bench-lite/sparseengine-lite300
 ```
 
 The adapter rejects semantic configuration changes in an existing run
@@ -271,7 +271,7 @@ model:
 Provider-specific request fields, such as DeepSeek thinking controls, are not
 part of the shared adapter configuration. Pass them with a provider-specific
 `--mini-extra-config`; the adapter hashes and snapshots that file. Do not reuse
-such a config for Sparse-vLLM, and never store credentials in it. Config and
+such a config for Sparse-Engine, and never store credentials in it. Config and
 server-manifest validation rejects sensitive field names, common provider token
 formats, authorization headers, and URL credentials before snapshotting.
 
@@ -283,7 +283,7 @@ Each run directory contains:
 | --- | --- |
 | `run_config.json` | Immutable semantic experiment configuration and selected instance ids. |
 | `run_manifest.json` | Code revisions, package versions, Python, credential variable name, and runtime policy. |
-| `server_manifest.json` | Snapshot of the local Sparse-vLLM server configuration, when applicable. |
+| `server_manifest.json` | Snapshot of the local Sparse-Engine server configuration, when applicable. |
 | `evaluation_identity.json` | Prediction hash, official run id, and runtime-provenance hash used for cache ownership. |
 | `invocations.jsonl` | Stage invocations and operational concurrency settings. |
 | `status.jsonl` | Append-only stage and batch status events. |

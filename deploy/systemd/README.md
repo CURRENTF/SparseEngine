@@ -15,22 +15,22 @@ prefix cache.
 Install the units for the current user:
 
 ```bash
-mkdir -p ~/.config/systemd/user ~/.config/sparsevllm
-cp deploy/systemd/sparsevllm-worker@.service ~/.config/systemd/user/
-cp deploy/systemd/sparsevllm-router.service ~/.config/systemd/user/
+mkdir -p ~/.config/systemd/user ~/.config/sparseengine
+cp deploy/systemd/sparseengine-worker@.service ~/.config/systemd/user/
+cp deploy/systemd/sparseengine-router.service ~/.config/systemd/user/
 ```
 
 Create one environment file per worker. For example,
-`~/.config/sparsevllm/worker-gpu4.env`:
+`~/.config/sparseengine/worker-gpu4.env`:
 
 ```bash
-SPARSEVLLM_REPO=/home/USER/projects/Sparse-vLLM
-SPARSEVLLM_PYTHON=/path/to/python
-SPARSEVLLM_MODEL=/path/to/model
-SPARSEVLLM_SERVED_MODEL_NAME=qwen36-27b-fp8
-SPARSEVLLM_PORT=18004
-SPARSEVLLM_ENGINE_KWARGS=/path/to/gpu4-engine-kwargs.json
-SPARSEVLLM_REQUEST_LOG_DIR=/path/to/logs/gpu4/requests
+SPARSEENGINE_REPO=/home/USER/projects/Sparse-Engine
+SPARSEENGINE_PYTHON=/path/to/python
+SPARSEENGINE_MODEL=/path/to/model
+SPARSEENGINE_SERVED_MODEL_NAME=qwen36-27b-fp8
+SPARSEENGINE_PORT=18004
+SPARSEENGINE_ENGINE_KWARGS=/path/to/gpu4-engine-kwargs.json
+SPARSEENGINE_REQUEST_LOG_DIR=/path/to/logs/gpu4/requests
 CUDA_VISIBLE_DEVICES=4
 ```
 
@@ -40,32 +40,32 @@ restart uses exactly the same runtime settings.
 
 ## Configure the router
 
-Create `~/.config/sparsevllm/router.env`:
+Create `~/.config/sparseengine/router.env`:
 
 ```bash
-SPARSEVLLM_REPO=/home/USER/projects/Sparse-vLLM
-SPARSEVLLM_PYTHON=/path/to/python
-SPARSEVLLM_WORKER_URLS=http://127.0.0.1:18004,http://127.0.0.1:18005
-SPARSEVLLM_ROUTER_HOST=0.0.0.0
-SPARSEVLLM_ROUTER_PORT=18000
-SPARSEVLLM_ROUTER_REQUEST_TIMEOUT_S=30
-SPARSEVLLM_ROUTER_CONTROL_TIMEOUT_S=5
-SPARSEVLLM_ROUTE_LOG_DIR=/path/to/logs/router
+SPARSEENGINE_REPO=/home/USER/projects/Sparse-Engine
+SPARSEENGINE_PYTHON=/path/to/python
+SPARSEENGINE_WORKER_URLS=http://127.0.0.1:18004,http://127.0.0.1:18005
+SPARSEENGINE_ROUTER_HOST=0.0.0.0
+SPARSEENGINE_ROUTER_PORT=18000
+SPARSEENGINE_ROUTER_REQUEST_TIMEOUT_S=30
+SPARSEENGINE_ROUTER_CONTROL_TIMEOUT_S=5
+SPARSEENGINE_ROUTE_LOG_DIR=/path/to/logs/router
 ```
 
-Set `SPARSEVLLM_ROUTER_REQUEST_TIMEOUT_S` at least as high as the client
+Set `SPARSEENGINE_ROUTER_REQUEST_TIMEOUT_S` at least as high as the client
 workload needs, while keeping the client timeout higher so routing and response
 overhead cannot expire first. The simulated Deep Research benchmark uses a
 900-second router timeout and a 930-second client timeout.
-Keep `SPARSEVLLM_ROUTER_CONTROL_TIMEOUT_S` short so an unresponsive worker
+Keep `SPARSEENGINE_ROUTER_CONTROL_TIMEOUT_S` short so an unresponsive worker
 cannot stall readiness and route selection for the full inference timeout.
 
 Then load and start the services:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now sparsevllm-worker@gpu4 sparsevllm-worker@gpu5
-systemctl --user enable --now sparsevllm-router
+systemctl --user enable --now sparseengine-worker@gpu4 sparseengine-worker@gpu5
+systemctl --user enable --now sparseengine-router
 ```
 
 `StartLimitBurst=3` within five minutes prevents an indefinitely hot restart

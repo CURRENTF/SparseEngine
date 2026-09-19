@@ -123,7 +123,7 @@ def start_process(cmd: list[str], *, env: dict[str, str], log_path: Path) -> sub
         text=True,
         start_new_session=True,
     )
-    proc._sparsevllm_log_handle = log  # type: ignore[attr-defined]
+    proc._sparseengine_log_handle = log  # type: ignore[attr-defined]
     return proc
 
 
@@ -144,7 +144,7 @@ def stop_processes(processes: list[subprocess.Popen]):
             except ProcessLookupError:
                 pass
             proc.wait(timeout=10)
-        log = getattr(proc, "_sparsevllm_log_handle", None)
+        log = getattr(proc, "_sparseengine_log_handle", None)
         if log is not None:
             log.close()
 
@@ -163,9 +163,9 @@ def call_completion(router_url: str, payload: dict[str, Any], *, timeout_s: floa
     lower_headers = {key.lower(): value for key, value in headers.items()}
     return {
         "headers": {
-            "worker": lower_headers.get("x-sparsevllm-worker"),
-            "reason": lower_headers.get("x-sparsevllm-route-reason"),
-            "method": lower_headers.get("x-sparsevllm-sparse-method"),
+            "worker": lower_headers.get("x-sparseengine-worker"),
+            "reason": lower_headers.get("x-sparseengine-route-reason"),
+            "method": lower_headers.get("x-sparseengine-sparse-method"),
         },
         "usage": body.get("usage"),
         "choice_count": len(body.get("choices", [])),
@@ -186,7 +186,7 @@ def run_requests(args: argparse.Namespace, router_url: str, worker_urls: list[st
             "temperature": 0.0,
             "top_p": 1.0,
             "top_k": 1,
-            "svllm_target_worker": "0",
+            "sengine_target_worker": "0",
         },
     )
     results["warmup"] = warm
@@ -221,7 +221,7 @@ def run_requests(args: argparse.Namespace, router_url: str, worker_urls: list[st
                 "temperature": 0.0,
                 "top_p": 1.0,
                 "top_k": 1,
-                "svllm_target_worker": "0",
+                "sengine_target_worker": "0",
             },
             timeout_s=360.0,
         )
@@ -279,7 +279,7 @@ def run_requests(args: argparse.Namespace, router_url: str, worker_urls: list[st
             "temperature": 0.0,
             "top_p": 1.0,
             "top_k": 1,
-            "svllm_route_profile": profile,
+            "sengine_route_profile": profile,
         }
         record = call_completion(router_url, payload, timeout_s=360.0)
         record["profile"] = profile
@@ -394,7 +394,7 @@ def build_failure_summary(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a real two-worker Sparse-vLLM OpenAI router smoke test.")
+    parser = argparse.ArgumentParser(description="Run a real two-worker Sparse-Engine OpenAI router smoke test.")
     parser.add_argument("--model", required=True)
     parser.add_argument("--served-model-name", default="router-smoke-model")
     parser.add_argument("--methods", default="omnikv,snapkv")
@@ -448,12 +448,12 @@ def main() -> int:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu)
             env["MASTER_ADDR"] = "127.0.0.1"
             env["MASTER_PORT"] = str(24000 + int(port) % 1000)
-            env["SPARSEVLLM_MASTER_PORT"] = str(24000 + int(port) % 1000)
-            env["SPARSEVLLM_WORKER_TAGS"] = f"{method},{'dialog' if method in PREFIX_METHODS else 'bulk'}"
+            env["SPARSEENGINE_MASTER_PORT"] = str(24000 + int(port) % 1000)
+            env["SPARSEENGINE_WORKER_TAGS"] = f"{method},{'dialog' if method in PREFIX_METHODS else 'bulk'}"
             cmd = [
                 sys.executable,
                 "-m",
-                "sparsevllm.entrypoints.openai.api_server",
+                "sparseengine.entrypoints.openai.api_server",
                 "--model",
                 args.model,
                 "--served-model-name",
@@ -482,7 +482,7 @@ def main() -> int:
         router_cmd = [
             sys.executable,
             "-m",
-            "sparsevllm.entrypoints.openai.smart_router",
+            "sparseengine.entrypoints.openai.smart_router",
             "--worker-url",
             worker_urls[0],
             "--worker-url",

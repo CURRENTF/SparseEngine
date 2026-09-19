@@ -5,7 +5,7 @@ import sys
 
 import torch
 
-from sparsevllm.kernels.tilelang.mla.runtime import TileMlaDecodeKernel, TileMlaLaunchPlan
+from sparseengine.kernels.tilelang.mla.runtime import TileMlaDecodeKernel, TileMlaLaunchPlan
 
 
 def main():

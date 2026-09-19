@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 import torch
 
-from sparsevllm.engine.cache_manager.base import (
+from sparseengine.engine.cache_manager.base import (
     AttentionViewMeta,
     CacheManager,
     DecodeComputeView,
@@ -17,23 +17,23 @@ from sparsevllm.engine.cache_manager.base import (
     MlaLatentPayload,
     PrefillComputeView,
 )
-from sparsevllm.engine.cache_manager.methods.h2o import H2OCacheManager
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
-from sparsevllm.engine.cache_manager.storage import MlaLatentStorage
-from sparsevllm.engine.decode_graph_contract import (
+from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.engine.cache_manager.storage import MlaLatentStorage
+from sparseengine.engine.decode_graph_contract import (
     DecodeGraphContract,
     DecodeGraphInputs,
 )
-from sparsevllm.engine.runtime_state import RuntimeState
-from sparsevllm.engine.scheduler import Scheduler
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.sparse_controller import SparseController
-from sparsevllm.engine.sparse_methods import SparseStepContext
-from sparsevllm.engine.sparse_methods.h2o import H2ORuntime
-from sparsevllm.method_registry import (
+from sparseengine.engine.runtime_state import RuntimeState
+from sparseengine.engine.scheduler import Scheduler
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.sparse_controller import SparseController
+from sparseengine.engine.sparse_methods import SparseStepContext
+from sparseengine.engine.sparse_methods.h2o import H2ORuntime
+from sparseengine.method_registry import (
     PREFILL_POLICY_ALL_CHUNKED,
 )
-from sparsevllm.utils.context import reset_context, set_context
+from sparseengine.utils.context import reset_context, set_context
 
 
 @pytest.fixture(autouse=True)
@@ -512,7 +512,7 @@ def test_h2o_cache_manager_factory_routes_first_class_method():
         hf_config=SimpleNamespace(model_type="qwen2"),
     )
     with patch(
-        "sparsevllm.engine.cache_manager.methods.h2o.H2OCacheManager",
+        "sparseengine.engine.cache_manager.methods.h2o.H2OCacheManager",
         return_value=expected,
     ) as constructor:
         actual = CacheManager.create(config, SimpleNamespace())
@@ -528,7 +528,7 @@ def test_h2o_cache_manager_factory_routes_prefill_only_method():
         hf_config=SimpleNamespace(model_type="qwen2"),
     )
     with patch(
-        "sparsevllm.engine.cache_manager.methods.h2o.H2OCacheManager",
+        "sparseengine.engine.cache_manager.methods.h2o.H2OCacheManager",
         return_value=expected,
     ) as constructor:
         actual = CacheManager.create(config, SimpleNamespace())

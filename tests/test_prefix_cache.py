@@ -12,27 +12,27 @@ import numpy as np
 import pytest
 import torch
 
-from sparsevllm.config import Config
-from sparsevllm.engine.cache_manager.methods.quest import (
+from sparseengine.config import Config
+from sparseengine.engine.cache_manager.methods.quest import (
     QuestCacheManager,
     QuestDecodeGraphState,
     QuestPrefixBlockPayload,
 )
-from sparsevllm.configs.model import RuntimeLayout
-from sparsevllm.engine.cache_manager import MlaLatentPayload
-from sparsevllm.engine.cache_manager.methods.omnikv.manager import OmniKVCacheManager
-from sparsevllm.engine.cache_manager.standard import StandardCacheManager, StandardPrefixBlockPayload
-from sparsevllm.engine.cache_manager.prefix_cache_mixin import PrefixLookupCache
-from sparsevllm.engine.cache_manager.storage import MlaLatentStorage
-from sparsevllm.engine.cache_manager.prefix_offload import (
+from sparseengine.configs.model import RuntimeLayout
+from sparseengine.engine.cache_manager import MlaLatentPayload
+from sparseengine.engine.cache_manager.methods.omnikv.manager import OmniKVCacheManager
+from sparseengine.engine.cache_manager.standard import StandardCacheManager, StandardPrefixBlockPayload
+from sparseengine.engine.cache_manager.prefix_cache_mixin import PrefixLookupCache
+from sparseengine.engine.cache_manager.storage import MlaLatentStorage
+from sparseengine.engine.cache_manager.prefix_offload import (
     QuestPrefixOffloadController,
     StandardPrefixOffloadController,
 )
-from sparsevllm.engine.decode_graph_contract import (
+from sparseengine.engine.decode_graph_contract import (
     DecodeGraphContract,
     DecodeGraphInputs,
 )
-from sparsevllm.engine.prefix_cache import (
+from sparseengine.engine.prefix_cache import (
     PrefixBlockResidency,
     PrefixCacheBlock,
     PrefixTransferKind,
@@ -42,9 +42,9 @@ from sparsevllm.engine.prefix_cache import (
     resolve_prefix_cache_block_size,
     usable_prefix_cache_tokens,
 )
-from sparsevllm.engine.prefix_prune import select_global_keep_indices
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.platforms import device_runtime
+from sparseengine.engine.prefix_prune import select_global_keep_indices
+from sparseengine.engine.sequence import Sequence
+from sparseengine.platforms import device_runtime
 
 
 def _cfg(method="", salt="", block_size=4):
@@ -104,7 +104,7 @@ def _hf_config():
 def _make_config(**kwargs):
     with tempfile.TemporaryDirectory() as tmp:
         model_dir = Path(tmp)
-        with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=_hf_config()):
+        with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=_hf_config()):
             return Config(model=str(model_dir), **kwargs)
 
 
@@ -1672,7 +1672,7 @@ def test_prefix_delete_plan_rejects_tp_divergence_before_mutation():
         ]
 
     with patch(
-        "sparsevllm.engine.cache_manager.base.dist.all_gather_object",
+        "sparseengine.engine.cache_manager.base.dist.all_gather_object",
         side_effect=gather,
     ):
         with pytest.raises(RuntimeError, match="deletion plan diverged"):

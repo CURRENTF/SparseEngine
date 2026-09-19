@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="docs/assets/logo.png" alt="Sparse-vLLM" style="width:42%; height:auto;">
+  <img src="docs/assets/logo.png" alt="Sparse-Engine" style="width:42%; height:auto;">
 
   <p>
-    <a href="https://deepwiki.com/CURRENTF/Sparse-vLLM"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+    <a href="https://deepwiki.com/CURRENTF/Sparse-Engine"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
     <a href="https://arxiv.org/abs/2602.08005"><img src="https://img.shields.io/badge/arXiv-2602.08005-b31b1b.svg" alt="arXiv"></a>
     <a href="https://arxiv.org/pdf/2602.08005.pdf"><img src="https://img.shields.io/badge/PDF-download-brightgreen.svg" alt="PDF"></a>
   </p>
@@ -13,16 +13,16 @@
 A sparse-first inference engine for long-context LLM serving.
 
 <div align="center">
-  <img src="docs/assets/sparse_vllm_throughput.png" alt="Sparse-vLLM throughput" style="width:86%; height:auto;">
+  <img src="docs/assets/sparse_engine_throughput.png" alt="Sparse-Engine throughput" style="width:86%; height:auto;">
 </div>
 
 ## Project Overview
 
-Sparse-vLLM is an inference framework built with sparsity as the first design principle. Instead of layering sparse methods on top of a conventional KV cache, it rethinks cache layout, controller flow, and kernels so that multiple sparse mechanisms can plug in cleanly.
+Sparse-Engine is an inference framework built with sparsity as the first design principle. Instead of layering sparse methods on top of a conventional KV cache, it rethinks cache layout, controller flow, and kernels so that multiple sparse mechanisms can plug in cleanly.
 
 > **Note:** DeltaKV compressor training code is maintained separately in
 > [CURRENTF/DeltaKV](https://github.com/CURRENTF/DeltaKV). This repository only
-> keeps the native DeltaKV inference implementation under `src/sparsevllm/`;
+> keeps the native DeltaKV inference implementation under `src/sparseengine/`;
 > it does not include DeltaKV training code or an HF reference implementation.
 
 ## Key Runtime Principles
@@ -31,10 +31,10 @@ Sparse-vLLM is an inference framework built with sparsity as the first design pr
   configs, benchmark manifests, and internal consumers. Use `sparse_method`
   everywhere; legacy field aliases are not accepted.
 - Sparse method runtime state belongs in
-  `src/sparsevllm/engine/cache_manager/`; `attention.py` should stay generic.
+  `src/sparseengine/engine/cache_manager/`; `attention.py` should stay generic.
 - Prefill scheduling is method-specific and registry-owned. The source of
-  truth is `src/sparsevllm/method_registry.py`, not benchmark scripts.
-- Sparse-vLLM currently uses two prefill policies: `all_chunked` and the
+  truth is `src/sparseengine/method_registry.py`, not benchmark scripts.
+- Sparse-Engine currently uses two prefill policies: `all_chunked` and the
   special `long_bs1full_short_batch` policy.
 - `long_bs1full_short_batch` is only for methods that are registered to need a
   complete long-prefill pass before their sparse/cache transformation. Long
@@ -45,7 +45,7 @@ Sparse-vLLM is an inference framework built with sparsity as the first design pr
 
 ## Core Sparse Methods
 
-Sparse-vLLM supports physical eviction, logical masking, query-aware selection,
+Sparse-Engine supports physical eviction, logical masking, query-aware selection,
 and hybrid KV compression. The main method families are `streamingllm`,
 `snapkv`, `h2o`, `pyramidkv`, `omnikv`, `quest`, and `deltakv`.
 
@@ -104,15 +104,15 @@ The full documentation index is maintained in [docs/en/README.md](docs/en/README
 
 ## Quick Start
 
-Sparse-vLLM requires Python 3.10 or newer. The canonical CUDA 13 development
+Sparse-Engine requires Python 3.10 or newer. The canonical CUDA 13 development
 environment uses Python 3.12. Default dependencies are declared in
 `pyproject.toml`.
 
 ### Conda
 
 ```bash
-conda create -n sparse-vllm-cu130-py312 python=3.12 -y
-conda activate sparse-vllm-cu130-py312
+conda create -n sparse-engine-cu130-py312 python=3.12 -y
+conda activate sparse-engine-cu130-py312
 
 python -m pip config --site set global.extra-index-url \
   "https://download.pytorch.org/whl/cu130 https://flashinfer.ai/whl"
@@ -152,7 +152,7 @@ For the full dependency list and a minimal `LLM(...)` example, see
 
 ## Benchmarks
 
-Use `scripts/benchmarks/bench_sparse_vllm.py` for throughput measurements and
+Use `scripts/benchmarks/bench_sparse_engine.py` for throughput measurements and
 the `benchmark/` entrypoints for LongBench, MathBench, SCBench, NIAH, and
 multimodal evaluations.
 
@@ -161,8 +161,8 @@ See [Benchmarks](docs/en/benchmarking/README.md) for command examples and backen
 ## Contributing Sparse Methods
 
 New sparse methods should keep persistent physical cache state in
-`src/sparsevllm/engine/cache_manager/`, keep logical orchestration behind a
-`SparseMethodRuntime`, and keep `src/sparsevllm/layers/attention.py` generic.
+`src/sparseengine/engine/cache_manager/`, keep logical orchestration behind a
+`SparseMethodRuntime`, and keep `src/sparseengine/layers/attention.py` generic.
 See the [sparse method runtime architecture](docs/en/design/sparse-method-runtime.md).
 
 

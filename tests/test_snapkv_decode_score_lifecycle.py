@@ -4,12 +4,12 @@ import unittest
 
 import torch
 
-from sparsevllm.engine.decode_cuda_graph import DecodeCudaGraphRunner
-from sparsevllm.engine.llm_engine import LLMEngine
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.sparse_controller import SparseController
-from sparsevllm.engine.sparse_methods import SparseStepContext
-from sparsevllm.utils.context import get_context, reset_context, set_context
+from sparseengine.engine.decode_cuda_graph import DecodeCudaGraphRunner
+from sparseengine.engine.llm_engine import LLMEngine
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.sparse_controller import SparseController
+from sparseengine.engine.sparse_methods import SparseStepContext
+from sparseengine.utils.context import get_context, reset_context, set_context
 
 
 class WorkerInfoTest(unittest.TestCase):

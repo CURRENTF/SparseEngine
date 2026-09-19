@@ -9,7 +9,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from sparsevllm import LLM, SamplingParams
+from sparseengine import LLM, SamplingParams
 
 
 def main():

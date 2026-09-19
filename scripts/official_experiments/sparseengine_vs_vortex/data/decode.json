@@ -1,0 +1,544 @@
+{
+  "schema_version": 1,
+  "metric": "decode_stage_throughput_tps",
+  "unit": "token/s",
+  "aggregation": "arithmetic mean of three measured decode-only window rates; error bars are sample standard deviation",
+  "models": [
+    "Qwen3-4B-Instruct-2507",
+    "GLM-4.7-Flash"
+  ],
+  "protocol": {
+    "gpu": "H100 80GB",
+    "tp": 1,
+    "dtype": "BF16",
+    "nominal_input_tokens": 32768,
+    "output_tokens": 512,
+    "seed": 42,
+    "warmups": 1,
+    "measured_iterations": 3,
+    "prefix_cache": false,
+    "native_h2o_score_mode": "logits",
+    "native_h2o_window": 128,
+    "native_h2o_budget": 4096,
+    "native_h2o_prefill_budget": 8192,
+    "wave_size": 2,
+    "vortex_h2o_backend": "existing CUDA FP32 W1",
+    "vortex_exact_trace_preparation": true,
+    "discard_full_decode_steps": 8,
+    "measured_decode_steps": 256,
+    "cuda_sync": "window boundaries only",
+    "timing_scope": "full-residency continuous decode-only engine window; 8 discard + 256 measured; boundary sync only",
+    "vortex_overlap_schedule": true
+  },
+  "caveats": [
+    "H2O-like is not algorithm-equivalent to native H2O; no quality claim",
+    "High concurrency uses a different workload size, wave2 admission excluded",
+    "Not isolated GPU kernel time; request metrics are boundary-perturbed",
+    "QuEST head policies differ, especially MLA; no official algorithm parity claim.",
+    "Tested residency bounds are not exhaustive maximum concurrency measurements."
+  ],
+  "source_summary": "summary_final.json",
+  "source_snapshot": "provenance_finished",
+  "cases": [
+    {
+      "model": "Qwen3-4B",
+      "method": "H2O / H2O-like",
+      "series": "Sparse-Engine",
+      "concurrency": 14,
+      "source": "qwen/02_native_h2o_common/raw_samples.jsonl",
+      "source_sha256": "b130f017058c3c6f73fbfff7e712331dd98173c7c74883a3cd16237c0d8ea946",
+      "timing_source": "full_residency_contiguous_decode_only_boundary_sync_v1",
+      "samples": [
+        {
+          "iteration": 0,
+          "status": "success",
+          "decode_tokens": 3584,
+          "elapsed_s": 2.20669674500823,
+          "value": 1624.1470460802411,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 1,
+          "status": "success",
+          "decode_tokens": 3584,
+          "elapsed_s": 2.2037686491385102,
+          "value": 1626.3050122802342,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 2,
+          "status": "success",
+          "decode_tokens": 3584,
+          "elapsed_s": 2.201901644002646,
+          "value": 1627.6839657038254,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "model": "Qwen3-4B",
+      "method": "H2O / H2O-like",
+      "series": "Sparse-Engine (wave2)",
+      "concurrency": 100,
+      "source": "qwen/03_native_h2o_wave100/raw_samples.jsonl",
+      "source_sha256": "9eeeca222ae584e1c9654b5de2c5857a920ff411b328c38bb5ae3f8f29efdf9d",
+      "timing_source": "full_residency_contiguous_decode_only_boundary_sync_v1",
+      "samples": [
+        {
+          "iteration": 0,
+          "status": "success",
+          "decode_tokens": 25600,
+          "elapsed_s": 7.204902041004971,
+          "value": 3553.136441592647,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 1,
+          "status": "success",
+          "decode_tokens": 25600,
+          "elapsed_s": 7.219300633994862,
+          "value": 3546.0498596571147,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 2,
+          "status": "success",
+          "decode_tokens": 25600,
+          "elapsed_s": 7.205112037947401,
+          "value": 3553.0328834821216,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "model": "Qwen3-4B",
+      "method": "QuEST",
+      "series": "Sparse-Engine",
+      "concurrency": 13,
+      "source": "qwen/04_native_quest/raw_samples.jsonl",
+      "source_sha256": "efa1ae49db7facd074e90392e560603cac5c96d26c627f48350a4d9ffc6d72c2",
+      "timing_source": "full_residency_contiguous_decode_only_boundary_sync_v1",
+      "samples": [
+        {
+          "iteration": 0,
+          "status": "success",
+          "decode_tokens": 3328,
+          "elapsed_s": 2.876054786844179,
+          "value": 1157.140682862905,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 1,
+          "status": "success",
+          "decode_tokens": 3328,
+          "elapsed_s": 2.8754374980926514,
+          "value": 1157.3890937318388,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 2,
+          "status": "success",
+          "decode_tokens": 3328,
+          "elapsed_s": 2.875299486098811,
+          "value": 1157.4446474497202,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "model": "Qwen3-4B",
+      "method": "H2O / H2O-like",
+      "series": "Vortex",
+      "concurrency": 14,
+      "source": "qwen/05_vortex_h2o_like/decode_windows_labeled.json",
+      "source_sha256": "9c4d37c0b8c69b62644dc06ec651a407df5e77997a8b27614e29c308b78e90f4",
+      "timing_source": "full_residency_contiguous_decode_only_boundary_sync_v1",
+      "samples": [
+        {
+          "iteration": 0,
+          "status": "success",
+          "decode_tokens": 3584,
+          "elapsed_s": 25.02251096093096,
+          "value": 143.23102927583483,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 1,
+          "status": "success",
+          "decode_tokens": 3584,
+          "elapsed_s": 25.022919683950022,
+          "value": 143.22868974793607,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 2,
+          "status": "success",
+          "decode_tokens": 3584,
+          "elapsed_s": 25.02143813087605,
+          "value": 143.2371705116902,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "model": "Qwen3-4B",
+      "method": "QuEST",
+      "series": "Vortex",
+      "concurrency": 13,
+      "source": "qwen/06_vortex_quest/decode_windows_labeled.json",
+      "source_sha256": "0b48b2b799bbd5f62c253fe0464e202c3df82bbcf99eca3930f87238795c7226",
+      "timing_source": "full_residency_contiguous_decode_only_boundary_sync_v1",
+      "samples": [
+        {
+          "iteration": 0,
+          "status": "success",
+          "decode_tokens": 3328,
+          "elapsed_s": 2.8019934170879424,
+          "value": 1187.7258453585969,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 1,
+          "status": "success",
+          "decode_tokens": 3328,
+          "elapsed_s": 2.8025524930562824,
+          "value": 1187.4889081455522,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 2,
+          "status": "success",
+          "decode_tokens": 3328,
+          "elapsed_s": 2.803084010956809,
+          "value": 1187.263737722943,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "model": "GLM-4.7-Flash",
+      "method": "H2O / H2O-like",
+      "series": "Vortex",
+      "concurrency": 8,
+      "source": "glm/01_vortex_h2o_like/decode_windows_labeled.json",
+      "source_sha256": "91bb4a3076e7d3bb6a77b9d78a72da7843ac0e0e5680658a2a28759a7d00a398",
+      "timing_source": "full_residency_contiguous_decode_only_boundary_sync_v1",
+      "samples": [
+        {
+          "iteration": 0,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 17.882850534981117,
+          "value": 114.52312907239553,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 1,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 17.921147108078003,
+          "value": 114.27839901369141,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 2,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 17.606901664985344,
+          "value": 116.31802340742526,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "model": "GLM-4.7-Flash",
+      "method": "H2O / H2O-like",
+      "series": "Sparse-Engine",
+      "concurrency": 8,
+      "source": "glm/02_native_h2o_common/raw_samples.jsonl",
+      "source_sha256": "df7bcf65f7530751b7cb688aa6b4d641e68f7e0ce917fea235f417d6ebb6372e",
+      "timing_source": "full_residency_contiguous_decode_only_boundary_sync_v1",
+      "samples": [
+        {
+          "iteration": 0,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 3.3985832820180804,
+          "value": 602.604035286108,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 1,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 3.2630668978672475,
+          "value": 627.6304054135636,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 2,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 3.300831455970183,
+          "value": 620.44973435278,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "model": "GLM-4.7-Flash",
+      "method": "H2O / H2O-like",
+      "series": "Sparse-Engine (wave2)",
+      "concurrency": 64,
+      "source": "glm/03_native_h2o_wave64/raw_samples.jsonl",
+      "source_sha256": "2e3f64a6a655f148d32a5ab95d95b867d1e1de9adeb29804a2d0996c915f702b",
+      "timing_source": "full_residency_contiguous_decode_only_boundary_sync_v1",
+      "samples": [
+        {
+          "iteration": 0,
+          "status": "success",
+          "decode_tokens": 16384,
+          "elapsed_s": 6.753505028784275,
+          "value": 2425.999526197043,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 1,
+          "status": "success",
+          "decode_tokens": 16384,
+          "elapsed_s": 6.331408952828497,
+          "value": 2587.733650134952,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 2,
+          "status": "success",
+          "decode_tokens": 16384,
+          "elapsed_s": 6.485671718837693,
+          "value": 2526.183980668112,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "model": "GLM-4.7-Flash",
+      "method": "QuEST",
+      "series": "Sparse-Engine",
+      "concurrency": 8,
+      "source": "glm/04_native_quest/raw_samples.jsonl",
+      "source_sha256": "0a2479c40137e7ef88baa1e039c5b4fc34c36234ba193401dab38730036d9e6b",
+      "timing_source": "full_residency_contiguous_decode_only_boundary_sync_v1",
+      "samples": [
+        {
+          "iteration": 0,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 3.336994231911376,
+          "value": 613.7259634479317,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 1,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 3.4710144859272987,
+          "value": 590.0292287178014,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 2,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 3.3709344379603863,
+          "value": 607.5466722037942,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "model": "GLM-4.7-Flash",
+      "method": "QuEST",
+      "series": "Vortex",
+      "concurrency": 8,
+      "source": "glm/05_vortex_quest/decode_windows_labeled.json",
+      "source_sha256": "c2ddfbebb1130b8405d178628c8cdc414f874e88ce1cb8d89164d7c04a2fcfec",
+      "timing_source": "full_residency_contiguous_decode_only_boundary_sync_v1",
+      "samples": [
+        {
+          "iteration": 0,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 4.64156835898757,
+          "value": 441.23017083965016,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 1,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 4.5409509260207415,
+          "value": 451.0068559130351,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        },
+        {
+          "iteration": 2,
+          "status": "success",
+          "decode_tokens": 2048,
+          "elapsed_s": 4.646137953968719,
+          "value": 440.7962097316985,
+          "decode_steps": 256,
+          "graph_counter_delta": {
+            "capture_count": 0,
+            "replay_count": 256,
+            "eager_decode_count": 0
+          }
+        }
+      ]
+    }
+  ]
+}

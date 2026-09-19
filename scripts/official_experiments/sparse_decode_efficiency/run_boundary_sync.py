@@ -56,7 +56,7 @@ def run(args):
             status.write(f"{datetime.now(timezone.utc).isoformat()}\t{stage}\t{result}\n")
         record("queue", "started")
         for model, spec in config["models"].items():
-            lanes = ["svllm-vanilla", "svllm-snapkv", "svllm-quest", "svllm-omnikv", "vllm-vanilla"]
+            lanes = ["sengine-vanilla", "sengine-snapkv", "sengine-quest", "sengine-omnikv", "vllm-vanilla"]
             lanes += [lane for lane in config["external_lanes"] if lane not in config["unsupported"].get(model, {})]
             command = [sys.executable, str(package / "sweep_decode_capacity.py"),
                        "--config", str(root / "config.json"), "--repo", str(repo),

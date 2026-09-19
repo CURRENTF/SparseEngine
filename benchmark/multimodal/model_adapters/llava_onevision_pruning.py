@@ -59,12 +59,12 @@ def _bind_model_forward_inputs(original_forward: Any, args: tuple[Any, ...], kwa
 def _stash_visual_metadata(model: Any, original_forward: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
     bound = _bind_model_forward_inputs(original_forward, args, kwargs)
     input_ids = bound.arguments.get("input_ids")
-    model._sparsevllm_last_visual_pos_masks = _visual_mask_from_input_ids(model, input_ids)
+    model._sparseengine_last_visual_pos_masks = _visual_mask_from_input_ids(model, input_ids)
     pixel_values_videos = bound.arguments.get("pixel_values_videos")
     if torch.is_tensor(pixel_values_videos) and pixel_values_videos.ndim >= 2:
-        model._sparsevllm_last_video_frames = int(pixel_values_videos.shape[1])
+        model._sparseengine_last_video_frames = int(pixel_values_videos.shape[1])
     else:
-        model._sparsevllm_last_video_frames = None
+        model._sparseengine_last_video_frames = None
 
 
 def _build_keep_indices(
@@ -249,7 +249,7 @@ def _maybe_apply_visionzip(
 ) -> None:
     inputs_embeds = kwargs.get("inputs_embeds")
     past_key_values = kwargs.get("past_key_values")
-    visual_pos_masks = getattr(owner, "_sparsevllm_last_visual_pos_masks", None)
+    visual_pos_masks = getattr(owner, "_sparseengine_last_visual_pos_masks", None)
     prefill_active = (
         inputs_embeds is not None
         and visual_pos_masks is not None
@@ -289,8 +289,8 @@ def _maybe_apply_visionzip(
     kwargs["attention_mask"] = _replace_visual_span_2d_mask(kwargs.get("attention_mask"), start, end, compressed_len)
     kwargs["position_ids"] = _replace_visual_span_position_ids(kwargs.get("position_ids"), new_len, inputs_embeds.device)
     kwargs["cache_position"] = _replace_visual_span_cache_position(kwargs.get("cache_position"), new_len, inputs_embeds.device)
-    owner._sparsevllm_last_visual_pos_masks = new_visual_mask
-    owner._sparsevllm_last_prune_stats = {
+    owner._sparseengine_last_visual_pos_masks = new_visual_mask
+    owner._sparseengine_last_prune_stats = {
         "method": cfg.method,
         "keep_ratio": cfg.keep_ratio,
         "context_fraction": cfg.context_fraction,
@@ -307,7 +307,7 @@ def _maybe_prune_language_inputs(
 ) -> None:
     inputs_embeds = kwargs.get("inputs_embeds")
     past_key_values = kwargs.get("past_key_values")
-    visual_pos_masks = getattr(owner, "_sparsevllm_last_visual_pos_masks", None)
+    visual_pos_masks = getattr(owner, "_sparseengine_last_visual_pos_masks", None)
     prefill_active = (
         inputs_embeds is not None
         and visual_pos_masks is not None
@@ -329,8 +329,8 @@ def _maybe_prune_language_inputs(
     if position_ids is not None:
         kwargs["position_ids"] = position_ids.index_select(-1, keep_indices)
     kwargs["cache_position"] = _slice_cache_position(kwargs.get("cache_position"), keep_indices, seq_len)
-    owner._sparsevllm_last_visual_pos_masks = visual_pos_masks.index_select(1, keep_indices)
-    owner._sparsevllm_last_prune_stats = {
+    owner._sparseengine_last_visual_pos_masks = visual_pos_masks.index_select(1, keep_indices)
+    owner._sparseengine_last_prune_stats = {
         "method": cfg.method,
         "keep_ratio": cfg.keep_ratio,
         "original_seq_len": seq_len,
@@ -467,7 +467,7 @@ def apply_llava_onevision_fastv(model: Any, cfg: LlavaOneVisionPruningConfig) ->
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if (
-            getattr(owner, "_sparsevllm_fastv_prefill_active", False)
+            getattr(owner, "_sparseengine_fastv_prefill_active", False)
             and self.layer_idx == int(cfg.fastv_layer) - 1
             and hidden_states.shape[1] > 1
         ):
@@ -478,7 +478,7 @@ def apply_llava_onevision_fastv(model: Any, cfg: LlavaOneVisionPruningConfig) ->
             ) * float(self.scaling)
             if torch.is_tensor(attention_mask) and attention_mask.ndim == 4:
                 score = score + attention_mask[:, :, -1:, :].float()
-            owner._sparsevllm_fastv_attention_scores = torch.softmax(score, dim=-1).mean(dim=1)[0, 0].detach()
+            owner._sparseengine_fastv_attention_scores = torch.softmax(score, dim=-1).mean(dim=1)[0, 0].detach()
 
         if past_key_value is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
@@ -549,7 +549,7 @@ def apply_llava_onevision_fastv(model: Any, cfg: LlavaOneVisionPruningConfig) ->
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
-        visual_pos_masks = getattr(owner, "_sparsevllm_last_visual_pos_masks", None)
+        visual_pos_masks = getattr(owner, "_sparseengine_last_visual_pos_masks", None)
         prefill_active = (
             visual_pos_masks is not None
             and inputs_embeds.shape[1] > 1
@@ -574,12 +574,12 @@ def apply_llava_onevision_fastv(model: Any, cfg: LlavaOneVisionPruningConfig) ->
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
-        owner._sparsevllm_fastv_prefill_active = bool(prefill_active)
-        owner._sparsevllm_fastv_attention_scores = None
+        owner._sparseengine_fastv_prefill_active = bool(prefill_active)
+        owner._sparseengine_fastv_attention_scores = None
 
         for layer_idx, decoder_layer in enumerate(self.layers[: self.config.num_hidden_layers]):
             if prefill_active and layer_idx == int(cfg.fastv_layer):
-                scores = getattr(owner, "_sparsevllm_fastv_attention_scores", None)
+                scores = getattr(owner, "_sparseengine_fastv_attention_scores", None)
                 if scores is None:
                     raise RuntimeError("LLaVA-OV FastV did not collect attention scores before the pruning layer.")
                 seq_len = int(hidden_states.shape[1])
@@ -594,12 +594,12 @@ def apply_llava_onevision_fastv(model: Any, cfg: LlavaOneVisionPruningConfig) ->
                 cache_position = _slice_cache_position(cache_position, keep_indices, seq_len)
                 position_embeddings = _slice_position_embeddings(position_embeddings, keep_indices, seq_len)
                 visual_pos_masks = visual_pos_masks.index_select(1, keep_indices)
-                owner._sparsevllm_last_visual_pos_masks = visual_pos_masks
+                owner._sparseengine_last_visual_pos_masks = visual_pos_masks
                 causal_mask_mapping = {
                     name: _slice_attention_mask(mask, keep_indices, seq_len)
                     for name, mask in causal_mask_mapping.items()
                 }
-                owner._sparsevllm_last_prune_stats = {
+                owner._sparseengine_last_prune_stats = {
                     "method": cfg.method,
                     "keep_ratio": cfg.keep_ratio,
                     "fastv_layer": int(cfg.fastv_layer),
@@ -626,7 +626,7 @@ def apply_llava_onevision_fastv(model: Any, cfg: LlavaOneVisionPruningConfig) ->
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
-        owner._sparsevllm_fastv_prefill_active = False
+        owner._sparseengine_fastv_prefill_active = False
         hidden_states = self.norm(hidden_states)
         if output_hidden_states:
             all_hidden_states += (hidden_states,)

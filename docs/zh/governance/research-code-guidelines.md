@@ -4,7 +4,7 @@
 
 ## 贡献稀疏方法
 
-新增或重构一等 Sparse-vLLM 稀疏方法时，应把方法特定的运行时状态保存在 `src/sparsevllm/engine/cache_manager/` 中，保持 `src/sparsevllm/layers/attention.py` 的通用性，并尽可能通过共享缓存管理器接口接入新行为。
+新增或重构一等 Sparse-Engine 稀疏方法时，应把方法特定的运行时状态保存在 `src/sparseengine/engine/cache_manager/` 中，保持 `src/sparseengine/layers/attention.py` 的通用性，并尽可能通过共享缓存管理器接口接入新行为。
 
 ## 研究代码优先级
 

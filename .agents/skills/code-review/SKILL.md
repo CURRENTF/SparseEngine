@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Review Sparse-vLLM diffs for correctness, sparse-runtime and operator architecture, scheduling semantics, reproducibility, public documentation hygiene, performance, and tests. Use when reviewing PRs, git diffs, sparse method integrations, operator/provider or kernel changes, platform capability handling, cache-manager or scheduler changes, benchmark/evaluation scripts, docs changes, or when the user asks for a code review; if no range is specified, diff the current branch against main.
+description: Review Sparse-Engine diffs for correctness, sparse-runtime and operator architecture, scheduling semantics, reproducibility, public documentation hygiene, performance, and tests. Use when reviewing PRs, git diffs, sparse method integrations, operator/provider or kernel changes, platform capability handling, cache-manager or scheduler changes, benchmark/evaluation scripts, docs changes, or when the user asks for a code review; if no range is specified, diff the current branch against main.
 ---
 
 # Code Review
@@ -23,9 +23,9 @@ If `CURRENT_BRANCH` is `main`, ask which commits or files to review.
 
 ### Step 2: Load Review Standards
 
-Read [svllm-review-standards.md](references/svllm-review-standards.md).
+Read [sengine-review-standards.md](references/sengine-review-standards.md).
 
-For sparse-method additions or refactors, also read [`$add-sparse-method`](../add-sparse-method/SKILL.md). For policy changes, inspect `src/sparsevllm/method_registry.py`, `src/sparsevllm/engine/scheduler.py`, and `tests/test_prefill_schedule_policy.py`.
+For sparse-method additions or refactors, also read [`$add-sparse-method`](../add-sparse-method/SKILL.md). For policy changes, inspect `src/sparseengine/method_registry.py`, `src/sparseengine/engine/scheduler.py`, and `tests/test_prefill_schedule_policy.py`.
 
 For changes to operators, providers, platforms, kernels, quantized weight
 layouts, external kernel dependencies, or model-to-operator call sites, read
@@ -37,7 +37,7 @@ and apply
 Prioritize:
 
 - inference correctness and tensor/cache invariants
-- Sparse-vLLM architecture boundaries
+- Sparse-Engine architecture boundaries
 - platform abstraction boundaries
 - operator/provider selection and kernel ownership, including upstream-first
   standard operations and repository ownership of non-standard sparse semantics

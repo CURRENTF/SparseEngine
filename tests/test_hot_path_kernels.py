@@ -3,8 +3,8 @@ import pytest
 import torch
 import triton
 
-from sparsevllm.kernels.triton.deltakv_kernels import full_layer_copy_raw_or_zero
-from sparsevllm.kernels.triton.moe import _prepare_naive_assignment_kernel
+from sparseengine.kernels.triton.deltakv_kernels import full_layer_copy_raw_or_zero
+from sparseengine.kernels.triton.moe import _prepare_naive_assignment_kernel
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 

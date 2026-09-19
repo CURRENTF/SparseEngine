@@ -1,6 +1,6 @@
 # Operator Provider Selection
 
-Sparse-vLLM resolves an operator exactly once during model construction:
+Sparse-Engine resolves an operator exactly once during model construction:
 
 ```text
 OpSpec
@@ -24,7 +24,7 @@ the operation contract on the active platform. It returns one typed status:
   ABI, or callable contract.
 
 Local benchmark coverage is not an atomic support status. In particular, an
-upstream implementation must not reject a shape merely because Sparse-vLLM did
+upstream implementation must not reject a shape merely because Sparse-Engine did
 not benchmark that shape locally.
 
 ## Portability Of Repository-Owned DSL Kernels
@@ -37,7 +37,7 @@ toolchain, hardware features actually used, and known compiler limitations.
 Missing local validation for a GPU model or shape is not by itself a reason for
 a device-name whitelist, compute-capability whitelist, or atomic rejection.
 
-Sparse-vLLM is a research-oriented project and cannot pre-validate every
+Sparse-Engine is a research-oriented project and cannot pre-validate every
 hardware combination. On a device with no known incompatibility, the resolver
 may optimistically bind a portable DSL provider and attempt compilation during
 prepare, JIT, warmup, or first execution. Compilation or execution failures must

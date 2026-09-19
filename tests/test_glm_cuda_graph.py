@@ -11,38 +11,38 @@ import pytest
 import torch
 from torch import nn
 
-from sparsevllm.config import RuntimeLayout
-from sparsevllm.configs.cuda_graph import (
+from sparseengine.config import RuntimeLayout
+from sparseengine.configs.cuda_graph import (
     _default_decode_cuda_graph_capture_sizes,
     build_decode_cuda_graph_startup_plan,
 )
-from sparsevllm.models.layout import resolve_attention_qk_head_dim
-from sparsevllm.method_registry import sparse_decode_attention_score_kind
-from sparsevllm.distributed import ParallelContext
-from sparsevllm.engine.cache_manager import LayerBatchStates
-from sparsevllm.engine.cache_manager.methods.h2o import H2OCacheManager
-from sparsevllm.engine.cache_manager.methods.omnikv.manager import OmniKVCacheManager
-from sparsevllm.engine.cache_manager.methods.rkv import RKVCacheManager
-from sparsevllm.engine.cache_manager.methods.snapkv import SnapKVCacheManager
-from sparsevllm.engine.cache_manager.standard import StandardCacheManager
-from sparsevllm.engine.cache_manager.storage import MlaLatentStorage
-from sparsevllm.engine.cache_manager.methods.streamingllm import (
+from sparseengine.models.layout import resolve_attention_qk_head_dim
+from sparseengine.method_registry import sparse_decode_attention_score_kind
+from sparseengine.distributed import ParallelContext
+from sparseengine.engine.cache_manager import LayerBatchStates
+from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
+from sparseengine.engine.cache_manager.methods.omnikv.manager import OmniKVCacheManager
+from sparseengine.engine.cache_manager.methods.rkv import RKVCacheManager
+from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+from sparseengine.engine.cache_manager.standard import StandardCacheManager
+from sparseengine.engine.cache_manager.storage import MlaLatentStorage
+from sparseengine.engine.cache_manager.methods.streamingllm import (
     StreamingLLMCacheManager,
 )
-from sparsevllm.engine.decode_cuda_graph import DecodeCudaGraphRunner
-from sparsevllm.engine.runtime_state import RuntimeState
-from sparsevllm.engine.sequence import Sequence
-from sparsevllm.engine.sparse_controller import SparseController
-from sparsevllm.layers.mla_attention import MLAAttention
-from sparsevllm.layers.rotary_embedding import RotaryEmbedding
-from sparsevllm.models.glm4_moe_lite import (
+from sparseengine.engine.decode_cuda_graph import DecodeCudaGraphRunner
+from sparseengine.engine.runtime_state import RuntimeState
+from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.sparse_controller import SparseController
+from sparseengine.layers.mla_attention import MLAAttention
+from sparseengine.layers.rotary_embedding import RotaryEmbedding
+from sparseengine.models.glm4_moe_lite import (
     Glm4MoeLiteAttention,
     Glm4MoeLiteForCausalLM,
     Glm4MoeLiteSparseMoeBlock,
 )
-from sparsevllm.operators.attention_capabilities import AttentionScoreKind
-from sparsevllm.operators.mla_attention import MlaAttentionOpSpec
-from sparsevllm.utils.context import get_context
+from sparseengine.operators.attention_capabilities import AttentionScoreKind
+from sparseengine.operators.mla_attention import MlaAttentionOpSpec
+from sparseengine.utils.context import get_context
 
 from glm_test_helpers import (
     _glm_hf_config,
@@ -148,11 +148,11 @@ def _make_glm_graph_lane(
     try:
         with (
             patch(
-                "sparsevllm.models.glm4_moe_lite.get_parallel_context",
+                "sparseengine.models.glm4_moe_lite.get_parallel_context",
                 return_value=parallel_context,
             ),
             patch(
-                "sparsevllm.layers.linear.get_parallel_context",
+                "sparseengine.layers.linear.get_parallel_context",
                 return_value=parallel_context,
             ),
             torch.device(device),
@@ -484,15 +484,15 @@ def _make_glm_full_graph_lane(
     try:
         with (
             patch(
-                "sparsevllm.models.glm4_moe_lite.get_parallel_context",
+                "sparseengine.models.glm4_moe_lite.get_parallel_context",
                 return_value=parallel_context,
             ),
             patch(
-                "sparsevllm.layers.linear.get_parallel_context",
+                "sparseengine.layers.linear.get_parallel_context",
                 return_value=parallel_context,
             ),
             patch(
-                "sparsevllm.layers.embed_head.get_parallel_context",
+                "sparseengine.layers.embed_head.get_parallel_context",
                 return_value=parallel_context,
             ),
             torch.device(device),
@@ -668,7 +668,7 @@ def test_glm_full_decoder_moe_cuda_graph_matches_static_eager():
 
     steps = []
     captured_graph = None
-    with patch.dict(os.environ, {"SPARSEVLLM_DEBUG_MOE": "1"}):
+    with patch.dict(os.environ, {"SPARSEENGINE_DEBUG_MOE": "1"}):
         for step in range(2):
             eager_logits = eager.runner.run_eager_static([eager.sequence])
             graph_logits, graph_token_ids = graph.runner.run(
@@ -1060,11 +1060,11 @@ def _make_glm_method_graph_lane(
     try:
         with (
             patch(
-                "sparsevllm.models.glm4_moe_lite.get_parallel_context",
+                "sparseengine.models.glm4_moe_lite.get_parallel_context",
                 return_value=parallel_context,
             ),
             patch(
-                "sparsevllm.layers.linear.get_parallel_context",
+                "sparseengine.layers.linear.get_parallel_context",
                 return_value=parallel_context,
             ),
             torch.device(device),

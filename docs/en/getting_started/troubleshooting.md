@@ -15,8 +15,8 @@ reduce the keep-token budgets.
 
 CUDA workers use separate TensorRT-LLM DeepGEMM cache directories to avoid
 concurrent cold-compilation writes. The cache root is selected in this order:
-`SPARSEVLLM_TRTLLM_DG_CACHE_ROOT`, `TRTLLM_DG_CACHE_DIR`, then
-`${XDG_CACHE_HOME:-~/.cache}/sparsevllm/trtllm-deepgemm`. Both explicit variables
+`SPARSEENGINE_TRTLLM_DG_CACHE_ROOT`, `TRTLLM_DG_CACHE_DIR`, then
+`${XDG_CACHE_HOME:-~/.cache}/sparseengine/trtllm-deepgemm`. Both explicit variables
 name a root; each worker exclusively leases a child directory, printed at startup.
 Set the root to a writable data disk when the home filesystem is space-limited.
 

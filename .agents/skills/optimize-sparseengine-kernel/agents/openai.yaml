@@ -1,0 +1,4 @@
+interface:
+  display_name: "Optimize Sparse-Engine Kernel"
+  short_description: "Optimize Sparse-Engine GPU kernels end to end"
+  default_prompt: "Use $optimize-sparseengine-kernel to find, implement, tune, profile, and integrate a Sparse-Engine GPU kernel."

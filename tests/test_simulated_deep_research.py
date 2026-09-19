@@ -85,7 +85,7 @@ class FakeService:
                     "data": [
                         {
                             "id": "sim-model",
-                            "owned_by": "sparsevllm-router",
+                            "owned_by": "sparseengine-router",
                             "max_model_len": self.max_model_len,
                         }
                     ],
@@ -149,7 +149,7 @@ class FakeService:
         self.max_active = max(self.max_active, self.active)
         try:
             await asyncio.sleep(0.001)
-            methods = payload["svllm_method_preference"].split(",")
+            methods = payload["sengine_method_preference"].split(",")
             if methods == ["snapkv"]:
                 worker = "http://snap-worker"
                 method = (
@@ -200,10 +200,10 @@ class FakeService:
                 else str(matched_tokens)
             )
             headers = {
-                "x-sparsevllm-worker": worker,
-                "x-sparsevllm-route-reason": "lowest_load_no_prefix_match",
-                "x-sparsevllm-sparse-method": method,
-                "x-sparsevllm-prefix-matched-tokens": (
+                "x-sparseengine-worker": worker,
+                "x-sparseengine-route-reason": "lowest_load_no_prefix_match",
+                "x-sparseengine-sparse-method": method,
+                "x-sparseengine-prefix-matched-tokens": (
                     matched_tokens_header
                 ),
             }
@@ -431,9 +431,9 @@ class SimulatedDeepResearchTest(unittest.TestCase):
                 required_tags=config.subagent_required_tags,
             )
             payload = run.build_payload(spec, config)
-            self.assertEqual(payload["svllm_method_preference"], "vanilla")
+            self.assertEqual(payload["sengine_method_preference"], "vanilla")
             self.assertEqual(
-                payload["svllm_required_tags"],
+                payload["sengine_required_tags"],
                 ["subagent"],
             )
 
@@ -445,7 +445,7 @@ class SimulatedDeepResearchTest(unittest.TestCase):
                         "data": [
                             {
                                 "id": "sim-model",
-                                "owned_by": "sparsevllm-router",
+                                "owned_by": "sparseengine-router",
                                 "max_model_len": 65_536,
                             }
                         ]
@@ -525,7 +525,7 @@ class SimulatedDeepResearchTest(unittest.TestCase):
                         "data": [
                             {
                                 "id": "sim-model",
-                                "owned_by": "sparsevllm-router",
+                                "owned_by": "sparseengine-router",
                                 "max_model_len": 65_536,
                             }
                         ]
@@ -652,7 +652,7 @@ class SimulatedDeepResearchTest(unittest.TestCase):
             main_payloads = [
                 payload
                 for payload in service.payloads
-                if payload["svllm_method_preference"] == "omnikv,vanilla"
+                if payload["sengine_method_preference"] == "omnikv,vanilla"
             ]
             self.assertEqual(len(main_payloads), 3)
             first_round_prompt = main_payloads[0]["prompt"]
@@ -1183,9 +1183,9 @@ class SimulatedDeepResearchTest(unittest.TestCase):
                     },
                 },
                 headers={
-                    "x-sparsevllm-worker": "http://snap-worker",
-                    "x-sparsevllm-route-reason": "test",
-                    "x-sparsevllm-sparse-method": "snapkv",
+                    "x-sparseengine-worker": "http://snap-worker",
+                    "x-sparseengine-route-reason": "test",
+                    "x-sparseengine-sparse-method": "snapkv",
                 },
             )
 
@@ -1225,9 +1225,9 @@ class SimulatedDeepResearchTest(unittest.TestCase):
                     },
                 },
                 headers={
-                    "x-sparsevllm-worker": "http://snap-worker",
-                    "x-sparsevllm-route-reason": "test",
-                    "x-sparsevllm-sparse-method": "snapkv",
+                    "x-sparseengine-worker": "http://snap-worker",
+                    "x-sparseengine-route-reason": "test",
+                    "x-sparseengine-sparse-method": "snapkv",
                 },
             )
 
@@ -1300,7 +1300,7 @@ class SimulatedDeepResearchTest(unittest.TestCase):
             main_payloads = [
                 payload
                 for payload in service.payloads
-                if payload["svllm_method_preference"] == "omnikv,vanilla"
+                if payload["sengine_method_preference"] == "omnikv,vanilla"
             ]
             rows = [
                 json.loads(line)
@@ -1548,13 +1548,13 @@ class SimulatedDeepResearchTest(unittest.TestCase):
 
             async def post(self, url, payload, timeout_s):
                 response = await super().post(url, payload, timeout_s)
-                if payload["svllm_method_preference"] == "snapkv":
+                if payload["sengine_method_preference"] == "snapkv":
                     return response
                 headers = dict(response.headers)
-                headers["x-sparsevllm-worker"] = self.main_workers[
+                headers["x-sparseengine-worker"] = self.main_workers[
                     self.main_request_index
                 ]
-                headers["x-sparsevllm-prefix-matched-tokens"] = "0"
+                headers["x-sparseengine-prefix-matched-tokens"] = "0"
                 self.main_request_index += 1
                 return run.HttpResponse(
                     status=response.status,
@@ -1681,7 +1681,7 @@ class SimulatedDeepResearchTest(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 run.BenchmarkFailed,
-                "invalid x-sparsevllm-prefix-matched-tokens",
+                "invalid x-sparseengine-prefix-matched-tokens",
             ):
                 asyncio.run(
                     run.run_benchmark(
@@ -1714,7 +1714,7 @@ class SimulatedDeepResearchTest(unittest.TestCase):
         def fake_request(_url, *, payload, timeout_s):
             nonlocal active, max_active, previous_main_prompt
             self.assertGreater(timeout_s, 0)
-            methods = payload["svllm_method_preference"].split(",")
+            methods = payload["sengine_method_preference"].split(",")
             if methods == ["snapkv"]:
                 with lock:
                     active += 1
@@ -1760,10 +1760,10 @@ class SimulatedDeepResearchTest(unittest.TestCase):
                     },
                 },
                 headers={
-                    "x-sparsevllm-worker": worker,
-                    "x-sparsevllm-route-reason": "test",
-                    "x-sparsevllm-sparse-method": method,
-                    "x-sparsevllm-prefix-matched-tokens": str(
+                    "x-sparseengine-worker": worker,
+                    "x-sparseengine-route-reason": "test",
+                    "x-sparseengine-sparse-method": method,
+                    "x-sparseengine-prefix-matched-tokens": str(
                         matched_tokens
                     ),
                 },
@@ -1819,7 +1819,7 @@ class SimulatedDeepResearchTest(unittest.TestCase):
                         "data": [
                             {
                                 "id": "sim-model",
-                                "owned_by": "sparsevllm-router",
+                                "owned_by": "sparseengine-router",
                                 "max_model_len": 65536,
                             }
                         ]
@@ -2249,7 +2249,7 @@ class SimulatedDeepResearchTest(unittest.TestCase):
                 method_preferences=("snapkv",),
             )
             payload = run.build_payload(spec, config)
-            self.assertNotIn("svllm_method_preference", payload)
+            self.assertNotIn("sengine_method_preference", payload)
 
 
 if __name__ == "__main__":

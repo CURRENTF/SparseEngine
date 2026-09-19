@@ -6,18 +6,18 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.config import Config
-from sparsevllm.engine.cache_manager.base import AttentionViewMeta, ExplicitKVPayload, PrefillComputeView
-from sparsevllm.engine.sparse_methods import create_sparse_method_runtime
-from sparsevllm.engine.sparse_methods.base import (
+from sparseengine.config import Config
+from sparseengine.engine.cache_manager.base import AttentionViewMeta, ExplicitKVPayload, PrefillComputeView
+from sparseengine.engine.sparse_methods import create_sparse_method_runtime
+from sparseengine.engine.sparse_methods.base import (
     DecodeSelectionRequest, LayerEndEvent, PrefillSelectionRequest, SparseStepContext,
 )
-from sparsevllm.operators.attention_capabilities import AttentionScoreKind
-from sparsevllm.operators.prefill_attention import (
+from sparseengine.operators.attention_capabilities import AttentionScoreKind
+from sparseengine.operators.prefill_attention import (
     PrefillAttentionOpSpec, TritonPagedPrefillAttentionProvider,
     prepare_prefill_attention_op,
 )
-from sparsevllm.utils.context import get_context
+from sparseengine.utils.context import get_context
 
 
 def _config(method=""):
@@ -61,7 +61,7 @@ def test_prefill_selection_preserves_chunk_and_decode_ownership(method):
     context = SimpleNamespace(is_prefill=True, cu_seqlens_q=torch.tensor([0, 3, 5, 6]))
     step = SparseStepContext([None] * 3, True, context)
     original_table = table.clone()
-    with patch("sparsevllm.engine.sparse_methods.omnikv_prefill.build_omnikv_keep_and_slots", side_effect=_build_slots_reference):
+    with patch("sparseengine.engine.sparse_methods.omnikv_prefill.build_omnikv_keep_and_slots", side_effect=_build_slots_reference):
         # Repeated chunks reset both the selection and the shared atomic scores.
         for _ in range(2):
             runtime.prepare_step(step)
@@ -103,7 +103,7 @@ def _runtime_config(tmp_path, **overrides):
     params = dict(model=str(tmp_path), prefill_sparse_method="omnikv_prefill",
                   omnikv_prefill_full_attention_layers=[0, 2])
     params.update(overrides)
-    with patch("sparsevllm.configs.runtime.AutoConfig.from_pretrained", return_value=hf):
+    with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=hf):
         return Config(**params)
 
 
@@ -116,7 +116,7 @@ def test_zero_history_budget_preserves_only_causal_current_chunk():
     runtime = create_sparse_method_runtime(config, manager)
     context = SimpleNamespace(is_prefill=True, cu_seqlens_q=torch.tensor([0, 2]))
     runtime.prepare_step(SparseStepContext([None], True, context))
-    with patch("sparsevllm.engine.sparse_methods.omnikv_prefill.build_omnikv_keep_and_slots", side_effect=_build_slots_reference):
+    with patch("sparseengine.engine.sparse_methods.omnikv_prefill.build_omnikv_keep_and_slots", side_effect=_build_slots_reference):
         runtime.on_layer_end(LayerEndEvent(0, context, context))
     selection = runtime.build_prefill_selection(PrefillSelectionRequest(1, context))
     assert selection.active_indices.tolist() == [[3, 4]]
@@ -124,7 +124,7 @@ def test_zero_history_budget_preserves_only_causal_current_chunk():
 
 
 def test_prefill_selection_reduces_all_tp_heads_before_topk(monkeypatch):
-    from sparsevllm.distributed import ParallelGroup
+    from sparseengine.distributed import ParallelGroup
 
     config = _config()
     config.tensor_parallel_size = 2
@@ -147,7 +147,7 @@ def test_prefill_selection_reduces_all_tp_heads_before_topk(monkeypatch):
     context = SimpleNamespace(is_prefill=True, cu_seqlens_q=torch.tensor([0, 3]))
     runtime.prepare_step(SparseStepContext([None], True, context))
     runtime.layer_batch_sparse_states[0].attn_score[0, 0, 3] = 30
-    with patch("sparsevllm.engine.sparse_methods.omnikv_prefill.build_omnikv_keep_and_slots", side_effect=_build_slots_reference):
+    with patch("sparseengine.engine.sparse_methods.omnikv_prefill.build_omnikv_keep_and_slots", side_effect=_build_slots_reference):
         runtime.on_layer_end(LayerEndEvent(0, context, context))
     selection = runtime.build_prefill_selection(PrefillSelectionRequest(1, context))
     assert set(selection.active_indices[0, 2:4].tolist()) == {3, 4}
@@ -156,7 +156,7 @@ def test_prefill_selection_reduces_all_tp_heads_before_topk(monkeypatch):
 def test_global_selection_crosses_sliding_layers_and_reaches_shared_kv_consumers():
     # A shared global layer reads its source's KV but has its own query and
     # selection. Iterating only physical owners previously dropped this layer.
-    from sparsevllm.models.layout import RuntimeLayout
+    from sparseengine.models.layout import RuntimeLayout
     from transformers import Gemma4TextConfig
 
     config = _config()
@@ -174,7 +174,7 @@ def test_global_selection_crosses_sliding_layers_and_reaches_shared_kv_consumers
     runtime.prepare_step(SparseStepContext([None], True, context))
     state = runtime.layer_batch_sparse_states[1]
     state.attn_score[0, 0, 3:5] = 100
-    with patch("sparsevllm.engine.sparse_methods.omnikv_prefill.build_omnikv_keep_and_slots", side_effect=_build_slots_reference):
+    with patch("sparseengine.engine.sparse_methods.omnikv_prefill.build_omnikv_keep_and_slots", side_effect=_build_slots_reference):
         runtime.on_layer_end(LayerEndEvent(1, context, context))
     for layer in (0, 2, 4):
         runtime.on_layer_end(LayerEndEvent(layer, context, context))
@@ -197,7 +197,7 @@ def test_mla_max_workspace_is_consumed_then_reset_between_observers():
     runtime = create_sparse_method_runtime(config, manager)
     context = SimpleNamespace(is_prefill=True, cu_seqlens_q=torch.tensor([0, 3]))
     runtime.prepare_step(SparseStepContext([None], True, context))
-    with patch("sparsevllm.engine.sparse_methods.omnikv_prefill.build_omnikv_keep_and_slots", side_effect=_build_slots_reference):
+    with patch("sparseengine.engine.sparse_methods.omnikv_prefill.build_omnikv_keep_and_slots", side_effect=_build_slots_reference):
         for anchor, target, preferred in [(0, 1, [3, 4]), (2, 3, [2, 5])]:
             score = runtime.layer_batch_sparse_states[anchor].attn_score
             assert score.shape == (1, 10)
@@ -239,7 +239,7 @@ def _spec(dtype=torch.bfloat16, **kwargs):
 
 def test_prepared_score_dispatch_never_reselects_on_failure():
     scored, plain = Mock(), Mock()
-    with patch("sparsevllm.operators.prefill_attention._resolve_prefill_attention_provider",
+    with patch("sparseengine.operators.prefill_attention._resolve_prefill_attention_provider",
                side_effect=lambda spec, **_: (scored if spec.optional_score_output else plain, spec)) as resolve:
         op = prepare_prefill_attention_op(_spec())
     assert resolve.call_count == 2

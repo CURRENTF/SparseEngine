@@ -1,6 +1,6 @@
 # Host-side cache and scheduler timing
 
-Set `SPARSEVLLM_CPU_TIMING_INTERVAL_S=30` before starting the engine to emit
+Set `SPARSEENGINE_CPU_TIMING_INTERVAL_S=30` before starting the engine to emit
 periodic `cpu_timing` JSON records. The default `0` leaves decorated functions
 unwrapped. The value must be finite and nonnegative.
 

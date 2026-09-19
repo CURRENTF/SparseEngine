@@ -6,19 +6,19 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from sparsevllm.kernels.external.support import (
+from sparseengine.kernels.external.support import (
     ExternalKernelContractError,
     ExternalKernelFamilyError,
     KernelFamilyState,
     RequiredExternalKernelFamilyError,
 )
-from sparsevllm.kernels.external.sgl.fa3 import (
+from sparseengine.kernels.external.sgl.fa3 import (
     _FWD_ARGUMENTS,
     SglFa3DecodeKernel,
     sgl_fa3_device_support,
     sgl_fa3_support,
 )
-from sparsevllm.kernels.external.sgl.support import sgl_kernel_metadata_health
+from sparseengine.kernels.external.sgl.support import sgl_kernel_metadata_health
 
 
 def test_sgl_fa3_support_rejects_missing_package() -> None:
@@ -68,7 +68,7 @@ def test_sgl_fa3_support_accepts_pinned_version() -> None:
     )
     with (
         patch(
-            "sparsevllm.kernels.external.sgl.fa3._sgl_fa3_op",
+            "sparseengine.kernels.external.sgl.fa3._sgl_fa3_op",
             return_value=op,
         ),
         patch("importlib.util.find_spec", return_value=object()),
@@ -100,11 +100,11 @@ def test_sgl_fa3_support_rejects_binary_load_failure() -> None:
 def test_sgl_fa3_support_rejects_missing_op_schema() -> None:
     with (
         patch(
-            "sparsevllm.kernels.external.sgl.fa3.sgl_kernel_support",
+            "sparseengine.kernels.external.sgl.fa3.sgl_kernel_support",
             return_value=(True, "available"),
         ),
         patch(
-            "sparsevllm.kernels.external.sgl.fa3._sgl_fa3_op",
+            "sparseengine.kernels.external.sgl.fa3._sgl_fa3_op",
             return_value=object(),
         ),
     ):
@@ -116,7 +116,7 @@ def test_sgl_fa3_support_rejects_missing_op_schema() -> None:
 
 def test_sgl_fa3_device_support_keeps_package_probe_and_device_probe_separate() -> None:
     with patch(
-        "sparsevllm.kernels.external.sgl.fa3.sgl_fa3_support",
+        "sparseengine.kernels.external.sgl.fa3.sgl_fa3_support",
         side_effect=RuntimeError("ABI mismatch"),
     ):
         with pytest.raises(RuntimeError, match="ABI mismatch"):

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from sparsevllm.engine.decode_graph_staging import DecodeGraphHostInputs
+from sparseengine.engine.decode_graph_staging import DecodeGraphHostInputs
 
 
 def test_decode_graph_host_inputs_share_one_typed_backing() -> None:

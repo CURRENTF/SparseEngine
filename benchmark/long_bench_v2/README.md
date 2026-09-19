@@ -17,10 +17,10 @@ split (the former `THUDM/LongBench-v2` alias redirects there) to one local JSON
 or JSONL file, then set:
 
 ```bash
-export SPARSEVLLM_LONGBENCH_V2_DATA=<LONGBENCH_V2_JSON_OR_JSONL>
+export SPARSEENGINE_LONGBENCH_V2_DATA=<LONGBENCH_V2_JSON_OR_JSONL>
 ```
 
-`pred.py` runs the native Sparse-vLLM engine. With `--token-buckets-json`, it
+`pred.py` runs the native Sparse-Engine engine. With `--token-buckets-json`, it
 selects a deterministic subset in configured post-chat-template token buckets
 without truncating source prompts. A bucket with insufficient samples that fit
 the requested model budget fails explicitly. It saves the selected identities and hashes, raw responses,
@@ -37,7 +37,7 @@ For the official Hugging Face tokenizer truncation procedure, use:
 ```bash
 python benchmark/long_bench_v2/pred.py \
   --model-path "$MODEL_PATH" \
-  --data-path "$SPARSEVLLM_LONGBENCH_V2_DATA" \
+  --data-path "$SPARSEENGINE_LONGBENCH_V2_DATA" \
   --sparse-method vanilla \
   --all-samples \
   --overflow-policy official-middle \
@@ -108,6 +108,6 @@ as incorrect. Model/runtime failures remain fatal and invalidate the run.
 The canonical 120-sample, greedy-decoding profile is a repository regression
 gate, not a reproduction of the full 503-sample LongBench v2 leaderboard.
 
-Use `benchmark/sparsevllm_regression/run_suite.py --layer longbench_v2` for the
+Use `benchmark/sparseengine_regression/run_suite.py --layer longbench_v2` for the
 canonical gate. The default quality layer runs LongBench v1, LongBench v2, and
 RULER; use `--quality_benchmarks` only for an intentional focused run.

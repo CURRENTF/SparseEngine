@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import torch
 
-from sparsevllm.engine.startup import StartupMemoryProfiler
-from sparsevllm.platforms.interface import AllocatorStats, Platform
+from sparseengine.engine.startup import StartupMemoryProfiler
+from sparseengine.platforms.interface import AllocatorStats, Platform
 
 
 class _Platform(Platform):
@@ -30,7 +30,7 @@ class _Platform(Platform):
 def test_startup_profiler_measures_one_named_phase(monkeypatch):
     platform = _Platform()
     monkeypatch.setattr(
-        "sparsevllm.engine.startup.profiling.release_unused_device_memory",
+        "sparseengine.engine.startup.profiling.release_unused_device_memory",
         lambda current: None,
     )
     profiler = StartupMemoryProfiler(platform, torch.device("cuda", 0))
@@ -49,7 +49,7 @@ def test_startup_profiler_measures_one_named_phase(monkeypatch):
 def test_startup_profiler_rejects_overlapping_or_mismatched_phases(monkeypatch):
     platform = _Platform()
     monkeypatch.setattr(
-        "sparsevllm.engine.startup.profiling.release_unused_device_memory",
+        "sparseengine.engine.startup.profiling.release_unused_device_memory",
         lambda current: None,
     )
     profiler = StartupMemoryProfiler(platform, torch.device("cuda", 0))

@@ -4,24 +4,24 @@ from unittest.mock import patch
 
 import torch
 
-from sparsevllm.engine.cache_manager import (
+from sparseengine.engine.cache_manager import (
     AttentionViewMeta,
     DecodeComputeView,
     ExplicitKVPayload,
     MlaLatentPayload,
     PrefillComputeView,
 )
-from sparsevllm.layers.attention_backend import TritonAttentionBackend
+from sparseengine.layers.attention_backend import TritonAttentionBackend
 
 
 class FakeAttentionBackendTest(unittest.TestCase):
     _ENV_KEYS = (
-        "SPARSEVLLM_FAKE_ATTENTION",
-        "SPARSEVLLM_FAKE_PREFILL_ATTENTION",
-        "SPARSEVLLM_FAKE_DECODE_ATTENTION",
-        "SPARSEVLLM_FAKE_ATTENTION_MODE",
-        "SPARSEVLLM_ALLOW_FAKE_ATTENTION",
-        "SVLLM_DEBUG_DECODE_BOUNDS",
+        "SPARSEENGINE_FAKE_ATTENTION",
+        "SPARSEENGINE_FAKE_PREFILL_ATTENTION",
+        "SPARSEENGINE_FAKE_DECODE_ATTENTION",
+        "SPARSEENGINE_FAKE_ATTENTION_MODE",
+        "SPARSEENGINE_ALLOW_FAKE_ATTENTION",
+        "SENGINE_DEBUG_DECODE_BOUNDS",
     )
 
     def setUp(self):
@@ -65,14 +65,14 @@ class FakeAttentionBackendTest(unittest.TestCase):
         )
 
     def test_fake_prefill_returns_zeros_and_skips_kernel(self):
-        os.environ["SPARSEVLLM_FAKE_ATTENTION"] = "1"
-        os.environ["SPARSEVLLM_ALLOW_FAKE_ATTENTION"] = "1"
+        os.environ["SPARSEENGINE_FAKE_ATTENTION"] = "1"
+        os.environ["SPARSEENGINE_ALLOW_FAKE_ATTENTION"] = "1"
         q = torch.ones(3, 2, 4)
         attn_score = torch.full((1, 2, 3), 9.0)
         view = self._make_prefill_view(attn_score=attn_score)
 
         with patch(
-            "sparsevllm.layers.attention_backend.context_attention_fwd",
+            "sparseengine.layers.attention_backend.context_attention_fwd",
             side_effect=AssertionError("real prefill kernel called"),
         ):
             out = TritonAttentionBackend().run_prefill(
@@ -87,20 +87,20 @@ class FakeAttentionBackendTest(unittest.TestCase):
         self.assertTrue(torch.equal(attn_score, torch.zeros_like(attn_score)))
 
     def test_fake_decode_copy_mode_skips_kernels(self):
-        os.environ["SPARSEVLLM_FAKE_ATTENTION"] = "1"
-        os.environ["SPARSEVLLM_ALLOW_FAKE_ATTENTION"] = "1"
-        os.environ["SPARSEVLLM_FAKE_ATTENTION_MODE"] = "copy"
+        os.environ["SPARSEENGINE_FAKE_ATTENTION"] = "1"
+        os.environ["SPARSEENGINE_ALLOW_FAKE_ATTENTION"] = "1"
+        os.environ["SPARSEENGINE_FAKE_ATTENTION_MODE"] = "copy"
         q = torch.arange(8, dtype=torch.float32).view(1, 2, 4)
         attn_score = torch.full((1, 2, 3), -1e20)
         view = self._make_decode_view(attn_score=attn_score)
 
         with (
             patch(
-                "sparsevllm.layers.attention_backend.gqa_flash_decode_stage1",
+                "sparseengine.layers.attention_backend.gqa_flash_decode_stage1",
                 side_effect=AssertionError("real decode stage1 called"),
             ),
             patch(
-                "sparsevllm.layers.attention_backend.flash_decode_stage2",
+                "sparseengine.layers.attention_backend.flash_decode_stage2",
                 side_effect=AssertionError("real decode stage2 called"),
             ),
         ):
@@ -120,7 +120,7 @@ class FakeAttentionBackendTest(unittest.TestCase):
         self.assertTrue(torch.equal(attn_score, torch.zeros_like(attn_score)))
 
     def test_debug_decode_bounds_checks_flash_attn_contiguous(self):
-        os.environ["SVLLM_DEBUG_DECODE_BOUNDS"] = "1"
+        os.environ["SENGINE_DEBUG_DECODE_BOUNDS"] = "1"
         q = torch.zeros(1, 2, 4)
         view = DecodeComputeView(
             meta=AttentionViewMeta(
@@ -149,12 +149,12 @@ class FakeAttentionBackendTest(unittest.TestCase):
             )
 
     def test_fake_attention_requires_explicit_allow(self):
-        os.environ["SPARSEVLLM_FAKE_ATTENTION"] = "1"
-        os.environ.pop("SPARSEVLLM_ALLOW_FAKE_ATTENTION", None)
+        os.environ["SPARSEENGINE_FAKE_ATTENTION"] = "1"
+        os.environ.pop("SPARSEENGINE_ALLOW_FAKE_ATTENTION", None)
         q = torch.ones(3, 2, 4)
         view = self._make_prefill_view()
 
-        with self.assertRaisesRegex(RuntimeError, "SPARSEVLLM_ALLOW_FAKE_ATTENTION"):
+        with self.assertRaisesRegex(RuntimeError, "SPARSEENGINE_ALLOW_FAKE_ATTENTION"):
             TritonAttentionBackend().run_prefill(
                 q,
                 view,
@@ -164,9 +164,9 @@ class FakeAttentionBackendTest(unittest.TestCase):
             )
 
     def test_fake_prefill_only_keeps_decode_kernels(self):
-        os.environ["SPARSEVLLM_FAKE_PREFILL_ATTENTION"] = "1"
-        os.environ.pop("SPARSEVLLM_FAKE_ATTENTION", None)
-        os.environ.pop("SPARSEVLLM_FAKE_DECODE_ATTENTION", None)
+        os.environ["SPARSEENGINE_FAKE_PREFILL_ATTENTION"] = "1"
+        os.environ.pop("SPARSEENGINE_FAKE_ATTENTION", None)
+        os.environ.pop("SPARSEENGINE_FAKE_DECODE_ATTENTION", None)
         q = torch.arange(8, dtype=torch.float32).view(1, 2, 4)
         attn_score = torch.full((1, 2, 3), -1e20)
         view = self._make_decode_view(attn_score=attn_score)
@@ -180,8 +180,8 @@ class FakeAttentionBackendTest(unittest.TestCase):
             out.zero_()
 
         with (
-            patch("sparsevllm.layers.attention_backend.gqa_flash_decode_stage1_with_score", side_effect=stage1),
-            patch("sparsevllm.layers.attention_backend.flash_decode_stage2", side_effect=stage2),
+            patch("sparseengine.layers.attention_backend.gqa_flash_decode_stage1_with_score", side_effect=stage1),
+            patch("sparseengine.layers.attention_backend.flash_decode_stage2", side_effect=stage2),
         ):
             out = TritonAttentionBackend().run_decode(
                 q,

@@ -25,9 +25,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-DEFAULT_MODEL_ROOT = Path(os.getenv("SPARSEVLLM_MODEL_ROOT", PROJECT_ROOT / "models"))
-DEFAULT_DATA_ROOT = Path(os.getenv("SPARSEVLLM_DATA_DIR", PROJECT_ROOT / "data"))
-DEFAULT_OUTPUT_ROOT = Path(os.getenv("SPARSEVLLM_OUTPUT_DIR", PROJECT_ROOT / "outputs"))
+DEFAULT_MODEL_ROOT = Path(os.getenv("SPARSEENGINE_MODEL_ROOT", PROJECT_ROOT / "models"))
+DEFAULT_DATA_ROOT = Path(os.getenv("SPARSEENGINE_DATA_DIR", PROJECT_ROOT / "data"))
+DEFAULT_OUTPUT_ROOT = Path(os.getenv("SPARSEENGINE_OUTPUT_DIR", PROJECT_ROOT / "outputs"))
 
 TASK_CSV_FILES = {
     "real": "Real_Time_Visual_Understanding.csv",

@@ -82,18 +82,18 @@ def run_paper_decode(args):
         raise ValueError("Invalid topology, memory or admission parameters")
     if args.wave_decode_gap_steps and not args.prefill_wave_size:
         raise ValueError("Wave gap requires wave admission")
-    if args.engine != "sparsevllm" and args.prefill_wave_size:
+    if args.engine != "sparseengine" and args.prefill_wave_size:
         raise ValueError("External adapters do not implement wave admission")
     hp = _parse_json_arg(args.hyper_params)
     extra = _parse_json_arg(args.engine_kwargs)
-    if args.engine == "sparsevllm" and extra:
+    if args.engine == "sparseengine" and extra:
         raise ValueError("Native engine does not consume external engine kwargs")
     explicit = dict(tensor_parallel_size=args.tensor_parallel_size,
         expert_parallel_size=args.expert_parallel_size, data_parallel_size=1,
         gpu_memory_utilization=args.gpu_memory_utilization, decode_graph=True,
         enable_prefix_caching=False, max_num_batched_tokens=args.max_num_batched_tokens)
     hp.setdefault("engine_prefill_chunk_size",
-                  8192 if args.engine == "sparsevllm" else args.max_num_batched_tokens)
+                  8192 if args.engine == "sparseengine" else args.max_num_batched_tokens)
     for key, value in explicit.items():
         if key in hp and hp[key] != value:
             raise ValueError(f"Conflicting paper parameter: {key}")
@@ -131,7 +131,7 @@ def run_paper_decode(args):
             for output in args.output_lens:
                 for batch in args.batch_sizes:
                     case_hp = dict(hp)
-                    if args.engine == "sparsevllm":
+                    if args.engine == "sparseengine":
                         case_hp["decode_graph_capture_sizes"] = [batch]
                     rows = []
                     for index in range(-args.num_warmups, args.num_iters):
@@ -148,7 +148,7 @@ def run_paper_decode(args):
                         if args.prefill_wave_size:
                             command += ["--admission_wave_size", str(args.prefill_wave_size),
                                         "--wave_decode_gap_steps", str(args.wave_decode_gap_steps)]
-                        if args.engine != "sparsevllm":
+                        if args.engine != "sparseengine":
                             command += ["--engine_kwargs", json.dumps(extra)]
                             if args.backend_label:
                                 command += ["--backend_label", args.backend_label]

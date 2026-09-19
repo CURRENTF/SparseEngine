@@ -4,18 +4,18 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from sparsevllm.kernels.triton.gate_up_swiglu import h20_gate_up_swiglu
-from sparsevllm.kernels.triton.gemma4_moe import fused_gemma4_moe
-from sparsevllm.kernels.triton.moe import (
+from sparseengine.kernels.triton.gate_up_swiglu import h20_gate_up_swiglu
+from sparseengine.kernels.triton.gemma4_moe import fused_gemma4_moe
+from sparseengine.kernels.triton.moe import (
     _prepare_expert_assignment,
     append_shared_expert_route,
     fused_moe,
     fused_moe_gate_up_swiglu,
     moe_align_block_size,
 )
-from sparsevllm.kernels.triton.moe_topk import topk_softmax
-from sparsevllm.kernels.triton.silu_and_mul import _resolve_silu_launch_config
-from sparsevllm.operators.gated_shared_add import gated_shared_add
+from sparseengine.kernels.triton.moe_topk import topk_softmax
+from sparseengine.kernels.triton.silu_and_mul import _resolve_silu_launch_config
+from sparseengine.operators.gated_shared_add import gated_shared_add
 
 
 def test_silu_launch_config_uses_decode_tile_only_for_small_rows():

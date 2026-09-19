@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from sparsevllm.layers.layernorm import ColumnParallelRMSNorm
+from sparseengine.layers.layernorm import ColumnParallelRMSNorm
 
 
 class _ReferenceTpContext(SimpleNamespace):

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import torch
 import pytest
 
-from sparsevllm.engine.cache_manager.storage import CacheLayout
-from sparsevllm.engine.cache_manager.standard import StandardCacheManager
-from sparsevllm.engine.runtime_state import RuntimeState
-from sparsevllm.engine.startup import (
+from sparseengine.engine.cache_manager.storage import CacheLayout
+from sparseengine.engine.cache_manager.standard import StandardCacheManager
+from sparseengine.engine.runtime_state import RuntimeState
+from sparseengine.engine.startup import (
     KVCapacityPlan,
     StartupMemoryProfile,
     feasible_startup_graph_plan,
@@ -17,7 +17,7 @@ from sparsevllm.engine.startup import (
     profiling_kv_slots,
     profiling_prefill_chunk_lengths,
 )
-from sparsevllm.models.layout import RuntimeLayout
+from sparseengine.models.layout import RuntimeLayout
 
 
 def _config(*, sparse_method: str = "", prefill_sparse_method=None):
@@ -111,7 +111,7 @@ def test_h2o_prefill_only_uses_h2o_physical_cache_budget():
 
     budget = profiling_kv_budget_bytes(config, 10)
 
-    from sparsevllm.engine.cache_manager.methods.snapkv import resolve_snapkv_cache_capacity
+    from sparseengine.engine.cache_manager.methods.snapkv import resolve_snapkv_cache_capacity
 
     # Regression: a doubled startup budget made high-concurrency H2O OOM
     # before profiling, despite its pruned resident rows fitting in memory.
@@ -259,7 +259,7 @@ def test_startup_batch_feasibility_uses_all_memory_oracle_budgets():
 @pytest.mark.parametrize("free_by_layer,expected", [([4, 4], True), ([4, 3], False)])
 def test_startup_decode_checks_all_h2o_layers_without_allocating(free_by_layer, expected):
     # A later layer can lack the fourth append even when the first layer fits.
-    from sparsevllm.engine.cache_manager.methods.h2o import H2OCacheManager
+    from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
 
     manager = object.__new__(H2OCacheManager)
     manager._num_free_slots = list(free_by_layer)
@@ -280,8 +280,8 @@ def test_startup_decode_checks_all_h2o_layers_without_allocating(free_by_layer, 
 def test_startup_decode_uses_page_append_costs(free_pages, lengths, expected):
     # One token may consume a whole new page, or no shared capacity at all.
     # A len(seqs) <= free_slots check would get both boundary cases wrong.
-    from sparsevllm.engine.cache_manager.quantized import QuantizedCacheManager
-    from sparsevllm.engine.cache_manager.quantized_pages import QuantizedPagePool
+    from sparseengine.engine.cache_manager.quantized import QuantizedCacheManager
+    from sparseengine.engine.cache_manager.quantized_pages import QuantizedPagePool
 
     manager = object.__new__(QuantizedCacheManager)
     manager.page_size = 16
@@ -322,7 +322,7 @@ def test_startup_decode_rejects_request_local_capacity_limit():
 def test_omnikv_profiling_budget_can_admit_its_profile_workload(cache_tokens):
     # Native-KV profiling budgets omitted fixed offload pools, causing startup
     # to fail before it could measure production capacity when LRU was enabled.
-    from sparsevllm.engine.cache_manager.methods.omnikv.capacity import plan_omnikv_pools
+    from sparseengine.engine.cache_manager.methods.omnikv.capacity import plan_omnikv_pools
 
     config = _config(sparse_method="omnikv")
     config.enable_omnikv_offload = True
@@ -335,7 +335,7 @@ def test_omnikv_profiling_budget_can_admit_its_profile_workload(cache_tokens):
 
 
 def test_omnikv_cache_cannot_evict_tokens_selected_in_the_same_step():
-    from sparsevllm.engine.cache_manager.methods.omnikv.capacity import plan_omnikv_pools
+    from sparseengine.engine.cache_manager.methods.omnikv.capacity import plan_omnikv_pools
 
     config = _config(sparse_method="omnikv")
     config.omnikv_offload_cache_tokens = 1

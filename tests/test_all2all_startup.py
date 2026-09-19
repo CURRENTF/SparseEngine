@@ -7,14 +7,14 @@ from unittest.mock import Mock
 import pytest
 import torch
 
-from sparsevllm.configs.moe_communication import validate_moe_backend
-from sparsevllm.kernels.external import deepep
-from sparsevllm.operators.all2all import AllToAllOpSpec
+from sparseengine.configs.moe_communication import validate_moe_backend
+from sparseengine.kernels.external import deepep
+from sparseengine.operators.all2all import AllToAllOpSpec
 
 
 def test_unselected_transport_does_not_load_optional_dependency(monkeypatch):
     check = Mock(side_effect=AssertionError("unselected optional dependency imported"))
-    monkeypatch.setattr("sparsevllm.operators.all2all.check_all2all_dependency", check)
+    monkeypatch.setattr("sparseengine.operators.all2all.check_all2all_dependency", check)
     for backend, dp in ((None, 1), (None, 2), ("all-reduce", 1), ("agrs", 2)):
         config = SimpleNamespace(
             moe_backend=backend, data_parallel_size=dp
@@ -25,7 +25,7 @@ def test_unselected_transport_does_not_load_optional_dependency(monkeypatch):
 
 def test_selected_transport_dependency_failure_is_not_replaced(monkeypatch):
     check = Mock(side_effect=RuntimeError("extension ABI mismatch"))
-    monkeypatch.setattr("sparsevllm.operators.all2all.check_all2all_dependency", check)
+    monkeypatch.setattr("sparseengine.operators.all2all.check_all2all_dependency", check)
     config = SimpleNamespace(
         moe_backend="deepepv1",
         data_parallel_size=2,
@@ -72,7 +72,7 @@ def test_expert_partition_contract_rejects_fractional_ownership():
 
 
 def test_dispatch_failure_propagates_without_replacing_transport():
-    from sparsevllm.distributed.moe_all2all import AllToAllMoeCommunication
+    from sparseengine.distributed.moe_all2all import AllToAllMoeCommunication
 
     parallel = SimpleNamespace(attn_dp_size=2, attn_tp_size=1, moe_tp_size=1, moe_ep=object())
     spec = AllToAllOpSpec(2, 2048, 8, 2, 8, torch.bfloat16, True)
@@ -92,7 +92,7 @@ def test_dispatch_failure_propagates_without_replacing_transport():
 
 @pytest.mark.parametrize("nvlink", [False, RuntimeError("topology query failed")])
 def test_incompatible_topology_fails_before_creating_ipc_buffer(monkeypatch, nvlink):
-    from sparsevllm.platforms.interface import PlatformEnum
+    from sparseengine.platforms.interface import PlatformEnum
 
     buffer = Mock()
     buffer.is_sm90_compiled.return_value = True
@@ -139,7 +139,7 @@ def test_moe_backend_rejects_incompatible_token_ownership(backend, dp):
 
 
 def test_moe_backend_cli_uses_the_same_config_field():
-    from sparsevllm.entrypoints.openai.api_server import _parse_engine_kwargs
+    from sparseengine.entrypoints.openai.api_server import _parse_engine_kwargs
 
     assert _parse_engine_kwargs(["--moe-backend", "agrs"]) == {"moe_backend": "agrs"}
     with pytest.raises(ValueError, match="Unknown"):
@@ -148,7 +148,7 @@ def test_moe_backend_cli_uses_the_same_config_field():
 
 def test_hybrid_deepep_is_rejected_before_optional_dependency_check(monkeypatch):
     check = Mock(side_effect=AssertionError("unsupported topology imported DeepEP"))
-    monkeypatch.setattr("sparsevllm.operators.all2all.check_all2all_dependency", check)
+    monkeypatch.setattr("sparseengine.operators.all2all.check_all2all_dependency", check)
     config = SimpleNamespace(moe_backend="deepepv1", data_parallel_size=2,
                              expert_parallel_size=4, attn_tp_size=2)
     with pytest.raises(ValueError, match="attention TP=1"):

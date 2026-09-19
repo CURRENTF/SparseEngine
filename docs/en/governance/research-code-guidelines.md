@@ -4,9 +4,9 @@ This repository is research code. The main goal is trustworthy and reproducible 
 
 ## Sparse Method Contributions
 
-When adding or refactoring a first-class Sparse-vLLM sparse method, keep
-method-specific runtime state in `src/sparsevllm/engine/cache_manager/`, keep
-`src/sparsevllm/layers/attention.py` generic, and hook new behavior through
+When adding or refactoring a first-class Sparse-Engine sparse method, keep
+method-specific runtime state in `src/sparseengine/engine/cache_manager/`, keep
+`src/sparseengine/layers/attention.py` generic, and hook new behavior through
 shared cache-manager interfaces when possible.
 
 ## Research Code Priorities

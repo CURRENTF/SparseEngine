@@ -1,4 +1,4 @@
-from sparsevllm.utils.profiler import Profiler
+from sparseengine.utils.profiler import Profiler
 
 
 def test_profiler_snapshot_is_serializable_and_reports_average():

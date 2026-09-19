@@ -1,4 +1,0 @@
-interface:
-  display_name: "Optimize Sparse-vLLM Kernel"
-  short_description: "Optimize Sparse-vLLM GPU kernels end to end"
-  default_prompt: "Use $optimize-sparsevllm-kernel to find, implement, tune, profile, and integrate a Sparse-vLLM GPU kernel."

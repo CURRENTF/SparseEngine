@@ -6,7 +6,7 @@ Use QuEST as the reference design for adding a method that is query-aware at dec
 
 QuEST is treated as a full method, not a helper.
 
-- It lives in `src/sparsevllm/engine/cache_manager/methods/quest.py`.
+- It lives in `src/sparseengine/engine/cache_manager/methods/quest.py`.
 - It is registered through `CacheManager.create(...)`.
 - It keeps page metadata in the cache manager.
 - It uses `build_decode_view(...)` because decode-time selection depends on the current `q`.
@@ -55,4 +55,4 @@ Useful optimizations:
 
 The official QuEST repo is useful as a kernel reference, but its Python wrapper and controller path are still strongly shaped around batch size 1 in some places.
 
-Do not assume the official wrapper can be dropped into Sparse-vLLM's batched engine unchanged. Check the wrapper and batch assumptions before planning an integration.
+Do not assume the official wrapper can be dropped into Sparse-Engine's batched engine unchanged. Check the wrapper and batch assumptions before planning an integration.
