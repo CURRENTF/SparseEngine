@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from sparseengine.distributed import get_parallel_context
 from sparseengine.quantization import QuantizationRegistry
+from sparseengine.utils.profiler import profiler
 
 
 def divide(numerator, denominator):
@@ -634,12 +635,24 @@ class RowParallelLinear(LinearBase):
             )
         self._copy_quantized_weight_and_scale(weight_shard, scale_shard)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, *, out: torch.Tensor | None = None) -> torch.Tensor:
         bias = self.bias if self.tp_rank == 0 else None
-        if self.quantized:
+        if out is not None and not self.quantized:
+            with profiler.trace("linear.projection_into"):
+                if bias is None:
+                    y = torch.mm(x, self.weight.t(), out=out)
+                else:
+                    y = torch.addmm(bias, x, self.weight.t(), out=out)
+        elif self.quantized:
             y = self.quant_provider(x, self.weight, self.weight_scale_inv, bias)
         else:
             y = F.linear(x, self.weight, bias)
         if self.reduce_results:
-            return self.parallel_context.attn_tp.all_reduce(y)
+            y = self.parallel_context.attn_tp.all_reduce(y)
+        # Preserve both in-place and out-of-place collective implementations.
+        # Quantized providers continue owning their intermediate output layout.
+        if out is not None and y is not out:
+            with profiler.trace("linear.output_copy"):
+                out.copy_(y)
+            return out
         return y

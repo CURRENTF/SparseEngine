@@ -213,7 +213,7 @@ class Glm4MoeLiteAttention(nn.Module):
         # a complete result. Callers consume the returned tensor in either case.
         for start in range(0, int(flattened.shape[0]), self.proj_chunk_size):
             end = min(start + self.proj_chunk_size, int(flattened.shape[0]))
-            chunk_buffer[start:end].copy_(self.o_proj(flattened[start:end]))
+            self.o_proj(flattened[start:end], out=chunk_buffer[start:end])
         return chunk_buffer
 
     def _decode_absorbed_query(self, q_nope: torch.Tensor) -> torch.Tensor:

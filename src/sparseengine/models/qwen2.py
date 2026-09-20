@@ -102,7 +102,7 @@ class Qwen2Attention(nn.Module):
             return self.o_proj(x)
         for start in range(0, int(x.shape[0]), chunk_size):
             end = min(start + chunk_size, int(x.shape[0]))
-            chunk_buffer[start:end].copy_(self.o_proj(x[start:end]))
+            self.o_proj(x[start:end], out=chunk_buffer[start:end])
         return chunk_buffer
 
     def forward(

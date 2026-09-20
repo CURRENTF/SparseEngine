@@ -38,6 +38,7 @@ from sparseengine.operators.registry import (
 )
 from sparseengine.platforms.interface import DeviceCaps, PlatformEnum
 from sparseengine.utils.log import logger
+from sparseengine.utils.profiler import profiler
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1090,7 +1091,8 @@ class PreparedPrefillAttentionOp:
                 "Prefill attention view violates the resolved score contract: "
                 f"resolved={self.spec.score_output.name} actual={actual_score.name}."
             )
-        return self.provider.run(self.execution_spec, q, view, **kwargs)
+        with profiler.trace("attention.prefill.paged"):
+            return self.provider.run(self.execution_spec, q, view, **kwargs)
 
     def close(self) -> None:
         if self._closed:
