@@ -16,7 +16,8 @@ full path; reusable preparation, sweep, validation, and plotting remain here.
 
 ## README figures
 
-The repository READMEs reuse three archived 128K-only figures, in this order:
+The repository READMEs show three figures re-rendered from the archived 128K-only
+data with native methods labelled Ours, in this order:
 
 | View | Archived figure | README asset under `docs/assets/` |
 | --- | --- | --- |
@@ -24,7 +25,8 @@ The repository READMEs reuse three archived 128K-only figures, in this order:
 | Absolute throughput lines | `decode_capacity_128k_lowbs.png` | `sparse_decode_efficiency_lowbs.png` |
 | Relative throughput lines | `decode_capacity_128k_lowbs_delta_vllm.png` | `sparse_decode_efficiency_relative_vllm.png` |
 
-SVLLM is the SparseEngine label retained in these figures.
+Ours denotes SparseEngine. The label update preserves the archived measurements,
+colors, batch selection, and relative-throughput calculation.
 
 All use H100 80GB, 128K input / 2K output and `boundary_sync_v2`: 32 warmup
 steps followed by a continuous 256-step full-residency decode window, with one
@@ -44,9 +46,9 @@ remain distinct; these figures do not establish equal quality.
 ## Framework color families
 
 The default `palettes/framework_families.json` keeps a fresh, modern palette.
-Each framework has a distinct color family: SENGINE uses related teal shades,
+Each framework has a distinct color family: Ours uses related teal shades,
 vLLM blue, Tangram coral, Vortex lavender, and HiSparse warm gold. Methods
-within SENGINE retain distinct markers and explicit framework/method labels.
+within Ours retain distinct markers and explicit framework/method labels.
 Reuse this family assignment when adding methods; preserve archived palettes
 when reproducing historical figures.
 

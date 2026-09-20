@@ -26,11 +26,11 @@ from benchmark.efficiency.paper import without_source_fingerprints
 
 LANES = {
     "vllm-vanilla": ("vLLM (Vanilla)", "o"),
-    "sengine-vanilla": ("SENGINE (Vanilla)", "s"),
-    "sengine-snapkv": ("SENGINE (SnapKV)", "D"),
-    "sengine-h2o": ("SENGINE (H2O)", "h"),
-    "sengine-quest": ("SENGINE (QuEST)", "^"),
-    "sengine-omnikv": ("SENGINE (OmniKV)", "P"),
+    "sengine-vanilla": ("Ours (Vanilla)", "s"),
+    "sengine-snapkv": ("Ours (SnapKV)", "D"),
+    "sengine-h2o": ("Ours (H2O)", "h"),
+    "sengine-quest": ("Ours (QuEST)", "^"),
+    "sengine-omnikv": ("Ours (OmniKV)", "P"),
 }
 EXTERNAL_LANES = {"tangram-snapkv": ("Tangram (SnapKV)", "v"),
                   "hisparse-quest": ("HiSparse (QuEST)", "X"),
