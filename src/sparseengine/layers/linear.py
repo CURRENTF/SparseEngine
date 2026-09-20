@@ -298,10 +298,19 @@ class ColumnParallelLinear(LinearBase):
             )
         self._copy_quantized_weight_and_scale(weight_shard, scale_shard)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, *, out: torch.Tensor | None = None) -> torch.Tensor:
+        if out is not None and not self.quantized:
+            # Inference callers can assemble chunked projections directly in
+            # their final buffer. Like torch.mm(out=), this requires no grad.
+            if self.bias is None:
+                return torch.mm(x, self.weight.t(), out=out)
+            return torch.addmm(self.bias, x, self.weight.t(), out=out)
         if self.quantized:
-            return self.quant_provider(x, self.weight, self.weight_scale_inv, self.bias)
-        return F.linear(x, self.weight, self.bias)
+            result = self.quant_provider(x, self.weight, self.weight_scale_inv, self.bias)
+        else:
+            result = F.linear(x, self.weight, self.bias)
+        # Quantized providers retain ownership of their output/workspace layout.
+        return result if out is None else out.copy_(result)
 
 
 class AbsorbedColumnParallelLinear(ColumnParallelLinear):

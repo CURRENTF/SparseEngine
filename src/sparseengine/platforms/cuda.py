@@ -41,6 +41,9 @@ class CudaPlatform(Platform):
         # mem_get_info(), which creates a CUDA context on each probed device.
         return int(torch.cuda.get_device_properties(int(device_id)).total_memory)
 
+    def trace_range(self, name: str):
+        return torch.cuda.nvtx.range(name)
+
     def get_allocator_stats(self, device: torch.device | None = None) -> AllocatorStats:
         stats = torch.cuda.memory_stats(device)
         return AllocatorStats(

@@ -4,7 +4,7 @@ import json
 import math
 import threading
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from functools import wraps
 
 import torch
@@ -16,12 +16,24 @@ class Profiler:
         self.times = defaultdict(float)
         self.counts = defaultdict(int)
         self.enabled = False
+        self.nvtx_enabled = os.environ.get("SPARSEENGINE_NVTX", "0") == "1"
+        self._no_trace = nullcontext()
         self.rank = 0
         # 通过环境变量开启设备同步，以准确测量设备耗时；保留旧 CUDA 名称兼容。
         self.device_sync = (
             os.environ.get("SPARSEENGINE_SYNC_DEVICE", "0") == "1"
             or os.environ.get("CUDA_SYNC_SENGINE", "0") == "1"
         )
+
+    def trace(self, name: str):
+        """Annotate launches without timing, device queries, or synchronization.
+
+        Nsight attributes GPU work by launch correlation inside this CPU range;
+        the duration of the range itself is not a GPU duration.
+        """
+        if self.nvtx_enabled:
+            return platforms.current_platform.trace_range(name)
+        return self._no_trace
 
     def set_enabled(self, enabled: bool):
         self.enabled = enabled

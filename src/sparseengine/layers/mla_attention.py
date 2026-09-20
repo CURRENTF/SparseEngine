@@ -21,6 +21,7 @@ from sparseengine.operators.mla_prefill import (
     ChunkedMlaPrefill,
     estimate_mla_prefill_workspace_bytes,
 )
+from sparseengine.utils.profiler import profiler
 from sparseengine.utils.context import get_context
 
 
@@ -290,11 +291,12 @@ class MLAAttention:
         sparse_controller = context.sparse_controller
         layer_idx = int(context.now_layer_idx)
         self._ensure_key_materializer(cache_manager, layer_idx, project_latent)
-        slot_mapping = cache_manager.store_attention_payload(
-            layer_idx,
-            MlaLatentWrite(latent=latent.unsqueeze(1), rope=rope.unsqueeze(1)),
-        )
-        cache_manager.on_kv_stored(layer_idx, latent, slot_mapping)
+        with profiler.trace("mla.cache_store"):
+            slot_mapping = cache_manager.store_attention_payload(
+                layer_idx,
+                MlaLatentWrite(latent=latent.unsqueeze(1), rope=rope.unsqueeze(1)),
+            )
+            cache_manager.on_kv_stored(layer_idx, latent, slot_mapping)
 
         temp_slots = None
         try:

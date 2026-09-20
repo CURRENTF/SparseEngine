@@ -54,6 +54,7 @@ from sparseengine.operators.moe_router import (
     resolve_moe_router_provider,
 )
 from sparseengine.platforms import device_runtime
+from sparseengine.utils.profiler import profiler
 from sparseengine.utils.context import get_context
 from sparseengine.utils.weight_target import WeightTarget
 
@@ -198,7 +199,8 @@ class Glm4MoeLiteAttention(nn.Module):
         )
         for start in range(0, int(latent.shape[0]), self.proj_chunk_size):
             end = min(start + self.proj_chunk_size, int(latent.shape[0]))
-            output[start:end].copy_(self.kv_b_proj(latent[start:end]))
+            with profiler.trace("mla.prefill.kv_projection.chunk_into"):
+                self.kv_b_proj(latent[start:end], out=output[start:end])
         return output
 
     def _project_output(
@@ -266,13 +268,17 @@ class Glm4MoeLiteAttention(nn.Module):
                 [self.qk_nope_head_dim, self.qk_rope_head_dim],
                 dim=-1,
             )
-            q_rope, k_rope = rotary_emb(
-                positions,
-                q_rope,
-                k_rope.unsqueeze(1),
-            )
+            with profiler.trace("mla.qk_rope"):
+                q_rope, k_rope = rotary_emb(
+                    positions,
+                    q_rope,
+                    k_rope.unsqueeze(1),
+                )
             k_rope = k_rope.squeeze(1)
-            q = torch.cat((q_nope, q_rope), dim=-1)
+            with profiler.trace("mla.q_assembly"):
+                # The projection owns Q; only its rotated tail changed. Reuse
+                # it instead of copying the much wider non-RoPE portion.
+                q[..., self.qk_nope_head_dim:].copy_(q_rope)
         else:
             q, k_rope = project_and_fuse_glm_mla_decode_rope(
                 normalized_q,

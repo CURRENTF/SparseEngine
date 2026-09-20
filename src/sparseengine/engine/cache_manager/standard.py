@@ -6,7 +6,7 @@ from bisect import bisect_left
 from collections import deque
 from itertools import islice
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import torch
@@ -41,6 +41,8 @@ from .base import (
     CacheManager,
     ExplicitKVPayload,
     LayerBatchStates,
+    MlaLatentPayload,
+    MlaLatentWrite,
     PrefillComputeView,
     PrefillScoreRequest,
     SparseSelection,
@@ -61,6 +63,7 @@ from .prefix_offload import (
 from .storage import (
     ExplicitKVStorage,
     HeterogeneousExplicitKVStorage,
+    MlaLatentStorage,
     create_attention_cache_storage,
 )
 
@@ -384,6 +387,46 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
             req_indices,
             context_lens,
         )
+
+    def build_prefill_compute_view(
+        self, layer_idx: int, k_current: torch.Tensor, v_current: torch.Tensor,
+        selection: SparseSelection,
+    ) -> PrefillComputeView:
+        view = super().build_prefill_compute_view(
+            layer_idx, k_current, v_current, selection,
+        )
+        storage = self.attention_cache_storage
+        meta, payload = view.meta, view.payload
+        state = self.layer_batch_state
+        # _prepare_prefill appends current tokens in packed query order to the
+        # tail of these exact physical rows. Staged, selected, transformed, or
+        # differently typed views must continue reading their cache payload.
+        if (
+            not isinstance(storage, MlaLatentStorage)
+            or not isinstance(payload, MlaLatentPayload)
+            or meta.temp_slots is not None
+            or meta.active_slots is not self.buffer_req_to_token_slots
+            or meta.req_indices is not state.req_indices
+            or meta.context_lens is not state.context_lens
+            or k_current.dtype != payload.latent_cache.dtype
+            or v_current.dtype != payload.rope_cache.dtype
+            or k_current.device != payload.latent_cache.device
+            or v_current.device != payload.rope_cache.device
+        ):
+            return view
+        physical = storage.layer_payload(self.kv_layer_index(layer_idx))
+        if (
+            payload.latent_cache.data_ptr() != physical.latent_cache.data_ptr()
+            or payload.rope_cache.data_ptr() != physical.rope_cache.data_ptr()
+            or payload.latent_cache.shape != physical.latent_cache.shape
+            or payload.rope_cache.shape != physical.rope_cache.shape
+            or payload.latent_cache.stride() != physical.latent_cache.stride()
+            or payload.rope_cache.stride() != physical.rope_cache.stride()
+        ):
+            return view
+        return replace(view, current_mla=MlaLatentWrite(
+            latent=k_current.unsqueeze(1), rope=v_current.unsqueeze(1),
+        ))
 
     def get_layer_compute_tensors(self, layer_idx: int, selection: SparseSelection | None = None):
         del selection

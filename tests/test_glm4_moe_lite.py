@@ -759,3 +759,49 @@ def test_glm_moe_debug_contract_populates_model_runner_summaries(reduced_scale) 
     assert consistency is not None
     assert set(consistency["moe_layers"]) == {"1"}
     assert consistency["moe_layers"]["1"]["topk_ids_mismatch"] is False
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_prefill_q_assembly_preserves_projection_and_rotated_tail(monkeypatch, device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    import sparseengine.models.glm4_moe_lite as module
+    tokens, heads = 3, 5
+    compressed = torch.randn(tokens, heads * 256 + 576, device=device, dtype=torch.bfloat16)
+    projected = []
+    observed = []
+
+    def project(x):
+        output = x.clone()
+        projected.append(output)
+        return output
+
+    def attend(q, q_nope, q_rope, latent, rope, **kwargs):
+        observed.append((q, q_nope, q_rope))
+        return torch.zeros(tokens, heads, 256, device=device, dtype=q.dtype)
+
+    owner = SimpleNamespace(
+        fused_qkv_a_proj=lambda x: compressed,
+        q_lora_rank=heads * 256, kv_lora_rank=512, qk_rope_head_dim=64,
+        qk_nope_head_dim=192, qk_head_dim=256, local_heads=heads,
+        q_a_layernorm=lambda x: x, kv_a_layernorm=lambda x: x,
+        q_b_proj=project, mla_attention=SimpleNamespace(run_cached_attention=attend),
+        _project_kv_history=None, _decode_absorbed_query=None,
+        _reconstruct_decode_values=None, _project_output=lambda v, h: v,
+        parallel_collectives=None,
+    )
+    monkeypatch.setattr(module, "get_context", lambda: SimpleNamespace(is_prefill=True))
+    before = compressed.clone()
+    with torch.inference_mode():
+        Glm4MoeLiteAttention.forward(
+            owner, torch.arange(tokens, device=device), torch.empty(0, device=device),
+            lambda positions, q, k: (-q, -k),
+        )
+    q, q_nope, q_rope = observed[0]
+    original = before[:, :heads * 256].reshape(tokens, heads, 256)
+    expected = torch.cat((original[..., :192], -original[..., 192:]), -1)
+    torch.testing.assert_close(q, expected, atol=0, rtol=0)
+    torch.testing.assert_close(q_nope, expected[..., :192], atol=0, rtol=0)
+    torch.testing.assert_close(q_rope, expected[..., 192:], atol=0, rtol=0)
+    torch.testing.assert_close(compressed, before, atol=0, rtol=0)
+    assert q.data_ptr() == projected[0].data_ptr()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from enum import Enum, auto
 from functools import lru_cache
@@ -86,6 +86,10 @@ class Platform:
 
     def empty_cache(self) -> None:
         return None
+
+    def trace_range(self, name: str):
+        """Return a non-synchronizing device-profiler annotation context."""
+        return nullcontext()
 
     def synchronize(self) -> None:
         return None

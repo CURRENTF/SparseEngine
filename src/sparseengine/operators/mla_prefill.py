@@ -169,11 +169,13 @@ class ChunkedMlaPrefill:
 
     def expand(self, latent, rope, project):
         nope = self.spec.qk_head_dim - self.spec.rope_dim
-        expanded = project(latent).view(
-            -1, self.spec.local_q_heads, nope + self.spec.value_head_dim
-        )
+        with profiler.trace("mla.prefill.kv_projection"):
+            expanded = project(latent).view(
+                -1, self.spec.local_q_heads, nope + self.spec.value_head_dim
+            )
         kn, v = expanded.split((nope, self.spec.value_head_dim), dim=-1)
-        k = pack_mla_keys(kn, rope)
+        with profiler.trace("mla.prefill.k_assembly"):
+            k = pack_mla_keys(kn, rope)
         return k, v
 
     def attention(self, q, k, v, cu_q, cu_k, max_q, max_k, causal):
@@ -218,10 +220,23 @@ class ChunkedMlaPrefill:
             if score_request
             else None
         )
-        latent, rope = self.gather(view.payload, plan.current_slots)
-        k, v = self.expand(latent, rope, project)
+        if view.current_mla is None:
+            with profiler.trace("mla.prefill.current_gather"):
+                latent, rope = self.gather(view.payload, plan.current_slots)
+        else:
+            with profiler.trace("mla.prefill.current_reuse"):
+                latent = view.current_mla.latent.squeeze(1)
+                rope = view.current_mla.rope.squeeze(1)
+                if (
+                    latent.shape != (q.shape[0], self.spec.kv_lora_rank)
+                    or rope.shape != (q.shape[0], self.spec.rope_dim)
+                ):
+                    raise ValueError("Current MLA payload does not match packed query tokens.")
+        with profiler.trace("mla.prefill.current_expand"):
+            k, v = self.expand(latent, rope, project)
         max_q = max(b - a for a, b in zip(plan.query_starts, plan.query_starts[1:]))
-        output, lse = self.attention(q, k, v, cu_q, cu_q, max_q, max_q, True)
+        with profiler.trace("mla.prefill.current_attention"):
+            output, lse = self.attention(q, k, v, cu_q, cu_q, max_q, max_q, True)
         if scorer is not None and not scorer.is_probability:
             with profiler.record("prefill_token_score"):
                 for i, context in enumerate(plan.contexts):
@@ -230,16 +245,21 @@ class ChunkedMlaPrefill:
         del latent, rope, k, v
         if plan.history_chunks:
             # FP32 accumulation avoids one BF16 rounding per history block.
-            output = output.float()
+            with profiler.trace("mla.prefill.accumulator_cast"):
+                output = output.float()
         for i, offset, length, cu_k in plan.history_chunks:
             a, b = plan.query_starts[i : i + 2]
             slots = view.meta.active_slots[plan.rows[i], offset : offset + length]
-            latent, rope = self.gather(view.payload, slots)
-            k, v = self.expand(latent, rope, project)
-            partial, partial_lse = self.attention(
-                q[a:b], k, v, plan.request_cu_q[i], cu_k, b - a, length, False
-            )
-            merge_partial(output[a:b], lse[:, a:b], partial, partial_lse)
+            with profiler.trace("mla.prefill.history_gather"):
+                latent, rope = self.gather(view.payload, slots)
+            with profiler.trace("mla.prefill.history_expand"):
+                k, v = self.expand(latent, rope, project)
+            with profiler.trace("mla.prefill.history_attention"):
+                partial, partial_lse = self.attention(
+                    q[a:b], k, v, plan.request_cu_q[i], cu_k, b - a, length, False
+                )
+            with profiler.trace("mla.prefill.merge"):
+                merge_partial(output[a:b], lse[:, a:b], partial, partial_lse)
             if scorer is not None and not scorer.is_probability:
                 with profiler.record("prefill_token_score"):
                     scorer.consume(i, offset, k, mode="logits")
@@ -247,7 +267,9 @@ class ChunkedMlaPrefill:
         if scorer is not None and scorer.is_probability:
             with profiler.record("prefill_token_score"):
                 scorer.finish_probability(view, lse)
-        return output.to(q.dtype), lse, None if scorer is None else scorer.output
+        with profiler.trace("mla.prefill.output_cast"):
+            output = output.to(q.dtype)
+        return output, lse, None if scorer is None else scorer.output
 
 
 class MlaPrefillScores:

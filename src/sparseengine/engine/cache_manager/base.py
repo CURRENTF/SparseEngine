@@ -328,6 +328,9 @@ class PrefillComputeView:
     meta: AttentionViewMeta
     payload: AttentionPayload
     token_scores: torch.Tensor | None = None  # Temporary [batch, max_context] scores.
+    # Optional current tokens in packed query order. Only a cache manager may
+    # certify equivalence to the tail of this view, including storage dtype.
+    current_mla: MlaLatentWrite | None = None
 
 
 @dataclass(frozen=True)
