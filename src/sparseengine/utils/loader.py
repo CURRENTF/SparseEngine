@@ -864,6 +864,9 @@ def load_model(
     strict_validator = getattr(model, "validate_loaded_weights", None)
     if callable(strict_validator):
         strict_validator(loaded_parameter_names)
+    prepare_loaded_weights = getattr(model, "prepare_loaded_weights", None)
+    if callable(prepare_loaded_weights):
+        prepare_loaded_weights()
     logger.info(
         f"Load weight end. elapsed={time.perf_counter() - load_start:.2f} s, "
         f"type={type(model).__name__}, shards={len(files)}, "

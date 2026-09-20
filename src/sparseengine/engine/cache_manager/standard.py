@@ -1994,6 +1994,12 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
             self.layer_batch_state.req_indices = req_indices_tensor
             self._validate_attention_slot_mapping(slot_mapping)
 
+            # Host metadata for prepared per-request prefill providers; no D2H reads.
+            self.prefill_plan = tuple(
+                (cu_seqlens_q[i], seq.current_chunk_size, req_indices[i], context_lens_list[i])
+                for i, seq in enumerate(seqs)
+            )
+
             if log_level == 'DEBUG':
                 logger.debug(f'{context_lens_list=}   {req_indices=}  {slot_mapping[:10].tolist()=}  {slot_mapping[-10:].tolist()=}')
 

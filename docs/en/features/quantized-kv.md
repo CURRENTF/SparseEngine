@@ -42,7 +42,7 @@ caches. The models supported by this KV quantization path require
 FP8 requires a GPU with native FP8
 support. `kv_quant_page_size` must be a power of two from 16 to 128 and divide
 the head dimension. Decode CUDA Graphs are supported. Prefix caching/offload and sparse prefill
-combinations are rejected. Palu is not implemented.
+combinations are rejected. [Palu](palu.md) uses a separate low-rank cache path.
 
 Full pages are compressed; incomplete pages stay in the activation dtype.
 Prefill uses a bounded dense history workspace, so reduce prefill batch size

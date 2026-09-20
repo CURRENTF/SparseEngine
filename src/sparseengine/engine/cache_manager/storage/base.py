@@ -9,6 +9,7 @@ from ..base import AttentionCacheWrite, AttentionPayload
 
 
 class CacheLayout(str, Enum):
+    LOW_RANK_KV = "low_rank_kv"
     EXPLICIT_KV = "explicit_kv"
     MLA_LATENT = "mla_latent"
 

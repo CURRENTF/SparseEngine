@@ -5,6 +5,7 @@ import copy
 import torch
 
 from sparseengine.engine.cache_manager.standard import StandardCacheManager
+from sparseengine.engine.cache_manager.storage.low_rank_kv import LowRankKVStorage
 from sparseengine.engine.cache_manager.storage import (
     ExplicitKVStorage,
     HeterogeneousExplicitKVStorage,
@@ -27,7 +28,9 @@ class PrefillHistoryCacheManager(StandardCacheManager):
     def allocate_kv_cache(self) -> None:
         slots = int(self.config.num_kvcache_slots)
         storage = self.attention_cache_storage
-        if isinstance(storage, HeterogeneousExplicitKVStorage):
+        if isinstance(storage, LowRankKVStorage):
+            storage.allocate_shared_history(num_slots=slots, device=self.device)
+        elif isinstance(storage, HeterogeneousExplicitKVStorage):
             caches = {
                 shape: torch.zeros(2, slots, *shape, dtype=storage.dtype, device=self.device)
                 for shape in dict.fromkeys(storage.layer_shapes)

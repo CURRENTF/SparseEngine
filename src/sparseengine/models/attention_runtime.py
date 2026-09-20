@@ -286,6 +286,10 @@ def build_mha_full_attention_provider(
     cuda_graph: bool,
     runtime_config=None,
 ) -> FullAttentionProvider:
+    if normalize_sparse_method(sparse_method) == "palu":
+        from sparseengine.operators.palu_attention import PaluFullAttentionProvider
+
+        return PaluFullAttentionProvider(config, runtime_config, device=device)
     spec = FullAttentionOpSpec(
         prefill=build_mha_prefill_attention_spec(
             config,

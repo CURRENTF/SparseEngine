@@ -139,6 +139,9 @@ class FullAttentionProvider:
             "decode_provider": self.decode_name,
         }
 
+    def prepare_weights(self, model: nn.Module) -> None:
+        """Finalize optional semantic projection transformations after loading."""
+
     def close(self) -> None:
         if self._closed:
             return

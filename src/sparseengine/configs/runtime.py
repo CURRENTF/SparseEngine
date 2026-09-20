@@ -164,6 +164,9 @@ class Config(
         from sparseengine.configs.kv_quant import validate_quantized_kv
 
         validate_quantized_kv(self)
+        from sparseengine.configs.palu import validate_palu
+
+        validate_palu(self)
         normalize_decode_cuda_graph(self)
         normalize_sparse_methods(self)
         finalize_prefix_cache(self)

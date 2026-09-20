@@ -203,7 +203,11 @@ def profiling_kv_budget_bytes(config, num_slots: int) -> int:
         else CacheLayout(str(configured_layout))
     )
 
-    if cache_layout is CacheLayout.EXPLICIT_KV:
+    if cache_layout is CacheLayout.LOW_RANK_KV:
+        from sparseengine.engine.cache_manager.storage.low_rank_kv import LowRankKVStorage
+
+        bytes_per_slot = LowRankKVStorage(config.palu_manifest, dtype=config.hf_config.dtype).bytes_per_slot()
+    elif cache_layout is CacheLayout.EXPLICIT_KV:
         local_shapes = layout.local_kv_shapes(tp_size)
         if not local_shapes:
             heads = int(config.hf_config.num_key_value_heads)
@@ -251,7 +255,7 @@ def profiling_kv_budget_bytes(config, num_slots: int) -> int:
                 + layers * int(config.max_num_seqs_in_gpu)
                 * int(config.max_model_len) * int32_bytes
             )
-        if method in {"", "vanilla", "omnikv"}:
+        if method in {"", "vanilla", "omnikv", "palu"}:
             int32_bytes = torch.empty((), dtype=torch.int32).element_size()
             row_mapping_bytes = (
                 int(config.max_num_seqs_in_gpu)

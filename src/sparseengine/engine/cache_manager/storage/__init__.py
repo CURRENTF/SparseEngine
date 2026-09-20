@@ -23,6 +23,10 @@ def create_attention_cache_storage(
         else CacheLayout(str(configured_layout))
     )
     dtype = config.hf_config.dtype
+    if layout is CacheLayout.LOW_RANK_KV:
+        from .low_rank_kv import LowRankKVStorage
+
+        return LowRankKVStorage(config.palu_manifest, dtype=dtype)
     if layout is CacheLayout.EXPLICIT_KV:
         runtime_layout = getattr(config, "runtime_layout", None)
         parallel_topology = getattr(config, "parallel_topology", None)

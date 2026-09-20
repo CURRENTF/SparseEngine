@@ -36,6 +36,8 @@ class SparseMethodConfig:
     """Shared and method-specific sparse-attention settings."""
 
     sparse_method: str = ""
+    palu_checkpoint_path: str | None = None
+    palu_manifest: dict | None = field(default=None, init=False)
     enable_omnikv_offload: bool = False
     omnikv_offload_cache_tokens: int | None = None
     # Physical cache/runtime ownership can also come from a prefill method.

@@ -216,7 +216,16 @@ class MlaLatentPayload:
     rope_cache: torch.Tensor
 
 
-AttentionPayload = ExplicitKVPayload | MlaLatentPayload
+@dataclass(frozen=True)
+class LowRankKVPayload:
+    """Grouped K/V latent tensors with original token positions."""
+
+    key_latent: torch.Tensor
+    value_latent: torch.Tensor
+    positions: torch.Tensor
+
+
+AttentionPayload = ExplicitKVPayload | MlaLatentPayload | LowRankKVPayload
 
 
 @dataclass(frozen=True)
@@ -269,7 +278,14 @@ class MlaLatentWrite:
     rope: torch.Tensor
 
 
-AttentionCacheWrite = ExplicitKVWrite | MlaLatentWrite
+@dataclass(frozen=True)
+class LowRankKVWrite:
+    key_latent: torch.Tensor
+    value_latent: torch.Tensor
+    positions: torch.Tensor
+
+
+AttentionCacheWrite = ExplicitKVWrite | MlaLatentWrite | LowRankKVWrite
 
 
 @dataclass(frozen=True)
@@ -458,6 +474,10 @@ class CacheManager(ABC):
             raise ValueError(f"Unsupported sparse_method={sparse_method!r}.")
         from sparseengine.method_registry import QUANTIZED_KV_METHODS
 
+        if sparse_method == "palu":
+            from .methods.palu import PaluCacheManager
+
+            return create_manager(PaluCacheManager)
         if sparse_method in QUANTIZED_KV_METHODS:
             from .quantized import QuantizedCacheManager
 

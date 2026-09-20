@@ -35,7 +35,7 @@ llm = LLM(
 `data_parallel_size=1`；GLM DP attention 使用单独的 MLA latent cache。
 FP8 需要 GPU 原生 FP8 支持。页大小必须是 16～128 的 2 的幂，
 且能整除 head dimension。支持 decode CUDA Graph；prefix cache/offload 和 sparse prefill
-组合会明确报错。尚未实现 Palu。
+组合会明确报错。[Palu](palu.md) 使用独立的低秩缓存路径。
 
 整页量化，未满的一页保留模型精度；prefill 在有界工作区内恢复历史 KV，decode
 直接读取压缩页。若启动提示工作区内存不足，可减小 prefill batch 或最大上下文长度。

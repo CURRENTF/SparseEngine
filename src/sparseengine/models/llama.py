@@ -318,6 +318,10 @@ class LlamaForCausalLM(nn.Module):
         if self.full_attention_provider is not None:
             self.full_attention_provider.close()
 
+    def prepare_loaded_weights(self) -> None:
+        if self.full_attention_provider is not None:
+            self.full_attention_provider.prepare_weights(self.model)
+
     def forward(self, input_ids: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
         return self.model(input_ids, positions)
 

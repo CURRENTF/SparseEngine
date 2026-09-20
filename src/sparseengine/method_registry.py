@@ -38,12 +38,14 @@ SPARSE_AUXILIARY_PREFILL_PROMPTS = {
     "kvzip": "\nReconstruct the following context span exactly:\n",
 }
 SPARSE_METHOD_MODEL_TYPES = {
+    "palu": frozenset({"llama", "qwen3"}),
     "kvzip": frozenset({"qwen2", "qwen3", "llama"}),
 }
 
 QUANTIZED_KV_METHODS = frozenset({"kivi", "turboquant", "fp8_kv"})
 
 CANONICAL_SPARSE_METHODS = {
+    "palu",
     "",
     "streamingllm",
     "snapkv",
@@ -223,6 +225,7 @@ _PREFILL_POSTHOC_SCORE_METHODS = frozenset(
 # shared table, and QuEST does not apply its query-aware page selection until
 # decode. SnapKV-family managers and DeltaKV own per-layer physical tables.
 _PREFILL_LAYER_VARYING_PAGE_TABLE = {
+    "palu": False,
     **dict.fromkeys(QUANTIZED_KV_METHODS, False),
     "": False,
     "streamingllm": True,
@@ -478,6 +481,7 @@ def decode_graph_path_id(method: str) -> str:
 
 
 _DEFAULT_PREFILL_POLICY_BY_METHOD = {
+    "palu": PREFILL_POLICY_ALL_CHUNKED,
     **dict.fromkeys(QUANTIZED_KV_METHODS, PREFILL_POLICY_ALL_CHUNKED),
     "": PREFILL_POLICY_ALL_CHUNKED,
     "streamingllm": PREFILL_POLICY_ALL_CHUNKED,
