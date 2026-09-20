@@ -102,6 +102,7 @@ _GLM_DECODE_32 = MoeGemmConfig(4, 32, 128, 8, 4, 3)
 _GLM_DECODE_64 = MoeGemmConfig(64, 128, 64, 8, 8, 3)
 _GLM_MID_BATCH = MoeGemmConfig(64, 128, 64, 1, 8, 3)
 _GLM_LARGE_BATCH = MoeGemmConfig(128, 128, 64, 1, 8, 3)
+_GLM_H100_LARGE_PREFILL = MoeGemmConfig(128, 256, 64, 1, 8, 4)
 _GLM_EP2_TINY_BATCH = MoeGemmConfig(16, 64, 128, 1, 4, 3)
 _GLM_EP2_SMALL_BATCH = MoeGemmConfig(16, 64, 128, 1, 4, 4)
 
@@ -139,6 +140,15 @@ def _glm_h100_tp2_config(
         or shape not in profiled_shapes
     ):
         return None
+    # Offline H100 BF16 profile for routed-only TP2; packed shared experts
+    # and the fused gate/up activation kernel retain their existing profiles.
+    if (
+        num_tokens >= 4096
+        and shape.num_local_experts == 64
+        and shape.top_k == 4
+        and stage in {"w13", "w2"}
+    ):
+        return _GLM_H100_LARGE_PREFILL
     if num_tokens <= 32:
         return _GLM_DECODE_32
     if num_tokens <= 64:
@@ -175,6 +185,8 @@ def _glm_sm90_tp2_ep2_config(
         if not 1 <= num_tokens <= 16:
             return None
         return _GLM_EP2_TINY_BATCH if num_tokens == 4 else _GLM_EP2_SMALL_BATCH
+    if num_tokens >= 4096:
+        return _GLM_H100_LARGE_PREFILL
     if num_tokens <= 4:
         return _GLM_EP2_TINY_BATCH
     if num_tokens <= 128:
