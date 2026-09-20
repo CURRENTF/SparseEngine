@@ -301,3 +301,46 @@ official harness completed the instance; the separate `resolved` field records
 whether its tests passed. The benchmark score is always
 `resolved_instances / total_instances`, including empty patches and failures in
 the denominator.
+
+## Prune only tool-result KV
+
+Add these arguments to the smoke command above:
+
+```bash
+--no-chain-cache \
+--prefix-prune-policy kvzip_global \
+--prefix-prune-target tool_results \
+--prefix-prune-tokenizer /path/to/server-tokenizer \
+--prefix-prune-keep-ratio 0.5
+```
+
+The server must enable Vanilla or OmniKV radix prefix caching and multi-range
+pruning. Supply a local fast tokenizer matching the server, including its chat
+template; the harness does not download it. Its environment needs Transformers
+and the shared chat renderer's dependencies.
+
+The harness locates only `role=tool` bodies in the complete rendered prompt,
+protecting user input, assistant reasoning, call arguments and template markers.
+It retains tokens crossing body boundaries, aligns ranges inward to the server's
+block size, and verifies the token path ID through `/prefix_cache/match` before
+pruning. A mismatch fails explicitly. The engine receives only token IDs, ranges
+and a total keep budget, with no tool-specific metadata.
+
+The ratio retains `floor(total_eligible_tool_tokens * ratio)` tokens across all
+ranges together; it is not a per-result quota. Use `0 <= ratio < 1`; omit the
+prune policy for a no-pruning baseline. Static range and keep-token options are
+ignored in this mode. After each inference turn with new tool results, only
+previously unprocessed tool bodies are pruned, sharing one keep budget across
+that turn's new ranges. Earlier ranges are never recompressed. The trigger-token
+threshold applies only to static-range mode; tool mode starts on the first
+eligible turn. Empty or unaligned bodies are logged as `skipped_by_policy` and
+advance the message cursor. Failed jobs do not advance it. Rewritten history
+fails explicitly.
+
+Reuse verification is merged into the next completed turn's prefix match.
+Configuration is saved in `run_config.json`; message cursors, ranges, budgets,
+freed slots and reuse checks go to `prefix_prune_events.jsonl`. Original messages
+remain in the agent trace. The last prune without a later turn has no verified
+reuse. Span selection still renders the complete template and tokenizes it once
+to preserve BPE boundaries and template semantics; it does not concatenate
+independently tokenized message suffixes.

@@ -49,6 +49,7 @@ from sparseengine.multimodal.inputs import (
 from sparseengine.engine.prefix_cache import PrefixCacheRoutingSnapshot
 from sparseengine.engine.prefix_prune import (
     PrefixPruneJob,
+    normalize_prefix_prune_ranges,
     validate_prefix_prune_request,
 )
 from sparseengine.engine.chain_cache import (
@@ -1205,14 +1206,15 @@ class LLMEngine:
     def prefix_cache_prune_start(
         self,
         token_ids: list[int],
-        range_start: int,
-        range_end: int,
-        keep_tokens: int,
-        policy: str,
+        range_start: int | None = None,
+        range_end: int | None = None,
+        keep_tokens: int | None = None,
+        policy: str | None = None,
         allow_recompress: bool = False,
         observation_tokens: int = 64,
         score_chunk_size: int = 2048,
         prev_postfix_size: int = 64,
+        ranges: list[tuple[int, int]] | None = None,
     ) -> dict[str, object]:
         token_ids = [int(token_id) for token_id in token_ids]
         if str(self.config.sparse_method or "") == "quest":
@@ -1220,11 +1222,14 @@ class LLMEngine:
                 "QuEST prefix cache/offload remains supported, but physical prefix "
                 "pruning is intentionally unsupported."
             )
+        intervals = normalize_prefix_prune_ranges(
+            token_count=len(token_ids), block_size=int(self.config.prefix_cache_block_size),
+            range_start=range_start, range_end=range_end, ranges=ranges,
+        )
         normalized_policy = validate_prefix_prune_request(
             token_count=len(token_ids),
-            range_start=int(range_start),
-            range_end=int(range_end),
-            keep_tokens=int(keep_tokens),
+            ranges=intervals,
+            keep_tokens=keep_tokens,
             block_size=int(self.config.prefix_cache_block_size),
             policy=str(policy),
         )
@@ -1240,8 +1245,9 @@ class LLMEngine:
         job = PrefixPruneJob(
             prune_id=prune_id,
             token_ids=token_ids,
-            range_start=int(range_start),
-            range_end=int(range_end),
+            range_start=intervals[0][0],
+            range_end=intervals[-1][1],
+            ranges=intervals,
             keep_tokens=int(keep_tokens),
             policy=normalized_policy,
             allow_recompress=bool(allow_recompress),
@@ -1283,8 +1289,8 @@ class LLMEngine:
             job.result = self.model_runner.call(
                 "prefix_cache_prune",
                 job.token_ids,
-                job.range_start,
-                job.range_end,
+                None if job.ranges is not None else job.range_start,
+                None if job.ranges is not None else job.range_end,
                 job.keep_tokens,
                 job.policy,
                 job.prune_id,
@@ -1294,6 +1300,7 @@ class LLMEngine:
                 job.prev_postfix_size,
                 replay_prefix_ids,
                 -1_000_000_000 - len(self._prefix_prune_jobs) * 100_000,
+                job.ranges,
             )
             job.status = "completed"
         except Exception as exc:

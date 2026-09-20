@@ -1360,8 +1360,9 @@ class CacheManager(ABC):
         self,
         token_ids: list[int],
         *,
-        range_start: int,
-        range_end: int,
+        range_start: int | None = None,
+        range_end: int | None = None,
+        ranges: list[tuple[int, int]] | None = None,
         keep_indices: torch.Tensor,
         policy: str,
         prune_id: str,
@@ -1371,6 +1372,7 @@ class CacheManager(ABC):
             token_ids,
             range_start,
             range_end,
+            ranges,
             keep_indices,
             policy,
             prune_id,
@@ -1385,11 +1387,12 @@ class CacheManager(ABC):
         self,
         token_ids: list[int],
         *,
-        range_start: int,
-        range_end: int,
+        range_start: int | None = None,
+        range_end: int | None = None,
+        ranges: list[tuple[int, int]] | None = None,
         allow_recompress: bool = False,
     ) -> list[object]:
-        del token_ids, range_start, range_end, allow_recompress
+        del token_ids, range_start, range_end, ranges, allow_recompress
         raise RuntimeError(
             "physical prefix-cache pruning is unsupported by this cache manager; "
             "QuEST prefix cache remains available without pruning."

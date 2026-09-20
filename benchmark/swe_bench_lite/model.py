@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import time
 import urllib.error
 import urllib.request
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,7 @@ class SparseVLLMLitellmModel(LitellmModel):
         self._prune_finished = False
         self._prune_reuse_verified = False
         self._prune_freed_slots = 0
+        self._prune_processed_messages: list[dict[str, Any]] = []
         if self._prune_policy:
             if self._prune_policy not in {"snapkv_global", "kvzip_global"}:
                 raise ValueError(
@@ -34,30 +37,46 @@ class SparseVLLMLitellmModel(LitellmModel):
                 )
             if self._chain_cache_enabled:
                 raise ValueError("Prefix-tree pruning requires radix cache, not chain cache.")
-            self._prune_range_start = self._required_env_int(
-                "SPARSEENGINE_PREFIX_PRUNE_RANGE_START"
-            )
-            self._prune_range_end = self._required_env_int(
-                "SPARSEENGINE_PREFIX_PRUNE_RANGE_END"
-            )
-            self._prune_keep_tokens = self._required_env_int(
-                "SPARSEENGINE_PREFIX_PRUNE_KEEP_TOKENS"
-            )
+            self._prune_target = os.getenv("SPARSEENGINE_PREFIX_PRUNE_TARGET", "range").strip()
             self._prune_trigger_tokens = self._required_env_int(
                 "SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS"
             )
-            if (
-                self._prune_range_start < 0
-                or self._prune_range_end <= self._prune_range_start
-                or self._prune_range_start % 16
-                or self._prune_range_end % 16
-            ):
-                raise ValueError("Prefix-prune range must be non-empty and 16-token aligned.")
-            width = self._prune_range_end - self._prune_range_start
-            if not 0 <= self._prune_keep_tokens < width:
-                raise ValueError("Prefix-prune keep_tokens must be in [0, R-L).")
-            if self._prune_trigger_tokens < self._prune_range_end:
-                raise ValueError("Prefix-prune trigger must be at least range_end.")
+            if self._prune_trigger_tokens <= 0:
+                raise ValueError("Prefix-prune trigger must be positive.")
+            if self._prune_target == "tool_results":
+                if self._prune_policy != "kvzip_global":
+                    raise ValueError("Tool-result pruning currently requires kvzip_global.")
+                self._prune_tokenizer_path = os.getenv("SPARSEENGINE_PREFIX_PRUNE_TOKENIZER", "").strip()
+                if not self._prune_tokenizer_path:
+                    raise ValueError("SPARSEENGINE_PREFIX_PRUNE_TOKENIZER is required for tool results.")
+                self._prune_keep_ratio = float(os.environ["SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO"])
+                if not math.isfinite(self._prune_keep_ratio) or not 0 <= self._prune_keep_ratio < 1:
+                    raise ValueError("Prefix-prune keep ratio must be in [0, 1).")
+                self._prune_tool_selector = None
+            elif self._prune_target == "range":
+                self._prune_range_start = self._required_env_int(
+                    "SPARSEENGINE_PREFIX_PRUNE_RANGE_START"
+                )
+                self._prune_range_end = self._required_env_int(
+                    "SPARSEENGINE_PREFIX_PRUNE_RANGE_END"
+                )
+                self._prune_keep_tokens = self._required_env_int(
+                    "SPARSEENGINE_PREFIX_PRUNE_KEEP_TOKENS"
+                )
+                if (
+                    self._prune_range_start < 0
+                    or self._prune_range_end <= self._prune_range_start
+                    or self._prune_range_start % 16
+                    or self._prune_range_end % 16
+                ):
+                    raise ValueError("Prefix-prune range must be non-empty and 16-token aligned.")
+                width = self._prune_range_end - self._prune_range_start
+                if not 0 <= self._prune_keep_tokens < width:
+                    raise ValueError("Prefix-prune keep_tokens must be in [0, R-L).")
+                if self._prune_trigger_tokens < self._prune_range_end:
+                    raise ValueError("Prefix-prune trigger must be at least range_end.")
+            else:
+                raise ValueError(f"Unknown prefix-prune target: {self._prune_target!r}.")
             api_base = str(self.config.model_kwargs.get("api_base") or "").rstrip("/")
             if not api_base:
                 raise ValueError("Prefix pruning requires model_kwargs.api_base.")
@@ -230,10 +249,11 @@ class SparseVLLMLitellmModel(LitellmModel):
             {"chat": chat},
         )
 
-    def _maybe_verify_prune_reuse(self, chat: dict[str, Any]) -> None:
+    def _maybe_verify_prune_reuse(self, chat: dict[str, Any], match=None) -> None:
         if not self._prune_finished or self._prune_reuse_verified:
             return
-        match = self._match_prefix(chat)
+        if match is None:
+            match = self._match_prefix(chat)
         logical = int(match.get("matched_tokens") or 0)
         resident = int(match.get("resident_kv_tokens") or 0)
         if logical <= 0 or logical - resident < self._prune_freed_slots:
@@ -253,11 +273,29 @@ class SparseVLLMLitellmModel(LitellmModel):
         )
 
     def _maybe_prune(self, chat: dict[str, Any]) -> None:
-        if self._prune_finished:
+        tool_mode = self._prune_target == "tool_results"
+        if self._prune_finished and not tool_mode:
             return
+        cursor = len(self._prune_processed_messages)
+        new_tools = False
+        if tool_mode:
+            messages = chat["messages"]
+            if len(messages) < cursor or any(
+                old != messages[i] for i, old in enumerate(self._prune_processed_messages)
+            ):
+                raise RuntimeError("Tool-pruning transcript is not append-only; refusing to reuse its cursor.")
+            new_tools = any(m.get("role") == "tool" for m in messages[cursor:])
+            if not new_tools and (not self._prune_finished or self._prune_reuse_verified):
+                self._prune_processed_messages.extend(deepcopy(messages[cursor:]))
+                return
         match_before = self._match_prefix(chat)
+        if tool_mode:
+            self._maybe_verify_prune_reuse(chat, match_before)
+            if not new_tools:
+                self._prune_processed_messages.extend(deepcopy(chat["messages"][cursor:]))
+                return
         usable = int(match_before.get("usable_tokens") or 0)
-        if usable < self._prune_trigger_tokens:
+        if not tool_mode and usable < self._prune_trigger_tokens:
             return
         matched = int(match_before.get("matched_tokens") or 0)
         if matched != usable:
@@ -265,18 +303,46 @@ class SparseVLLMLitellmModel(LitellmModel):
                 "Completed MiniSWE turn is not fully available for pruning: "
                 f"matched={matched} usable={usable}."
             )
-        queued = self._prefix_cache_request(
-            "POST",
-            "/prefix_cache/prune",
-            {
-                "chat": chat,
-                "range_start": self._prune_range_start,
+        selection = None
+        if self._prune_target == "tool_results":
+            if self._prune_tool_selector is None:
+                from benchmark.swe_bench_lite.tool_prune import ToolResultPruneSelector
+                self._prune_tool_selector = ToolResultPruneSelector(self._prune_tokenizer_path)
+            selection = self._prune_tool_selector.select(
+                chat, block_size=int(match_before["block_size"]), usable_tokens=usable,
+                message_start=cursor,
+            )
+            ranges = selection["ranges"]
+            if not ranges:
+                self._record_prune_event(
+                    "prune_skipped", status="skipped_by_policy", target="tool_results",
+                    reason="no_block_aligned_tool_body", usable_tokens=usable,
+                    tool_tokens=selection["tool_tokens"],
+                )
+                self._prune_processed_messages.extend(deepcopy(chat["messages"][cursor:]))
+                return
+            local_match = self._prefix_cache_request(
+                "POST", "/prefix_cache/match", {"token_ids": selection["token_ids"]},
+            )
+            if not match_before.get("last_block_id") or any(
+                local_match.get(key) != match_before.get(key)
+                for key in ("last_block_id", "prompt_tokens", "usable_tokens", "matched_tokens", "block_size")
+            ):
+                raise RuntimeError("Tool-range tokenizer/template does not match the server's cached path.")
+            keep_tokens = math.floor(selection["eligible_tokens"] * self._prune_keep_ratio)
+            selector = {"token_ids": selection["token_ids"], "ranges": ranges}
+        else:
+            ranges = [(self._prune_range_start, self._prune_range_end)]
+            keep_tokens = self._prune_keep_tokens
+            selector = {
+                "chat": chat, "range_start": self._prune_range_start,
                 "range_end": self._prune_range_end,
-                "keep_tokens": self._prune_keep_tokens,
-                "policy": self._prune_policy,
-                "observation_tokens": 64,
-                "score_chunk_size": 1024,
-                "prev_postfix_size": 32,
+            }
+        queued = self._prefix_cache_request(
+            "POST", "/prefix_cache/prune",
+            {
+                **selector, "keep_tokens": keep_tokens, "policy": self._prune_policy,
+                "observation_tokens": 64, "score_chunk_size": 1024, "prev_postfix_size": 32,
             },
         )
         prune_id = str(queued.get("prune_id") or "")
@@ -295,26 +361,29 @@ class SparseVLLMLitellmModel(LitellmModel):
             raise RuntimeError(f"Prefix prune did not complete: {status}.")
         result = status.get("result") or {}
         freed = int(result.get("freed_device_slots") or 0)
-        expected_freed = (
-            self._prune_range_end
-            - self._prune_range_start
-            - self._prune_keep_tokens
-        )
+        expected_freed = sum(right - left for left, right in ranges) - keep_tokens
         if freed != expected_freed or result.get("quality_degraded") is not True:
             raise RuntimeError(
                 "Prefix prune result violated physical accounting/tag contract: "
                 f"freed={freed} expected={expected_freed} result={result}."
             )
-        match_after = self._match_prefix(chat)
+        match_after = (
+            self._prefix_cache_request("POST", "/prefix_cache/match", {"token_ids": selection["token_ids"]})
+            if tool_mode else self._match_prefix(chat)
+        )
         after_matched = int(match_after.get("matched_tokens") or 0)
         after_resident = int(match_after.get("resident_kv_tokens") or 0)
-        if after_matched != usable or after_matched - after_resident < freed:
+        before_resident = int(match_before.get("resident_kv_tokens") or 0)
+        if after_matched != usable or before_resident - after_resident != freed:
             raise RuntimeError(
                 "Prefix prune did not preserve the logical route or compact resident KV: "
                 f"before={usable} after={after_matched} resident={after_resident}."
             )
         self._prune_finished = True
-        self._prune_freed_slots = freed
+        self._prune_reuse_verified = False
+        self._prune_freed_slots = after_matched - after_resident
+        if tool_mode:
+            self._prune_processed_messages.extend(deepcopy(chat["messages"][cursor:]))
         self._record_prune_event(
             "prune_completed",
             policy=self._prune_policy,
@@ -323,8 +392,13 @@ class SparseVLLMLitellmModel(LitellmModel):
             usable_tokens=usable,
             resident_kv_tokens=after_resident,
             freed_device_slots=freed,
-            range=[self._prune_range_start, self._prune_range_end],
-            keep_tokens=self._prune_keep_tokens,
+            target=self._prune_target,
+            ranges=ranges,
+            range=[ranges[0][0], ranges[-1][1]],
+            keep_tokens=keep_tokens,
+            tool_selection=({k: v for k, v in selection.items() if k != "token_ids"} if selection else None),
+            message_start=cursor if tool_mode else None,
+            message_end=len(chat["messages"]) if tool_mode else None,
             quality_degraded=True,
         )
 
@@ -386,7 +460,8 @@ class SparseVLLMLitellmModel(LitellmModel):
             if not self._prune_policy:
                 return super()._query(messages, **kwargs)
             chat = self._chat_selector(messages, kwargs)
-            self._maybe_verify_prune_reuse(chat)
+            if self._prune_target != "tool_results":
+                self._maybe_verify_prune_reuse(chat)
             response = super()._query(messages, **kwargs)
             self._maybe_prune(chat)
             return response

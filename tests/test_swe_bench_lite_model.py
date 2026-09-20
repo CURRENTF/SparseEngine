@@ -619,3 +619,120 @@ def test_chain_model_commits_state_only_after_successful_query(monkeypatch):
     assert model._recovery_chain_id is None
     assert model._force_new_chain_reason is None
     assert recovered["extra"]["chain_reset_reason"] == "format_error"
+
+
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_tool_result_pruning_passes_only_verified_token_ranges(monkeypatch, tmp_path, mismatch):
+    module = _load_model_module(monkeypatch, [_response(None), _response(None)])
+    for key, value in {
+        "SPARSEENGINE_PREFIX_PRUNE_POLICY": "kvzip_global",
+        "SPARSEENGINE_PREFIX_PRUNE_TARGET": "tool_results",
+        "SPARSEENGINE_PREFIX_PRUNE_TOKENIZER": str(tmp_path),
+        "SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO": "0.5",
+        "SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS": "8",
+        "SPARSEENGINE_PREFIX_PRUNE_EVENTS": str(tmp_path / "events.jsonl"),
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("SPARSEENGINE_CHAIN_CACHE", raising=False)
+    model = module.SparseVLLMLitellmModel()
+    model._prune_tool_selector = SimpleNamespace(select=lambda *args, **kwargs: {
+        "token_ids": list(range(11)), "ranges": [(1, 3), (5, 9)],
+        "tool_tokens": 6, "eligible_tokens": 6,
+    })
+    full = {"block_size": 1, "prompt_tokens": 11, "usable_tokens": 10,
+            "matched_tokens": 10, "resident_kv_tokens": 10, "last_block_id": "same-path"}
+    matches = iter([full, {**full, "resident_kv_tokens": 7}, {**full, "resident_kv_tokens": 7}])
+    monkeypatch.setattr(model, "_match_prefix", lambda _: next(matches))
+    calls = []
+    def request(method, path, body=None):
+        calls.append((method, path, body))
+        if path == "/prefix_cache/match":
+            pruned = any(p == "/prefix_cache/prune" for _, p, _ in calls)
+            return {**full, "resident_kv_tokens": 7 if pruned else 10,
+                    "last_block_id": "wrong-path" if mismatch else "same-path"}
+        if method == "POST":
+            assert body["ranges"] == [(1, 3), (5, 9)]
+            assert body["keep_tokens"] == 3
+            assert "chat" not in body and "target" not in body
+            return {"prune_id": "tools", "status": "queued"}
+        return {"status": "completed", "result": {"freed_device_slots": 3, "quality_degraded": True}}
+    monkeypatch.setattr(model, "_prefix_cache_request", request)
+    messages = [{"role": "tool", "content": "result"}]
+    if mismatch:
+        with pytest.raises(RuntimeError, match="does not match"):
+            model.query(messages)
+        assert not any(path == "/prefix_cache/prune" for _, path, _ in calls)
+    else:
+        model.query(messages)
+        model.query(messages)
+        assert sum(path == "/prefix_cache/prune" for _, path, _ in calls) == 1
+        records = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+        assert [row["event"] for row in records] == ["prune_completed", "reuse_verified"]
+        assert records[0]["ranges"] == [[1, 3], [5, 9]]
+
+
+def test_tool_prune_advances_only_after_success_and_shares_new_turn_budget(monkeypatch, tmp_path):
+    module = _load_model_module(monkeypatch, [])
+    for key, value in {
+        'SPARSEENGINE_PREFIX_PRUNE_POLICY': 'kvzip_global',
+        'SPARSEENGINE_PREFIX_PRUNE_TARGET': 'tool_results',
+        'SPARSEENGINE_PREFIX_PRUNE_TOKENIZER': str(tmp_path),
+        'SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO': '0.2',
+        'SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS': '4096',
+        'SPARSEENGINE_PREFIX_PRUNE_EVENTS': str(tmp_path/'events.jsonl'),
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv('SPARSEENGINE_CHAIN_CACHE', raising=False)
+    model = module.SparseVLLMLitellmModel()
+    state = {'dropped': 0, 'fail': False}
+    selections, jobs = [], []
+
+    def select(chat, *, message_start, **kwargs):
+        selected = [i for i in range(message_start, len(chat['messages']))
+                    if chat['messages'][i]['role'] == 'tool']
+        selections.append(selected)
+        ranges = [(i*10, (i+1)*10) for i in selected]
+        return dict(token_ids=list(range(100)), ranges=ranges,
+                    eligible_tokens=len(selected)*10, tool_tokens=len(selected)*10)
+
+    def match(_):
+        return dict(block_size=1, prompt_tokens=100, usable_tokens=100,
+                    matched_tokens=100, resident_kv_tokens=100-state['dropped'], last_block_id='path')
+
+    def request(method, path, body=None):
+        if path == '/prefix_cache/match':
+            return match(None)
+        if path == '/prefix_cache/prune':
+            jobs.append(body)
+            if not state['fail']:
+                state['freed'] = sum(r-l for l,r in body['ranges']) - body['keep_tokens']
+                state['dropped'] += state['freed']
+            return {'prune_id': 'job', 'status': 'queued'}
+        if state['fail']:
+            return {'status': 'failed'}
+        return dict(status='completed', result=dict(freed_device_slots=state['freed'], quality_degraded=True))
+
+    model._prune_tool_selector = SimpleNamespace(select=select)
+    monkeypatch.setattr(model, '_match_prefix', match)
+    monkeypatch.setattr(model, '_prefix_cache_request', request)
+    messages = [{'role': 'user', 'content': 'keep'}]
+    model._maybe_prune({'messages': messages})
+    assert not selections and not jobs
+    messages += [{'role': 'tool', 'content': 'one'}]
+    model._maybe_prune({'messages': messages})
+    messages += [{'role': 'assistant', 'content': 'think'},
+                 {'role': 'tool', 'content': 'two'}, {'role': 'tool', 'content': 'three'}]
+    state['fail'] = True
+    with pytest.raises(RuntimeError, match='did not complete'):
+        model._maybe_prune({'messages': messages})
+    assert len(model._prune_processed_messages) == 2
+    state['fail'] = False
+    model._maybe_prune({'messages': messages})
+    assert selections == [[1], [3,4], [3,4]]
+    assert jobs[-1]['keep_tokens'] == 4  # Shared budget across two NEW bodies.
+    assert state['dropped'] == 24  # First turn drops 8, second drops 16, never 8 again.
+    model._maybe_prune({'messages': messages})  # Reuse verification only.
+    assert len(jobs) == 3
+    messages[1]['content'] = 'rewritten old result'
+    with pytest.raises(RuntimeError, match='not append-only'):
+        model._maybe_prune({'messages': messages})

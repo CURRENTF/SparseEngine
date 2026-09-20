@@ -236,3 +236,42 @@ DeepSeek thinking control 等 provider-specific request field 不属于共享 ad
 | `final_summary.json` | Aggregate score、status count、API call、cost 和 artifact path。 |
 
 规范 `status` 值包括 `success`、`invalid_input`、`model_failed`、`parse_failed`、`metric_failed` 和 `skipped_by_policy`。`success` 表示官方 harness 完成了该 instance；独立的 `resolved` 字段记录其 test 是否通过。benchmark score 始终是 `resolved_instances / total_instances`，分母包括 empty patch 和 failure。
+
+## 只剪枝工具返回的 KV
+
+在上面的 smoke 命令中添加以下参数：
+
+```bash
+--no-chain-cache \
+--prefix-prune-policy kvzip_global \
+--prefix-prune-target tool_results \
+--prefix-prune-tokenizer /path/to/server-tokenizer \
+--prefix-prune-keep-ratio 0.5
+```
+
+服务端须启用 Vanilla 或 OmniKV 的 radix prefix cache，并支持多区间 prune。
+`--prefix-prune-tokenizer` 是 harness 本地可访问、与服务端一致的 tokenizer 目录，
+包括 chat template；不会自动下载。harness 环境需要 `transformers`、fast tokenizer
+及共享 chat renderer 的依赖。
+
+harness 只标注 `role=tool` 的返回正文，保留用户输入、assistant 思考、调用参数和
+模板标记。它对完整渲染文本定位 token，将完整落在正文内的 token 向内按服务端
+block size 对齐，再通过 `/prefix_cache/match` 比较 token 路径 ID；不匹配则报错。
+`block_size=1` 可减少边界损失，但仍保留跨正文边界的 token。engine 只收到原始
+`token_ids`、`ranges` 和总 `keep_tokens`，不接收工具类别。
+
+`keep_ratio=0.5` 表示在所有候选工具区间中总共保留一半 token（向下取整），
+不是每个工具返回分别保留一半。允许 `0 <= keep_ratio < 1`；不剪枝基线不传
+`--prefix-prune-policy`。此模式忽略静态区间及 `--prefix-prune-keep-tokens` 参数。
+
+工具模式在每个有新增工具返回的回合完成推理后剪枝：只选择尚未处理过的
+工具正文，同轮新增区间共用 `floor(候选 token 数 * keep_ratio)` 的保留预算。
+旧工具区间不再压缩；`--prefix-prune-trigger-tokens` 仅用于静态区间模式，工具
+模式不等待总长度阈值。空正文或没有完整对齐块时记录 `skipped_by_policy`，
+并推进消息游标；失败时不推进。历史消息被改写时显式报错。
+
+下一轮完成推理后，将上次剪枝的复用检查合并到本轮 prefix match 中。
+`run_config.json` 保存配置；`prefix_prune_events.jsonl` 保存消息游标、区间、
+预算、释放量和复用检查，原始聊天记录由 agent trace 保存。没有后续回合的
+最后一次剪枝不算已验证复用。工具区间定位仍需完整模板渲染和一次分词，以
+保持 BPE 边界及模型模板语义；不会仅分词新增文本后直接拼接 token。

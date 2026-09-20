@@ -14,6 +14,51 @@ class FakeTokenizer:
         return " ".join(str(token_id) for token_id in token_ids)
 
 
+@pytest.mark.parametrize("prune_status", ["completed", "failed"])
+def test_shared_prefix_benchmark_requires_successful_prune(tmp_path, monkeypatch, prune_status):
+    """A failed prune must not produce a misleading unpruned speed result."""
+    import torch
+
+    batches = []
+    requests = []
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+
+    def batch(**kwargs):
+        batches.append(kwargs["specs"])
+        return []
+
+    def start(tokens, **kwargs):
+        requests.append((tokens, kwargs))
+        return {"prune_id": "job"}
+
+    monkeypatch.setattr(bench, "_run_request_batch", batch)
+    engine = types.SimpleNamespace(
+        prefix_cache_prune_start=start,
+        run_pending_prefix_prune=lambda: True,
+        prefix_cache_prune_status=lambda _: {"status": prune_status},
+    )
+    args = types.SimpleNamespace(
+        shared_prefix_len=16, output_len=2, max_steps_per_round=20,
+        shared_prefix_keep_ratio=0.25, shared_prefix_prune_ranges="[[1,5],[8,12]]",
+        shared_prompts=1, shared_suffix_len=2, shared_suffix_min_len=None,
+    )
+    kwargs = dict(llm=engine, tokenizer=FakeTokenizer(), vocab_ids=[5, 6, 7],
+                  args=args, rng=random.Random(12), block_size=1,
+                  per_turn_path=tmp_path/"per_turn_results.jsonl",
+                  raw_output_path=tmp_path/"raw_outputs.jsonl")
+    if prune_status == "failed":
+        with pytest.raises(RuntimeError, match="Prefix prune failed"):
+            bench._run_shared_prefix_workload(**kwargs)
+        assert len(batches) == 1
+    else:
+        bench._run_shared_prefix_workload(**kwargs)
+        assert len(batches) == 2
+        assert batches[1][0].prompt_token_ids[:16] == requests[0][0]
+    assert requests[0][1]["ranges"] == [[1, 5], [8, 12]]
+    assert requests[0][1]["keep_tokens"] == 2
+    assert json.loads((tmp_path/"prefix_prune.json").read_text())["job"]["status"] == prune_status
+
+
 def _summary_args():
     return types.SimpleNamespace(
         system_prompt_len=1,
@@ -35,6 +80,67 @@ def _summary_args():
         min_performance_prompt_len=0,
         min_cacheable_prefix_len=0,
     )
+
+
+@pytest.mark.parametrize("keep_ratio", [None, 0.5])
+def test_case_timing_uses_only_current_pruning_work(tmp_path, monkeypatch, keep_ratio):
+    """Reusing a case directory must not charge a baseline for an earlier prune."""
+    import sparseengine
+    import torch
+    from transformers import AutoTokenizer
+
+    monkeypatch.setattr(bench.sys, "argv", ["bench_prefix_cache", "--model_path", str(tmp_path)])
+    args = bench.parse_args()
+    args.workloads = "shared_prefix"
+    args.shared_prefix_len = 16
+    args.shared_suffix_len = 2
+    args.shared_prompts = 2
+    args.output_len = 2
+    args.prefix_cache_block_size = 1
+    args.shared_prefix_keep_ratio = keep_ratio
+    args.shared_prefix_prune_ranges = "[[0, 16]]"
+    prune_path = tmp_path / "prefix_prune.json"
+    prune_path.write_text(json.dumps({"elapsed_s": 99.0, "job": {"status": "completed"}}))
+    clock = [0.0]
+    monkeypatch.setattr(bench.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", lambda *a, **kw: FakeTokenizer())
+    monkeypatch.setattr(bench, "_token_vocab", lambda _: [5, 6, 7])
+    monkeypatch.setattr(bench, "_cache_stats", lambda _: {})
+
+    def run_prune():
+        clock[0] += 3.0
+        return True
+
+    engine = types.SimpleNamespace(
+        debug_sparse_state_summaries=lambda: [],
+        prefix_cache_prune_start=lambda *a, **kw: {"prune_id": "current"},
+        run_pending_prefix_prune=run_prune,
+        prefix_cache_prune_status=lambda _: {"prune_id": "current", "status": "completed"},
+        exit=lambda: None,
+    )
+    monkeypatch.setattr(sparseengine, "LLM", lambda *a, **kw: engine)
+
+    def batch(**kwargs):
+        specs = kwargs["specs"]
+        duration = 10.0 if specs[0].phase == "warmup" else 2.0
+        clock[0] += duration
+        return [dict(
+            workload=spec.workload, turn=spec.turn, phase=spec.phase,
+            status="success", batch_wall_time_s=duration, ttft_s=0.1,
+            latency_s=duration, prompt_tokens=len(spec.prompt_token_ids),
+            generated_tokens=spec.output_len, cached_tokens=0,
+            eligible_cache_tokens=spec.eligible_cache_tokens,
+        ) for spec in specs]
+
+    monkeypatch.setattr(bench, "_run_request_batch", batch)
+    bench._run_case_worker("prefix_full", vars(args), str(tmp_path))
+    summary = json.loads((tmp_path / "aggregate_metrics.json").read_text())
+    expected_elapsed = 2.0 if keep_ratio is None else 5.0
+    assert summary["status"] == "success"
+    assert summary["elapsed_s"] == expected_elapsed
+    assert summary["output_token_throughput"] == pytest.approx(4 / expected_elapsed)
 
 
 def test_prefix_cache_bench_flags_impossible_cache_hit(tmp_path):

@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import inspect
 import json
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from sparseengine.entrypoints.openai.protocol.chat import ChatContentPart
-from sparseengine.multimodal import MultiModalPrompt
+if TYPE_CHECKING:
+    from sparseengine.multimodal import MultiModalPrompt
 from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
 from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
 from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
@@ -269,6 +272,8 @@ def _chat_prompt(
             rendered_message["tool_call_id"] = message.tool_call_id
         chat.append(rendered_message)
     if _has_multimodal_content(messages):
+        from sparseengine.multimodal import MultiModalPrompt
+
         return MultiModalPrompt(
             chat,
             chat_template_kwargs=chat_template_kwargs,
@@ -340,6 +345,8 @@ def _response_prompt(
         and any(part.get("type") in {"input_image", "input_audio", "input_video"} for part in message["content"])
         for message in messages
     ):
+        from sparseengine.multimodal import MultiModalPrompt
+
         return MultiModalPrompt(
             messages,
             chat_template_kwargs=chat_template_kwargs,

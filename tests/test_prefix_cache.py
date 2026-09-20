@@ -212,6 +212,20 @@ def test_standard_prefix_prune_compacts_payload_and_preserves_logical_positions(
     assert manager.layer_batch_state.context_lens.tolist() == [3]
     assert manager.row_logical_lens[row] == 5
 
+    # Regression: committing a newly completed block after a compacted prefix
+    # must use physical row offsets, including a block spanning two steps.
+    manager.on_forward_end([seq], is_prefill=True)
+    seq.num_prefilled_tokens = seq.num_prompt_tokens
+    seq.append_token(6)
+    manager._prepare_decode([seq])
+    manager.on_forward_end([seq], is_prefill=False)
+    child_id = manager.prefix_cache.stable_block_id([5, 6], parent)
+    child = manager.prefix_cache.get_block(child_id)
+    assert child.payload.token_slots.tolist() == manager.buffer_req_to_token_slots[row, 2:4].tolist()
+    assert manager.seq_id_to_cached_ranges[seq.seq_id] == [(0, 2), (2, 4)]
+    manager.free_seq(seq.seq_id)
+    assert all(block.ref_count == 0 for block in manager.prefix_cache.blocks.values())
+
 
 def test_standard_prefix_prune_rejects_referenced_blocks_without_mutation():
     manager = _make_standard_manager_for_prefix(block_size=2)
@@ -2767,6 +2781,7 @@ def test_standard_materializes_child_after_prefix_hit_with_parent_sensitive_id()
     seq.prefix_cache_hit_last_block_id = root_id
     seq.prefix_cache_block_size = 2
 
+    manager._attach_prefix_cache_if_needed(seq)
     manager._record_prefix_materialization(seq, [3, 4], torch.tensor([20, 21], dtype=torch.int32))
     manager.on_forward_end([seq], is_prefill=True)
 
@@ -3702,3 +3717,134 @@ def test_prefill_inputs_keep_values_across_inflight_chunks(device):
         assert actual.cpu().tolist() == expected
     assert first_context.cpu().tolist() == [3]
     assert second_context.cpu().tolist() == [6]
+
+
+@pytest.mark.parametrize("block_size,method,device,keep", [
+    (1, "", "cpu", [1, 4]), (2, "omnikv", "cpu", [1, 4]),
+    (1, "omnikv", "cpu", []),
+    pytest.param(1, "omnikv", "cuda", [1, 4], marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")),
+])
+def test_multi_range_prune_preserves_gaps_empty_blocks_and_logical_positions(block_size, method, device, keep):
+    # A global budget can empty an entire selected block; gap KV must survive.
+    manager = _make_standard_manager_for_prefix(block_size=block_size, method=method)
+    manager.device = torch.device(device)
+    manager.free_slots_stack = manager.free_slots_stack.to(device)
+    manager.buffer_req_to_token_slots = manager.buffer_req_to_token_slots.to(device)
+    tokens = list(range(10))
+    blocks = []
+    parent = None
+    for start in range(0, 10, block_size):
+        part = tokens[start:start + block_size]
+        block_id = manager.prefix_cache.stable_block_id(part, parent)
+        block = PrefixCacheBlock(
+            stable_block_id=block_id, parent_block_id=parent, block_size=block_size,
+            logical_block_idx=start // block_size, token_ids=tuple(part),
+            payload=StandardPrefixBlockPayload(token_slots=torch.arange(start + 10, start + 10 + block_size, dtype=torch.int32, device=device)),
+        )
+        manager.prefix_cache.insert_block(block)
+        blocks.append(block)
+        parent = block_id
+    _remove_free_slots(manager, list(range(10, 20)))
+    before = manager.num_free_slots
+    result = manager.prefix_cache_prune(
+        tokens, ranges=[(8, 10), (0, 2), (4, 6)], keep_indices=torch.tensor(keep, dtype=torch.long, device=device),
+        policy="kvzip_global", prune_id="union",
+    )
+    assert result["logical_tokens"] == 6
+    assert result["freed_device_slots"] == 6 - len(keep)
+    assert manager.num_free_slots == before + 6 - len(keep)
+    assert len(manager.prefix_cache.blocks) == len(blocks)
+    for block in blocks:
+        start = block.logical_block_idx * block_size
+        if start in (2, 3, 6, 7):
+            assert block.payload.retained_offsets is None
+    seq = Sequence(tokens + [10])
+    seq.prefix_cache_enabled = True
+    seq.prefix_cache_hit_len = 10
+    seq.prefix_cache_hit_block_count = len(blocks)
+    seq.prefix_cache_hit_last_block_id = parent
+    seq.prefix_cache_block_size = block_size
+    manager._attach_prefix_cache_if_needed(seq)
+    row = manager.seq_id_to_row[seq.seq_id]
+    assert manager.row_logical_lens[row] == 10
+    expected_slots = [11, 12, 13, 16, 17, 18] if keep else [12, 13, 16, 17]
+    assert manager.row_seq_lens[row] == len(expected_slots)
+    assert manager.buffer_req_to_token_slots[row, :len(expected_slots)].tolist() == expected_slots
+
+
+def test_multi_range_prune_late_invalid_payload_does_not_mutate_any_block():
+    # Preparation must finish for all ranges before the first allocator mutation.
+    manager = _make_standard_manager_for_prefix(block_size=1)
+    parent = None
+    blocks = []
+    for token in range(5):
+        block_id = manager.prefix_cache.stable_block_id([token], parent)
+        block = PrefixCacheBlock(
+            stable_block_id=block_id, parent_block_id=parent, block_size=1,
+            logical_block_idx=token, token_ids=(token,),
+            payload=StandardPrefixBlockPayload(token_slots=torch.tensor([token + 10], dtype=torch.int32)),
+        )
+        manager.prefix_cache.insert_block(block)
+        blocks.append(block)
+        parent = block_id
+    blocks[-1].payload.token_slots = torch.empty(0, dtype=torch.int32)
+    before = manager.num_free_slots
+    with pytest.raises(RuntimeError, match="inconsistent Standard device payload"):
+        manager.prefix_cache_prune(
+            list(range(5)), ranges=[(0, 1), (2, 3), (4, 5)], keep_indices=torch.tensor([0]),
+            policy="kvzip_global", prune_id="bad-last",
+        )
+    assert manager.num_free_slots == before
+    assert all(block.payload.retained_offsets is None and block.prune_record is None for block in blocks)
+
+
+@pytest.mark.parametrize('block_size', [1, 2])
+def test_prune_new_interval_after_compacted_ancestor_and_score_mapping(block_size):
+    # Repeated rounds preserve the first mask and map physical scores back to
+    # original token positions even when an ancestor block has no resident KV.
+    manager = _make_standard_manager_for_prefix(block_size=block_size)
+    parent = None
+    blocks = []
+    tokens = list(range(10))
+    for left in range(0, 10, block_size):
+        block_id = manager.prefix_cache.stable_block_id(tokens[left:left+block_size], parent)
+        block = PrefixCacheBlock(stable_block_id=block_id, parent_block_id=parent,
+            block_size=block_size, logical_block_idx=left//block_size,
+            token_ids=tuple(tokens[left:left+block_size]),
+            payload=StandardPrefixBlockPayload(token_slots=torch.arange(left+10,left+10+block_size,dtype=torch.int32)))
+        manager.prefix_cache.insert_block(block)
+        blocks.append(block)
+        parent = block_id
+    _remove_free_slots(manager, list(range(10,20)))
+    manager.prefix_cache_prune(tokens, ranges=[(0,4)], keep_indices=torch.tensor([1]),
+                               policy='kvzip_global', prune_id='first')
+    initial = [b.payload.token_slots.clone() for b in blocks[:4//block_size]]
+    with pytest.raises(RuntimeError, match='already pruned'):
+        manager.validate_prefix_cache_prune_target(tokens, ranges=[(2,6)])
+    second = manager.prefix_cache_prune(tokens, ranges=[(6,10)], keep_indices=torch.tensor([0,3]),
+                                       policy='kvzip_global', prune_id='second')
+    assert second['freed_device_slots'] == 2
+    for block, expected in zip(blocks, initial):
+        torch.testing.assert_close(block.payload.token_slots, expected)
+    seq = Sequence(tokens+[10,11])
+    seq.prefix_cache_enabled = True
+    seq.prefix_cache_hit_len = 10
+    seq.prefix_cache_hit_block_count = len(blocks)
+    seq.prefix_cache_hit_last_block_id = parent
+    seq.prefix_cache_block_size = block_size
+    manager._attach_prefix_cache_if_needed(seq)
+    row = manager.seq_id_to_row[seq.seq_id]
+    manager.row_seq_lens[row] += 2
+    manager.row_logical_lens[row] += 2
+    manager._prefix_prune_scoring = None
+    manager.begin_prefix_prune_scoring(seq_id=seq.seq_id, candidate_start=6, query_start=10,query_end=12)
+    request = manager.prefill_score_request(0,[seq])
+    assert request.query_ranges == ((5,7),)
+    assert request.candidate_start == 3
+    physical_score = torch.arange(1,8,dtype=torch.float32)
+    manager._prefix_prune_scoring['score'] = physical_score
+    logical_score = manager.finish_prefix_prune_scoring()
+    expected = torch.zeros(12)
+    expected[[1,4,5,6,9,10,11]] = physical_score
+    torch.testing.assert_close(logical_score,expected)
+    manager.free_seq(seq.seq_id)

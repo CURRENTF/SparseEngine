@@ -711,3 +711,41 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_tool_result_prune_cli_exports_explicit_settings_and_clears_ambient_values():
+    with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+        "os.environ", {"SPARSEENGINE_PREFIX_PRUNE_TARGET": "stale", "SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO": "0.9"},
+    ):
+        args = build_parser().parse_args([
+            "--stage", "summarize", "--run-dir", tmp, "--no-chain-cache",
+            "--prefix-prune-policy", "kvzip_global", "--prefix-prune-target", "tool_results",
+            "--prefix-prune-tokenizer", tmp, "--prefix-prune-keep-ratio", "0.25",
+        ])
+        runner = SweBenchLiteRunner(args)
+        env = runner._model_env()
+        assert env["SPARSEENGINE_PREFIX_PRUNE_TARGET"] == "tool_results"
+        assert env["SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO"] == "0.25"
+        assert env["SPARSEENGINE_PREFIX_PRUNE_TOKENIZER"] == str(Path(tmp).resolve())
+        assert str(runner.repo_root / "src") in env["PYTHONPATH"]
+        original_config = runner._semantic_config(None)
+        assert original_config["prefix_prune"]["target"] == "tool_results"
+        assert original_config["prefix_prune"]["keep_ratio"] == 0.25
+        runner.args.prefix_prune_keep_ratio = 0.75
+        assert runner._semantic_config(None) != original_config
+        plain_args = build_parser().parse_args(["--stage", "summarize", "--run-dir", tmp])
+        plain_env = SweBenchLiteRunner(plain_args)._model_env()
+        assert not any(key.startswith("SPARSEENGINE_PREFIX_PRUNE_") for key in plain_env)
+
+
+def test_tool_prune_cli_rejects_missing_tokenizer_and_invalid_ratio():
+    with tempfile.TemporaryDirectory() as tmp:
+        base = ["--stage", "summarize", "--run-dir", tmp, "--no-chain-cache",
+                "--prefix-prune-policy", "kvzip_global", "--prefix-prune-target", "tool_results"]
+        with unittest.TestCase().assertRaisesRegex(RunnerError, "tokenizer"):
+            SweBenchLiteRunner(build_parser().parse_args(base))
+        for ratio in ["nan", "-0.1", "1.0"]:
+            with unittest.TestCase().assertRaisesRegex(RunnerError, "keep-ratio"):
+                SweBenchLiteRunner(build_parser().parse_args(base + [
+                    "--prefix-prune-tokenizer", tmp, "--prefix-prune-keep-ratio", ratio,
+                ]))

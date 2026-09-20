@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from bisect import bisect_left
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -23,7 +24,10 @@ from sparseengine.engine.prefix_cache import (
     select_write_through_candidates,
     usable_prefix_cache_tokens,
 )
-from sparseengine.engine.prefix_prune import PrefixPruneRecord
+from sparseengine.engine.prefix_prune import (
+    PrefixPruneRecord,
+    normalize_prefix_prune_ranges,
+)
 from sparseengine.engine.sequence import Sequence
 from sparseengine.kernels.triton.prefill_score import prefill_score_fwd
 from sparseengine.platforms import device_runtime
@@ -764,24 +768,20 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
 
     def _mark_materialized_prefix_block(self, seq: Sequence, block: PrefixCacheBlock) -> None:
         cached_ranges = self.seq_id_to_cached_ranges.setdefault(seq.seq_id, [])
-        attached = self.seq_id_to_prefix_blocks.get(seq.seq_id, [])
-        attached_resident = sum(
-            self._standard_payload(prefix_block).resident_tokens(
-                self.prefix_cache_block_size
-            )
-            for prefix_block in attached
-        )
+        # Appending tokens advances physical and logical row lengths equally.
+        # Their difference is the fixed prefix-pruning offset while attached
+        # blocks are referenced; avoid rescanning the entire prefix per token.
         hit_len = int(getattr(seq, "prefix_cache_hit_len", 0) or 0)
-        start = (
-            attached_resident
-            + int(block.logical_block_idx) * self.prefix_cache_block_size
-            - hit_len
-        )
+        offset = 0
+        if hit_len:
+            row_idx = self.seq_id_to_row[seq.seq_id]
+            offset = int(self.row_seq_lens[row_idx]) - int(self.row_logical_lens[row_idx])
+        start = int(block.logical_block_idx) * self.prefix_cache_block_size + offset
         if start < 0:
             raise RuntimeError(
                 "materialized prefix block resolved to a negative physical row offset: "
                 f"seq_id={seq.seq_id} logical_block={block.logical_block_idx} "
-                f"attached_resident={attached_resident} hit_len={hit_len}."
+                f"physical_offset={offset} hit_len={hit_len}."
             )
         cached_ranges.append((start, start + self.prefix_cache_block_size))
 
@@ -979,17 +979,26 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
         self,
         token_ids: list[int],
         *,
-        range_start: int,
-        range_end: int,
+        range_start: int | None = None,
+        range_end: int | None = None,
+        ranges: list[tuple[int, int]] | None = None,
         allow_recompress: bool = False,
     ) -> list[PrefixCacheBlock]:
+        intervals = normalize_prefix_prune_ranges(
+            token_count=len(token_ids), block_size=self.prefix_cache_block_size,
+            range_start=range_start, range_end=range_end, ranges=ranges,
+        )
+        if allow_recompress:
+            raise RuntimeError(
+                "allow_recompress is not implemented because dropped KV cannot be "
+                "rescored without rebuilding the original dense prefix."
+            )
         controller = getattr(self, "prefix_offload_controller", None)
         if controller is not None:
             controller.synchronize_all()
         prefix_cache = self._require_prefix_cache()
         block_size = int(self.prefix_cache_block_size)
-        range_start = int(range_start)
-        range_end = int(range_end)
+        range_end = intervals[-1][1]
         block_ids = prefix_cache.block_ids_for_tokens(
             [int(token_id) for token_id in token_ids[:range_end]],
             max_tokens=range_end,
@@ -999,18 +1008,17 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
             raise RuntimeError(
                 "prefix prune selector does not cover a complete block-aligned range."
             )
-        hit_len, last_block_id, hit_blocks = prefix_cache.match_longest_block_ids(
-            block_ids
-        )
+        hit_len, last_block_id, hit_blocks = prefix_cache.match_longest_block_ids(block_ids)
         if hit_len != range_end or hit_blocks != expected_blocks or last_block_id is None:
             raise RuntimeError(
                 "prefix prune target is not fully present in the radix tree: "
                 f"requested_end={range_end} matched_tokens={hit_len}."
             )
         chain = prefix_cache.get_chain(last_block_id, expected_blocks)
-        affected = chain[range_start // block_size : range_end // block_size]
-        if not affected:
-            raise RuntimeError("prefix prune interval contains no blocks.")
+        affected = [
+            block for left, right in intervals
+            for block in chain[left // block_size : right // block_size]
+        ]
         blocked = [
             block.stable_block_id.hex()[:16]
             for block in affected
@@ -1021,20 +1029,10 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
                 "prefix prune requires an idle, transfer-free subtree interval: "
                 f"blocked_blocks={blocked}."
             )
-        existing_records = [
-            block
-            for block in chain[: range_end // block_size]
-            if block.prune_record is not None
-        ]
-        if existing_records:
-            if allow_recompress:
-                raise RuntimeError(
-                    "allow_recompress is not implemented because dropped KV cannot be "
-                    "rescored without rebuilding the original dense prefix."
-                )
+        if any(self._standard_payload(block).retained_offsets is not None for block in affected):
             raise RuntimeError(
-                "prefix prune target already inherits a quality-degraded prune record; "
-                "repeated prefix compression is not implemented."
+                "prefix prune target overlaps an already pruned block; "
+                "repeated compression of the same interval is not implemented."
             )
         return affected
 
@@ -1043,26 +1041,26 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
         self,
         token_ids: list[int],
         *,
-        range_start: int,
-        range_end: int,
+        range_start: int | None = None,
+        range_end: int | None = None,
+        ranges: list[tuple[int, int]] | None = None,
         keep_indices: torch.Tensor,
         policy: str,
         prune_id: str,
         allow_recompress: bool = False,
     ) -> dict[str, object]:
-        """Commit one cross-layer token mask to an idle radix-tree interval."""
-        range_start = int(range_start)
-        range_end = int(range_end)
+        """Commit a shared mask indexed into the sorted, packed interval union."""
+        intervals = normalize_prefix_prune_ranges(
+            token_count=len(token_ids), block_size=self.prefix_cache_block_size,
+            range_start=range_start, range_end=range_end, ranges=ranges,
+        )
         affected = self.validate_prefix_cache_prune_target(
-            token_ids,
-            range_start=range_start,
-            range_end=range_end,
-            allow_recompress=allow_recompress,
+            token_ids, ranges=intervals, allow_recompress=allow_recompress,
         )
         prefix_cache = self._require_prefix_cache()
         block_size = int(self.prefix_cache_block_size)
-
-        width = range_end - range_start
+        width = sum(right - left for left, right in intervals)
+        # One host transfer for all interval selections, not one per block/range.
         selected = sorted({int(index) for index in keep_indices.detach().cpu().tolist()})
         if any(index < 0 or index >= width for index in selected):
             raise ValueError("prefix prune keep mask contains an out-of-range token index.")
@@ -1070,78 +1068,86 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
             raise ValueError("prefix prune keep mask contains duplicate token indices.")
         selected_set = set(selected)
 
-        plans: list[tuple[PrefixCacheBlock, tuple[int, ...], torch.Tensor | None, torch.Tensor | None]] = []
-        freed_slots = 0
+        plans = []
+        resident_slots = []
+        keep_positions: list[int] = []
+        drop_positions: list[int] = []
+        slot_cursor = 0
         for relative_block_idx, block in enumerate(affected):
             payload = self._standard_payload(block)
             old_offsets = (
-                tuple(range(block_size))
-                if payload.retained_offsets is None
+                tuple(range(block_size)) if payload.retained_offsets is None
                 else tuple(int(offset) for offset in payload.retained_offsets)
             )
             block_base = relative_block_idx * block_size
             new_offsets = tuple(
-                offset
-                for offset in old_offsets
-                if block_base + offset in selected_set
+                offset for offset in old_offsets if block_base + offset in selected_set
             )
-            old_slots = payload.token_slots
-            kept_slots = None
-            dropped_slots = None
             if block.residency.device_present:
-                if not isinstance(old_slots, torch.Tensor) or int(old_slots.numel()) != len(old_offsets):
+                old_slots = payload.token_slots
+                if not isinstance(old_slots, torch.Tensor) or old_slots.numel() != len(old_offsets):
                     raise RuntimeError(
                         "prefix prune found inconsistent Standard device payload: "
-                        f"block={block.stable_block_id.hex()[:16]} "
-                        f"slots={None if old_slots is None else int(old_slots.numel())} "
-                        f"offsets={len(old_offsets)}."
+                        f"block={block.stable_block_id.hex()[:16]} offsets={len(old_offsets)}."
                     )
-                keep_positions = [
-                    position
-                    for position, offset in enumerate(old_offsets)
-                    if offset in set(new_offsets)
-                ]
-                drop_positions = [
-                    position
-                    for position, offset in enumerate(old_offsets)
-                    if offset not in set(new_offsets)
-                ]
-                kept_slots = old_slots[
-                    torch.tensor(keep_positions, dtype=torch.long, device=old_slots.device)
-                ].clone()
-                dropped_slots = old_slots[
-                    torch.tensor(drop_positions, dtype=torch.long, device=old_slots.device)
-                ].clone()
-                freed_slots += len(drop_positions)
-            plans.append((block, new_offsets, kept_slots, dropped_slots))
+                new_set = set(new_offsets)
+                keep_positions.extend(
+                    slot_cursor + i for i, offset in enumerate(old_offsets) if offset in new_set
+                )
+                drop_positions.extend(
+                    slot_cursor + i for i, offset in enumerate(old_offsets) if offset not in new_set
+                )
+                resident_slots.append(old_slots)
+                slot_cursor += len(old_offsets)
+            plans.append((block, new_offsets))
 
-        # All validation and survivor tensors are prepared before allocator state mutates.
-        for block, new_offsets, kept_slots, dropped_slots in plans:
+        # Prepare all tensors before mutation. Gather/release once even for B=1.
+        kept_slots = dropped_slots = None
+        if resident_slots:
+            all_slots = torch.cat(resident_slots)
+            kept_slots = all_slots[
+                torch.tensor(keep_positions, dtype=torch.long, device=all_slots.device)
+            ]
+            dropped_slots = all_slots[
+                torch.tensor(drop_positions, dtype=torch.long, device=all_slots.device)
+            ]
+        records = []
+        block_cursor = 0
+        created_at = time.time()
+        for left, right in intervals:
+            size = right - left
+            retained = sum(
+                len(offsets)
+                for _, offsets in plans[block_cursor : block_cursor + size // block_size]
+            )
+            records.append((affected[block_cursor], PrefixPruneRecord(
+                prune_id=prune_id, policy=policy, range_start=left, range_end=right,
+                original_tokens=size, retained_tokens=retained, created_at=created_at,
+            )))
+            block_cursor += size // block_size
+
+        # Failures in validation or tensor preparation leave every interval intact.
+        kept_cursor = 0
+        for block, new_offsets in plans:
             payload = self._standard_payload(block)
             payload.retained_offsets = new_offsets
             if block.residency.device_present:
-                assert kept_slots is not None and dropped_slots is not None
-                payload.token_slots = kept_slots
-                self._return_prefix_device_slots(dropped_slots)
-
-        record = PrefixPruneRecord(
-            prune_id=str(prune_id),
-            policy=policy,  # type: ignore[arg-type]
-            range_start=range_start,
-            range_end=range_end,
-            original_tokens=width,
-            retained_tokens=len(selected),
-            created_at=time.time(),
-        )
-        affected[0].prune_record = record
+                assert kept_slots is not None
+                payload.token_slots = kept_slots[kept_cursor : kept_cursor + len(new_offsets)]
+                kept_cursor += len(new_offsets)
+        if dropped_slots is not None:
+            self._return_prefix_device_slots(dropped_slots)
+        for block, record in records:
+            block.prune_record = record
         prefix_cache.mark_payload_compacted(affected)
         return {
             "prune_id": str(prune_id),
             "policy": str(policy),
-            "range": [range_start, range_end],
+            "range": [intervals[0][0], intervals[-1][1]],
+            "ranges": [list(span) for span in intervals],
             "logical_tokens": width,
             "retained_tokens": len(selected),
-            "freed_device_slots": int(freed_slots),
+            "freed_device_slots": len(drop_positions),
             "affected_blocks": len(affected),
             "quality_degraded": True,
         }
@@ -1177,15 +1183,49 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
         self._prefix_prune_scoring = None
         if state is None or not isinstance(state.get("score"), torch.Tensor):
             raise RuntimeError("prefix-prune scoring forward produced no attention scores.")
-        return state["score"]  # type: ignore[return-value]
+        score = state["score"]
+        positions = state.get("logical_positions")
+        if positions is not None:
+            logical_score = score.new_zeros(int(state["query_end"]))
+            logical_score.index_copy_(0, positions, score)
+            return logical_score
+        return score
+
+    def _prefix_prune_physical_score_window(self):
+        state = self._prefix_prune_scoring
+        if "physical_window" in state:
+            return state["physical_window"]
+        row = self.seq_id_to_row[int(state["seq_id"])]
+        end = int(self.row_seq_lens[row])
+        query_len = int(state["query_end"]) - int(state["query_start"])
+        start = end - query_len
+        candidate = int(state["candidate_start"])
+        if end != int(state["query_end"]):
+            # Build this mapping once per maintenance forward, not per layer.
+            positions = []
+            for block in self.seq_id_to_prefix_blocks[int(state["seq_id"])]:
+                payload = self._standard_payload(block)
+                base = int(block.logical_block_idx) * self.prefix_cache_block_size
+                offsets = payload.retained_offsets
+                if offsets is None:
+                    positions.extend(range(base, base + self.prefix_cache_block_size))
+                else:
+                    positions.extend(base + offset for offset in offsets)
+            if len(positions) != start:
+                raise RuntimeError("Prefix scoring logical/physical mapping length mismatch.")
+            candidate = bisect_left(positions, candidate)
+            positions.extend(range(int(state["query_start"]), int(state["query_end"])))
+            state["logical_positions"] = torch.tensor(positions, dtype=torch.long, device=self.device)
+        state["physical_window"] = (start, end, candidate)
+        return state["physical_window"]
 
     def prefill_score_request(self, layer_idx, seqs):
         state = self._prefix_prune_scoring
         if state is None:
             return None
-        start, end = int(state["query_start"]), int(state["query_end"])
+        start, end, candidate = self._prefix_prune_physical_score_window()
         return PrefillScoreRequest(((start, end),), "probability",
-                                  int(state["candidate_start"]), end - start)
+                                  candidate, end - start)
 
     @torch.no_grad()
     def collect_prefill_attention_score(
@@ -1204,9 +1244,7 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
             return None
         if int(chunk_lens.numel()) != 1:
             raise RuntimeError("prefix-prune scoring requires a single maintenance request.")
-        query_start = int(state["query_start"])
-        query_end = int(state["query_end"])
-        candidate_start = int(state["candidate_start"])
+        query_start, query_end, candidate_start = self._prefix_prune_physical_score_window()
         if int(q.shape[0]) != query_end - query_start:
             raise RuntimeError(
                 "prefix-prune query window length mismatch: "
@@ -1217,14 +1255,11 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
                 "prefix-prune scoring requires explicit KV storage, got "
                 f"{type(view.payload).__name__}."
             )
-        context_len = int(view.meta.context_lens[0].item())
-        if context_len != query_end:
-            raise RuntimeError(
-                "prefix-prune scoring currently requires an unpruned dense target path: "
-                f"physical_context={context_len} logical_context={query_end}."
-            )
+        context_len = query_end
         if view.token_scores is not None:
             step_score = view.token_scores
+            if step_score.shape != (1, context_len):
+                raise RuntimeError("Prefix-prune score shape does not match physical context.")
         else:
             step_score = torch.zeros(
                 (1, context_len), dtype=torch.float32, device=q.device
@@ -1619,6 +1654,7 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
                     self._prefix_offload_step_h2d_operations.append(operation)
 
             cached_ranges = self.seq_id_to_cached_ranges.setdefault(seq.seq_id, [])
+            resident_slots = []
             resident_cursor = 0
             for block in chain:
                 payload = block.payload
@@ -1630,12 +1666,14 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
                     )
                 count = int(payload.token_slots.numel())
                 if count:
-                    end = resident_cursor + count
-                    self.buffer_req_to_token_slots[
-                        row_idx, resident_cursor:end
-                    ] = payload.token_slots
-                    cached_ranges.append((resident_cursor, end))
-                    resident_cursor = end
+                    resident_slots.append(payload.token_slots)
+                    resident_cursor += count
+            if resident_slots:
+                # Slots already preserve logical block/offset order. Copy the
+                # packed row once instead of launching one copy per block.
+                slots = torch.cat(resident_slots)
+                self.buffer_req_to_token_slots[row_idx, :resident_cursor] = slots
+                cached_ranges.append((0, resident_cursor))
 
             self.row_seq_lens[row_idx] = resident_cursor
             self.row_logical_lens[row_idx] = hit_len

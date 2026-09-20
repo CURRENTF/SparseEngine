@@ -847,21 +847,37 @@ class SweBenchLiteRunner:
         if prune_policy:
             if bool(args.chain_cache):
                 raise RunnerError("--prefix-prune-policy requires --no-chain-cache")
-            range_start = int(args.prefix_prune_range_start)
-            range_end = int(args.prefix_prune_range_end)
-            keep_tokens = int(args.prefix_prune_keep_tokens)
-            trigger_tokens = int(args.prefix_prune_trigger_tokens)
-            if (
-                range_start < 0
-                or range_end <= range_start
-                or range_start % 16
-                or range_end % 16
-            ):
-                raise RunnerError("prefix-prune range must be non-empty and 16-token aligned")
-            if not 0 <= keep_tokens < range_end - range_start:
-                raise RunnerError("prefix-prune keep tokens must be in [0, R-L)")
-            if trigger_tokens < range_end:
-                raise RunnerError("prefix-prune trigger must be at least range end")
+            if args.prefix_prune_target == "tool_results":
+                if prune_policy != "kvzip_global":
+                    raise RunnerError("Tool-result pruning requires --prefix-prune-policy=kvzip_global")
+                if not args.prefix_prune_tokenizer:
+                    raise RunnerError("Tool-result pruning requires --prefix-prune-tokenizer")
+                tokenizer_path = Path(args.prefix_prune_tokenizer).expanduser().resolve()
+                if not tokenizer_path.is_dir():
+                    raise RunnerError(f"Tokenizer directory does not exist: {tokenizer_path}")
+                args.prefix_prune_tokenizer = str(tokenizer_path)
+                if not math.isfinite(args.prefix_prune_keep_ratio) or not 0 <= args.prefix_prune_keep_ratio < 1:
+                    raise RunnerError("--prefix-prune-keep-ratio must be in [0, 1)")
+                if args.prefix_prune_trigger_tokens <= 0:
+                    raise RunnerError("--prefix-prune-trigger-tokens must be positive")
+            else:
+                range_start = int(args.prefix_prune_range_start)
+                range_end = int(args.prefix_prune_range_end)
+                keep_tokens = int(args.prefix_prune_keep_tokens)
+                trigger_tokens = int(args.prefix_prune_trigger_tokens)
+                if (
+                    range_start < 0
+                    or range_end <= range_start
+                    or range_start % 16
+                    or range_end % 16
+                ):
+                    raise RunnerError("prefix-prune range must be non-empty and 16-token aligned")
+                if not 0 <= keep_tokens < range_end - range_start:
+                    raise RunnerError("prefix-prune keep tokens must be in [0, R-L)")
+                if trigger_tokens < range_end:
+                    raise RunnerError("prefix-prune trigger must be at least range end")
+        elif args.prefix_prune_target != "range":
+            raise RunnerError("--prefix-prune-target requires --prefix-prune-policy")
         _reject_secrets(
             {"api_base": args.api_base, "mini_command": args.mini_command},
             source=Path("<command-line arguments>"),
@@ -942,6 +958,8 @@ class SweBenchLiteRunner:
                 )
             )
         python_path.append(str(self.repo_root))
+        if getattr(self.args, "prefix_prune_target", "range") == "tool_results":
+            python_path.append(str(self.repo_root / "src"))
         if env.get("PYTHONPATH"):
             python_path.append(env["PYTHONPATH"])
         env["PYTHONPATH"] = os.pathsep.join(python_path)
@@ -976,9 +994,18 @@ class SweBenchLiteRunner:
             "SPARSEENGINE_PREFIX_PRUNE_RANGE_END",
             "SPARSEENGINE_PREFIX_PRUNE_KEEP_TOKENS",
             "SPARSEENGINE_PREFIX_PRUNE_EVENTS",
+            "SPARSEENGINE_PREFIX_PRUNE_TARGET",
+            "SPARSEENGINE_PREFIX_PRUNE_TOKENIZER",
+            "SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO",
         )
         prune_policy = getattr(self.args, "prefix_prune_policy", None)
+        for key in prune_env_vars:
+            env.pop(key, None)
         if prune_policy:
+            env["SPARSEENGINE_PREFIX_PRUNE_TARGET"] = self.args.prefix_prune_target
+            if self.args.prefix_prune_target == "tool_results":
+                env["SPARSEENGINE_PREFIX_PRUNE_TOKENIZER"] = str(self.args.prefix_prune_tokenizer)
+                env["SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO"] = str(self.args.prefix_prune_keep_ratio)
             env["SPARSEENGINE_PREFIX_PRUNE_POLICY"] = str(prune_policy)
             env["SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS"] = str(
                 self.args.prefix_prune_trigger_tokens
@@ -995,9 +1022,6 @@ class SweBenchLiteRunner:
             env["SPARSEENGINE_PREFIX_PRUNE_EVENTS"] = str(
                 self.run_dir / "prefix_prune_events.jsonl"
             )
-        else:
-            for key in prune_env_vars:
-                env.pop(key, None)
         guard_env_vars = (
             "SPARSEENGINE_DOCKER_WRITABLE_LAYER_LIMIT_BYTES",
             "SPARSEENGINE_DOCKER_WRITABLE_LAYER_POLL_SECONDS",
@@ -1073,6 +1097,23 @@ class SweBenchLiteRunner:
         self.extra_mini_config_snapshots = snapshots
 
     def _semantic_config(self, server_manifest: dict[str, Any] | None) -> dict[str, Any]:
+        prune_config = None
+        if getattr(self.args, "prefix_prune_policy", None):
+            prune_config = {
+                "policy": self.args.prefix_prune_policy,
+                "trigger_tokens": self.args.prefix_prune_trigger_tokens,
+            }
+            if self.args.prefix_prune_target == "tool_results":
+                prune_config.update(
+                    target="tool_results", tokenizer=self.args.prefix_prune_tokenizer,
+                    keep_ratio=self.args.prefix_prune_keep_ratio,
+                    schedule="each_new_tool_turn", trigger_tokens=None,
+                )
+            else:
+                prune_config.update(
+                    range=[self.args.prefix_prune_range_start, self.args.prefix_prune_range_end],
+                    keep_tokens=self.args.prefix_prune_keep_tokens,
+                )
         return {
             "run_id": self.run_id,
             "dataset": self.args.dataset,
@@ -1097,19 +1138,7 @@ class SweBenchLiteRunner:
             "enable_thinking": self.args.enable_thinking,
             "preserve_thinking": self.args.preserve_thinking,
             "chain_cache": bool(self.args.chain_cache),
-            "prefix_prune": (
-                {
-                    "policy": self.args.prefix_prune_policy,
-                    "trigger_tokens": self.args.prefix_prune_trigger_tokens,
-                    "range": [
-                        self.args.prefix_prune_range_start,
-                        self.args.prefix_prune_range_end,
-                    ],
-                    "keep_tokens": self.args.prefix_prune_keep_tokens,
-                }
-                if getattr(self.args, "prefix_prune_policy", None)
-                else None
-            ),
+            "prefix_prune": prune_config,
             "docker_writable_layer_limit_gib": self.args.docker_writable_layer_limit_gib,
             "docker_writable_layer_poll_seconds": self.args.docker_writable_layer_poll_seconds,
             "seed": None,
@@ -1789,7 +1818,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Prune each MiniSWE radix-tree path once and verify reuse on its next turn.",
     )
-    parser.add_argument("--prefix-prune-trigger-tokens", type=int, default=4096)
+    parser.add_argument("--prefix-prune-target", choices=("range", "tool_results"), default="range")
+    parser.add_argument("--prefix-prune-tokenizer", help="Local tokenizer directory matching the server; required for tool_results.")
+    parser.add_argument("--prefix-prune-keep-ratio", type=float, default=0.5,
+                        help="Shared retention fraction of aligned tool-body tokens; used only for tool_results.")
+    parser.add_argument("--prefix-prune-trigger-tokens", type=int, default=4096,
+                        help="Cached-length trigger for static range mode; ignored for tool_results.")
     parser.add_argument("--prefix-prune-range-start", type=int, default=512)
     parser.add_argument("--prefix-prune-range-end", type=int, default=4096)
     parser.add_argument("--prefix-prune-keep-tokens", type=int, default=1792)

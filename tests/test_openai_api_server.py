@@ -2001,15 +2001,27 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 _TestRequest(app),
             )
             status_response = await status_endpoint("job-1", _TestRequest(app))
+            legacy_kwargs = engine.kwargs
+            multi_response = await start_endpoint(
+                api_server.PrefixCachePruneRequest(
+                    token_ids=[1, 2, 3, 4, 5, 6],
+                    ranges=[(0, 1), (2, 3), (4, 5)], keep_tokens=1, policy="kvzip_global",
+                ),
+                _TestRequest(app),
+            )
         finally:
             app.state.dispatcher.close()
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(json.loads(response.body)["status"], "queued")
         self.assertEqual(json.loads(status_response.body)["status"], "completed")
-        self.assertEqual(engine.kwargs["range_start"], 0)
-        self.assertEqual(engine.kwargs["range_end"], 4)
+        self.assertEqual(legacy_kwargs["range_start"], 0)
+        self.assertEqual(legacy_kwargs["range_end"], 4)
         self.assertEqual(engine.kwargs["policy"], "kvzip_global")
+        self.assertEqual(multi_response.status_code, 202)
+        self.assertEqual(engine.kwargs["ranges"], [(0, 1), (2, 3), (4, 5)])
+        self.assertIsNone(engine.kwargs["range_start"])
+        self.assertIsNone(engine.kwargs["range_end"])
 
     async def test_prefix_cache_match_accepts_chat_messages(self):
         from sparseengine.entrypoints.openai import api_server

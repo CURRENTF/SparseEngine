@@ -205,6 +205,7 @@ def _write_request_records(
     raw_output_path: Path,
     batch_start_s: float,
     block_size: int,
+    batch_wall_time_s: float | None = None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     with per_turn_path.open("a", encoding="utf-8") as per_turn, raw_output_path.open("a", encoding="utf-8") as raw_output:
@@ -251,6 +252,7 @@ def _write_request_records(
                 "ttft_s": float(first_token_s - state.add_s),
                 "latency_s": float(finish_s - state.add_s),
                 "batch_elapsed_s": float(finish_s - batch_start_s),
+                "batch_wall_time_s": batch_wall_time_s,
                 "error_message": error_message,
                 "chain_id": state.chain_id,
                 "chain_status": state.chain_status,
@@ -799,11 +801,14 @@ def _run_request_batch(
     block_size: int,
     max_steps: int,
     session_chain_ids: dict[int, str] | None = None,
+    synchronize_step_timing: bool = False,
 ) -> list[dict[str, Any]]:
     from sparseengine import SamplingParams
     import torch
 
     states: dict[int, RequestState] = {}
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     batch_start_s = time.perf_counter()
     active = set(states)
     step_count = 0
@@ -861,7 +866,7 @@ def _run_request_batch(
                 raise RuntimeError(f"Exceeded max_steps={max_steps} while running active requests.")
             step_count += 1
             _finished_outputs, num_tokens = llm.step()
-            if torch.cuda.is_available():
+            if synchronize_step_timing and torch.cuda.is_available():
                 torch.cuda.synchronize()
             now_s = time.perf_counter()
 
@@ -927,6 +932,9 @@ def _run_request_batch(
             )
             next_failed_seq_id -= 1
 
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    batch_wall_time_s = time.perf_counter() - batch_start_s
     records = _write_request_records(
         states=states,
         tokenizer=tokenizer,
@@ -934,6 +942,7 @@ def _run_request_batch(
         raw_output_path=raw_output_path,
         batch_start_s=batch_start_s,
         block_size=int(block_size),
+        batch_wall_time_s=batch_wall_time_s,
     )
     if failure is not None:
         raise failure
@@ -1013,6 +1022,7 @@ def _run_multiturn_workload(
             raw_output_path=raw_output_path,
             block_size=block_size,
             max_steps=int(args.max_steps_per_round),
+            synchronize_step_timing=bool(getattr(args, "synchronize_step_timing", False)),
             session_chain_ids=session_chain_ids,
         )
         records.extend(round_records)
@@ -1075,8 +1085,33 @@ def _run_shared_prefix_workload(
                 raw_output_path=raw_output_path,
                 block_size=block_size,
                 max_steps=int(args.max_steps_per_round),
+                synchronize_step_timing=bool(getattr(args, "synchronize_step_timing", False)),
             )
         )
+
+    keep_ratio = getattr(args, "shared_prefix_keep_ratio", None)
+    if keep_ratio is not None:
+        import torch
+
+        torch.cuda.synchronize()
+        prune_start = time.perf_counter()
+        ranges = json.loads(args.shared_prefix_prune_ranges)
+        width = sum(right - left for left, right in ranges)
+        job = llm.prefix_cache_prune_start(
+            shared_prefix, ranges=ranges, keep_tokens=int(width * keep_ratio),
+            policy="kvzip_global", observation_tokens=64,
+            score_chunk_size=1024, prev_postfix_size=32,
+        )
+        if not llm.run_pending_prefix_prune():
+            raise RuntimeError("Prefix prune job was not executed.")
+        job = llm.prefix_cache_prune_status(job["prune_id"])
+        torch.cuda.synchronize()
+        prune_elapsed_s = time.perf_counter() - prune_start
+        (per_turn_path.parent / "prefix_prune.json").write_text(
+            json.dumps({"job": job, "elapsed_s": prune_elapsed_s}, indent=2) + "\n"
+        )
+        if job["status"] != "completed":
+            raise RuntimeError(f"Prefix prune failed: {job}")
 
     specs: list[RequestSpec] = []
     for req_idx in range(int(args.shared_prompts)):
@@ -1105,6 +1140,7 @@ def _run_shared_prefix_workload(
             raw_output_path=raw_output_path,
             block_size=block_size,
             max_steps=int(args.max_steps_per_round),
+            synchronize_step_timing=bool(getattr(args, "synchronize_step_timing", False)),
         )
     )
     return records
@@ -1339,7 +1375,18 @@ def _run_case_worker(case_name: str, args_dict: dict[str, Any], case_dir: str) -
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        elapsed_s = time.perf_counter() - started_s
+        startup_and_workloads_elapsed_s = time.perf_counter() - started_s
+        # Each round is a complete batch; count its wall time once. Prefix
+        # warmup and model loading are excluded, while requested pruning is included.
+        batch_windows = {
+            (record["workload"], record["turn"]): record["batch_wall_time_s"]
+            for record in records if record["phase"] != "warmup"
+        }
+        elapsed_s = sum(batch_windows.values())
+        # A successful pruning workload writes this artifact during this run.
+        if "shared_prefix" in workloads and args.shared_prefix_keep_ratio is not None:
+            prune_path = case_dir_path / "prefix_prune.json"
+            elapsed_s += json.loads(prune_path.read_text())["elapsed_s"]
         peak_memory_gb = (
             torch.cuda.max_memory_allocated() / (1024**3) if torch.cuda.is_available() else 0.0
         )
@@ -1358,6 +1405,10 @@ def _run_case_worker(case_name: str, args_dict: dict[str, Any], case_dir: str) -
             decode_graph_before=decode_graph_before,
             decode_graph_after=decode_graph_after,
         )
+        summary["metric_contract"] = "prefix_batch_wall_v2"
+        summary["timing_scope"] = "request_admission_to_batch_drained_plus_prune_excluding_cache_warmup_and_model_load"
+        summary["synchronize_step_timing"] = args.synchronize_step_timing
+        summary["startup_and_workloads_elapsed_s"] = startup_and_workloads_elapsed_s
         (case_dir_path / "aggregate_metrics.json").write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
@@ -1521,6 +1572,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shared_prefix_len", type=int, default=16384)
     parser.add_argument("--shared_suffix_len", type=int, default=2048)
     parser.add_argument("--shared_suffix_min_len", type=int, default=None)
+    parser.add_argument("--shared_prefix_keep_ratio", type=float, default=None)
+    parser.add_argument("--shared_prefix_prune_ranges", default=None,
+                        help="JSON list of left-closed/right-open token spans in the shared prefix.")
+    parser.add_argument("--synchronize_step_timing", action="store_true",
+                        help="Diagnostic only: synchronize after every engine step.")
 
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.65)
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
@@ -1563,6 +1619,20 @@ def main() -> None:
         raise ValueError(f"Unsupported workloads: {sorted(unsupported_workloads)}")
     if args.output_len < 2:
         raise ValueError("--output_len must be >= 2 so per-request prefix-hit metadata remains observable.")
+    if args.shared_prefix_keep_ratio is not None:
+        if not 0 <= args.shared_prefix_keep_ratio < 1:
+            raise ValueError("--shared_prefix_keep_ratio must be in [0, 1).")
+        if "shared_prefix" not in workloads or any(case not in {"prefix_full", "prefix_omnikv"} for case in cases):
+            raise ValueError("Shared-prefix pruning requires shared_prefix and prefix_full/prefix_omnikv cases.")
+        if not args.shared_prefix_prune_ranges:
+            raise ValueError("Pruning requires explicit --shared_prefix_prune_ranges.")
+        from sparseengine.engine.prefix_prune import normalize_prefix_prune_ranges
+        normalize_prefix_prune_ranges(
+            token_count=args.shared_prefix_len, block_size=args.prefix_cache_block_size,
+            ranges=json.loads(args.shared_prefix_prune_ranges),
+        )
+    elif args.shared_prefix_prune_ranges:
+        raise ValueError("--shared_prefix_prune_ranges requires --shared_prefix_keep_ratio.")
     _validate_sparse_path_requirements(args, cases, workloads)
     if args.cuda_device is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.cuda_device)

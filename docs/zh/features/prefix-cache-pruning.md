@@ -35,3 +35,33 @@ Content-Type: application/json
 `observation_tokens`，KVzip 可设置 `score_chunk_size` 和
 `prev_postfix_size`。`allow_recompress` 目前是保留字段并会显式失败，因为
 仅依靠已压紧的树无法重新打分已经删除的 KV。
+
+
+## 多区间共用一个预算
+
+使用 `ranges` 替代 `range_start` / `range_end`，可在一个任务中提交任意数量的
+块对齐半开区间。例如，block size 为 1 时：
+
+```json
+{
+  "token_ids": [1, 2, 3, 4, 5, 6, 7, 8],
+  "ranges": [[0, 2], [3, 5], [6, 8]],
+  "keep_tokens": 3,
+  "policy": "kvzip_global"
+}
+```
+
+这里从区间并集的六个 token 中**总共保留三个**。空隙中的 token 保持不变，
+不占用预算。区间会排序，相邻区间会合并；重叠、空区间、越界及未对齐输入会报错。
+两种区间输入格式不能混用，旧单区间请求继续兼容。KVzip 的预算为零时直接释放
+并集内全部物理 KV，无需重建打分，但逻辑 radix 路径仍保留。
+
+所有区间基于截至最大右端点的同一份未剪枝前缀打分。KVzip 在每个区间内分段
+重建；SnapKV 使用一个尾部观察窗口，其中属于区间并集的 token 必须保留且计入
+总预算。全部打分和 payload 准备结束后才修改缓存，不会逐区间重复压缩。
+目标区间内的块必须未被剪枝，但路径上更早的块可以已经压缩。支持后续不重叠
+区间的独立剪枝；`allow_recompress` 仍不支持。
+
+任务状态和结果返回规范化的 `ranges`；兼容字段 `range` 只表示包含这些区间的
+最小外包区间，其中可能包含空隙。结果的 `logical_tokens` 为各区间长度之和。
+每个区间根记录该区间的原始和保留 token 数，共用同一个任务 ID。
