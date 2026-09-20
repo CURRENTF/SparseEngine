@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import torch
 
 from sparseengine.engine.cache_manager.base import AttentionViewMeta, PrefillScoreRequest
+from sparseengine.kernels.triton.mla.pack_keys import pack_mla_keys
 from sparseengine.kernels.triton.mla.prefill import attention_partial, merge_partial
 from sparseengine.kernels.triton.mla.prefill_score import score_block
 from sparseengine.utils.profiler import profiler
@@ -160,10 +161,10 @@ class ChunkedMlaPrefill:
 
     @staticmethod
     def gather(payload, slots):
-        index = slots.long()
+        # index_select accepts the cache manager's native int32 slot indices.
         return (
-            payload.latent_cache.index_select(0, index).squeeze(1),
-            payload.rope_cache.index_select(0, index).squeeze(1),
+            payload.latent_cache.index_select(0, slots).squeeze(1),
+            payload.rope_cache.index_select(0, slots).squeeze(1),
         )
 
     def expand(self, latent, rope, project):
@@ -172,11 +173,7 @@ class ChunkedMlaPrefill:
             -1, self.spec.local_q_heads, nope + self.spec.value_head_dim
         )
         kn, v = expanded.split((nope, self.spec.value_head_dim), dim=-1)
-        k = torch.empty(
-            (*kn.shape[:2], self.spec.qk_head_dim), dtype=kn.dtype, device=kn.device
-        )
-        k[..., :nope].copy_(kn)
-        k[..., nope:].copy_(rope[:, None, :])
+        k = pack_mla_keys(kn, rope)
         return k, v
 
     def attention(self, q, k, v, cu_q, cu_k, max_q, max_k, causal):
