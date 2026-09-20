@@ -279,15 +279,16 @@ class Qwen35FullAttention(nn.Module):
         self.q_norm = Qwen35RMSNorm(self.head_dim, eps=float(getattr(config, "rms_norm_eps", 1.0e-6)))
         self.k_norm = Qwen35RMSNorm(self.head_dim, eps=float(getattr(config, "rms_norm_eps", 1.0e-6)))
 
-    def _o_proj_chunked(self, x: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
+    def _o_proj_chunked(
+        self, x: torch.Tensor, chunk_buffer: torch.Tensor
+    ) -> torch.Tensor:
         chunk_size = int(self.proj_chunk_size)
         if int(x.shape[0]) <= chunk_size:
-            out.copy_(self.o_proj(x))
-            return out
+            return self.o_proj(x)
         for start in range(0, int(x.shape[0]), chunk_size):
             end = min(start + chunk_size, int(x.shape[0]))
-            out[start:end].copy_(self.o_proj(x[start:end]))
-        return out
+            chunk_buffer[start:end].copy_(self.o_proj(x[start:end]))
+        return chunk_buffer
 
     def forward(self, positions: torch.Tensor, hidden_states: torch.Tensor) -> torch.Tensor:
         qkv_gate = self.qkv_gate_proj(hidden_states)
@@ -813,15 +814,16 @@ class Qwen35LinearAttention(nn.Module):
         )
         return core_attn_out, z
 
-    def _out_proj_chunked(self, x: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
+    def _out_proj_chunked(
+        self, x: torch.Tensor, chunk_buffer: torch.Tensor
+    ) -> torch.Tensor:
         chunk_size = int(self.proj_chunk_size)
         if int(x.shape[0]) <= chunk_size:
-            out.copy_(self.out_proj(x))
-            return out
+            return self.out_proj(x)
         for start in range(0, int(x.shape[0]), chunk_size):
             end = min(start + chunk_size, int(x.shape[0]))
-            out[start:end].copy_(self.out_proj(x[start:end]))
-        return out
+            chunk_buffer[start:end].copy_(self.out_proj(x[start:end]))
+        return chunk_buffer
 
     def forward(self, positions: torch.Tensor, hidden_states: torch.Tensor) -> torch.Tensor:
         del positions

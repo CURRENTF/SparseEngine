@@ -201,15 +201,18 @@ class Glm4MoeLiteAttention(nn.Module):
             output[start:end].copy_(self.kv_b_proj(latent[start:end]))
         return output
 
-    def _project_output(self, value_output: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
+    def _project_output(
+        self, value_output: torch.Tensor, chunk_buffer: torch.Tensor
+    ) -> torch.Tensor:
         flattened = value_output.flatten(1, -1)
         if int(flattened.shape[0]) <= self.proj_chunk_size:
-            out.copy_(self.o_proj(flattened))
-            return out
+            return self.o_proj(flattened)
+        # Only chunked projection needs the old hidden-state storage to assemble
+        # a complete result. Callers consume the returned tensor in either case.
         for start in range(0, int(flattened.shape[0]), self.proj_chunk_size):
             end = min(start + self.proj_chunk_size, int(flattened.shape[0]))
-            out[start:end].copy_(self.o_proj(flattened[start:end]))
-        return out
+            chunk_buffer[start:end].copy_(self.o_proj(flattened[start:end]))
+        return chunk_buffer
 
     def _decode_absorbed_query(self, q_nope: torch.Tensor) -> torch.Tensor:
         kv_b_weight = self.kv_b_proj.absorbed_weight.view(

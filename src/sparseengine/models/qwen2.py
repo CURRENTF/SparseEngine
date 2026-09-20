@@ -94,15 +94,16 @@ class Qwen2Attention(nn.Module):
             self.num_kv_heads,
         )
 
-    def _o_proj_chunked(self, x: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
+    def _o_proj_chunked(
+        self, x: torch.Tensor, chunk_buffer: torch.Tensor
+    ) -> torch.Tensor:
         chunk_size = int(self.proj_chunk_size)
         if int(x.shape[0]) <= chunk_size:
-            out.copy_(self.o_proj(x))
-            return out
+            return self.o_proj(x)
         for start in range(0, int(x.shape[0]), chunk_size):
             end = min(start + chunk_size, int(x.shape[0]))
-            out[start:end].copy_(self.o_proj(x[start:end]))
-        return out
+            chunk_buffer[start:end].copy_(self.o_proj(x[start:end]))
+        return chunk_buffer
 
     def forward(
         self,

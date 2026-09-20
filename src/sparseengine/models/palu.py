@@ -110,6 +110,8 @@ class PaluSelfAttention(nn.Module):
         weights = (self.key_up, None if self.k_norm is None else self.k_norm.weight,
                    self.rotary_emb.cos_sin_cache, 0. if self.k_norm is None else self.k_norm.eps)
         out = self.attn(q, zk.view(-1, self.groups, self.rk), zv.view(-1, self.groups, self.rv), positions, weights).flatten(1)
+        if out.shape[0] <= self.proj_chunk_size:
+            return self.o_proj(out)
         for start in range(0, out.shape[0], self.proj_chunk_size):
             end = min(start + self.proj_chunk_size, out.shape[0])
             hidden_states[start:end].copy_(self.o_proj(out[start:end]))
