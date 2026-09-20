@@ -6,6 +6,10 @@ canonical benchmark entrypoints; they do not implement a separate timing engine.
 Supply machine-specific model, environment, checkout, and output paths at runtime.
 Large logs, token outputs, and checkpoints remain outside Git.
 
+- [Radix prefix pruning by conversation region](radix_prefix_prune/README.md):
+  region annotations and shared-budget multi-range pruning experiment design.
+- [GLM-4.7-Flash conservative concurrency](glm47_conservative_concurrency/README.md):
+  H100 BF16 and PRO6000 FP8, per-context operating points and recorded results.
 - [128K input / 2K output decode capacity](sparse_decode_efficiency/README.md):
   two models, five methods, exact concurrency boundaries, linear/log-y figures.
 - [SparseEngine vs Vortex](sparseengine_vs_vortex/README.md): guarded single-card

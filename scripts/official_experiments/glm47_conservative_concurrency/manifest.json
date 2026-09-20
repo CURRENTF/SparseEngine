@@ -1,0 +1,35 @@
+{
+  "experiment": "glm47_conservative_concurrency",
+  "execution_status": "completed",
+  "completed_points": 45,
+  "failed_points": 0,
+  "maximum_verified": false,
+  "local_identity": {
+    "repo": "/home/haojitai/projects/Sparse-vLLM-glm-bs1-bf16-20260918",
+    "gpus": "7",
+    "git_head": "a276e3134c812ae524f95ff5ff31a1d8069210e2",
+    "git_status": " M benchmark/efficiency/bench_probe.py\n M benchmark/efficiency/workload.py\n M benchmark/microbench.py\n M scripts/official_experiments/sparse_decode_efficiency/plot_decode_capacity.py\n M scripts/official_experiments/sparse_decode_efficiency/sweep_decode_capacity.py\n?? scripts/official_experiments/sparse_decode_efficiency/run_context_capacity.py\n",
+    "gpu_inventory": "7, GPU-a1f5d627-2c6d-6c7e-f785-72d4e6f2d21c, NVIDIA H100 80GB HBM3, 81559 MiB\n"
+  },
+  "local_root": "/data2/haojitai/outputs/Sparse-vLLM/glm47-bf16-maxconcurrency-gpu7-20260919/conservative01",
+  "local_results_sha256": "de399fd8fe252fee7a4de5beba7cc6e6cd87cc8ae2b539d9d5ad33adc372a2ae",
+  "remote_root": "/root/autodl-fs/outputs/Sparse-vLLM/glm47-fp8-maxconcurrency-20260919/conservative01",
+  "remote_last_verified": "2026-09-19T20:38:53+08:00",
+  "remote_execution_status": "completed",
+  "remote_failures": [],
+  "remote_174k_status": "skipped_by_policy",
+  "remote_archive_status": "complete aggregate export; raw logs and token outputs retained remotely",
+  "missing_export_fields": {},
+  "remote_precision": "full precision from downloaded results.jsonl",
+  "remote_aggregate_local_copy": "/data2/haojitai/outputs/Sparse-vLLM/glm47-conservative-export-20260919/pro6000/results.jsonl",
+  "remote_results_sha256": "4064e20725464aa1b3380228e7b7e2367124468d9785ca5648667fb9bb018105",
+  "remote_identity": {
+    "repo": "/root/autodl-tmp/Sparse-vLLM-glm-bs1-20260918",
+    "gpus": "0",
+    "git_head": "a276e3134c812ae524f95ff5ff31a1d8069210e2",
+    "git_status": " M benchmark/efficiency/bench_probe.py\n M benchmark/efficiency/workload.py\n M benchmark/microbench.py\n M scripts/official_experiments/sparse_decode_efficiency/plot_decode_capacity.py\n M scripts/official_experiments/sparse_decode_efficiency/sweep_decode_capacity.py\n M src/sparsevllm/configs/profiles/full_attention_layers.json\n?? scripts/official_experiments/sparse_decode_efficiency/run_context_capacity.py\n",
+    "gpu_inventory": "0, GPU-d1ed0e02-0a08-3378-b29a-f1f63c54b10f, NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB\n"
+  },
+  "export_updated_at": "2026-09-19T21:19:34.008357+08:00",
+  "validation": "45 unique points; remote20 success, fixed input/output lengths,3 repeats, zero preemptions; previously displayed values agree within rounding"
+}
