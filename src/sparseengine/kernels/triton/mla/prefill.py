@@ -146,6 +146,9 @@ def _merge(
     L,
     P,
     PL,
+    DEST,
+    d0: tl.constexpr,
+    d1: tl.constexpr,
     o0: tl.constexpr,
     o1: tl.constexpr,
     l0,
@@ -183,19 +186,28 @@ def _merge(
     ).to(tl.float32)
     result = old * (wa / denom)[:, None] + partial * (wb / denom)[:, None]
     tl.store(
-        O + qi[:, None] * o0 + head[:, None] * o1 + d[None, :],
+        DEST + qi[:, None] * d0 + head[:, None] * d1 + d[None, :],
         result,
         valid[:, None] & (d[None, :] < D),
     )
     tl.store(L + head * l0 + qi * l1, safe + tl.log(total), valid)
 
 
-def merge_partial(output, lse, partial, partial_lse):
+def merge_partial(output, lse, partial, partial_lse, *, destination=None):
+    """Merge in FP32, optionally converting only when writing the destination.
+
+    A separate destination lets the first/last history merge initialize/finalize
+    the accumulator without a standalone full-output dtype conversion.
+    """
+    if destination is None:
+        destination = output
     _merge[(triton.cdiv(output.shape[0] * output.shape[1], 8),)](
         output,
         lse,
         partial,
         partial_lse,
+        destination,
+        *destination.stride()[:2],
         *output.stride()[:2],
         *lse.stride(),
         *partial.stride()[:2],

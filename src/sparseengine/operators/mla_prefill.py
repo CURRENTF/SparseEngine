@@ -22,6 +22,7 @@ class PrefillPlan:
     current_slots: torch.Tensor
     history_chunks: tuple[tuple[int, int, int, torch.Tensor], ...]
     request_cu_q: tuple[torch.Tensor, ...]
+    max_merge_tokens: int
 
 
 def estimate_mla_prefill_workspace_bytes(
@@ -131,6 +132,7 @@ class ChunkedMlaPrefill:
         ):
             raise ValueError("Invalid MLA prefill request packing.")
         current_slots, history, request_cu = [], [], []
+        max_merge_tokens = 0
         for i, (row, context) in enumerate(zip(rows, contexts)):
             qn = starts[i + 1] - starts[i]
             if qn <= 0 or context < qn or context > meta.active_slots.shape[1]:
@@ -138,6 +140,8 @@ class ChunkedMlaPrefill:
             if not 0 <= row < meta.active_slots.shape[0]:
                 raise ValueError("Invalid MLA request row.")
             cached = context - qn
+            if cached > self.chunk_size:
+                max_merge_tokens = max(max_merge_tokens, qn)
             current_slots.append(meta.active_slots[row, cached:context])
             request_cu.append(
                 torch.tensor([0, qn], dtype=torch.int32, device=cu_q.device)
@@ -156,6 +160,7 @@ class ChunkedMlaPrefill:
             torch.cat(current_slots),
             tuple(history),
             tuple(request_cu),
+            max_merge_tokens,
         )
         return self.plan
 
@@ -243,10 +248,15 @@ class ChunkedMlaPrefill:
                     a, b = plan.query_starts[i : i + 2]
                     scorer.consume(i, context - (b - a), k[a:b], mode="logits")
         del latent, rope, k, v
-        if plan.history_chunks:
-            # FP32 accumulation avoids one BF16 rounding per history block.
-            with profiler.trace("mla.prefill.accumulator_cast"):
-                output = output.float()
+        # History is processed request by request. Reuse a single uninitialized
+        # FP32 accumulator only for requests with more than one history block.
+        # Requests without history keep their existing output untouched.
+        accumulator = (
+            torch.empty(
+                (plan.max_merge_tokens, *output.shape[1:]),
+                dtype=torch.float32, device=output.device,
+            ) if plan.max_merge_tokens else None
+        )
         for i, offset, length, cu_k in plan.history_chunks:
             a, b = plan.query_starts[i : i + 2]
             slots = view.meta.active_slots[plan.rows[i], offset : offset + length]
@@ -259,7 +269,14 @@ class ChunkedMlaPrefill:
                     q[a:b], k, v, plan.request_cu_q[i], cu_k, b - a, length, False
                 )
             with profiler.trace("mla.prefill.merge"):
-                merge_partial(output[a:b], lse[:, a:b], partial, partial_lse)
+                first = offset == 0
+                last = offset + length == plan.contexts[i] - (b - a)
+                source = output[a:b] if first else accumulator[:b - a]
+                destination = output[a:b] if last else accumulator[:b - a]
+                merge_partial(
+                    source, lse[:, a:b], partial, partial_lse,
+                    destination=destination,
+                )
             if scorer is not None and not scorer.is_probability:
                 with profiler.record("prefill_token_score"):
                     scorer.consume(i, offset, k, mode="logits")

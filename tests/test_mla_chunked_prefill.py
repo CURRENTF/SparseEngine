@@ -213,14 +213,16 @@ def test_main_attention_max_scores_reuse_output_and_match_full_qk():
         ("probability", True, "fa3"),
     ],
 )
+@pytest.mark.parametrize("history_chunk", [19, 40])
 def test_chunked_attention_and_scores_match_explicit_oracle(
-    mode, full_normalizer, backend
+    mode, full_normalizer, backend, history_chunk
 ):
     # Independent full softmax protects masks, global normalization, physical
     # slot indirection, and score reductions across uneven history/query blocks.
     spec, q, view, cu, project, absorb = make_case()
     provider = partial_provider("triton" if backend == "ragged" else backend, spec, q.device, 3)
-    runner = ChunkedMlaPrefill(spec, provider, 19)
+    # Chunk 40 mixes zero, one, and multiple history blocks in one batch.
+    runner = ChunkedMlaPrefill(spec, provider, history_chunk)
     contexts, starts = view.meta.context_lens.tolist(), cu.tolist()
     ranges = tuple(
         (n - min(7, b - a), n) for n, a, b in zip(contexts, starts, starts[1:])
