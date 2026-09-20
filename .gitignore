@@ -6,6 +6,8 @@ __pycache__/
 *.egg-info/
 *example.png
 *.png
+!/docs/assets/sparse_decode_efficiency_lowbs.png
+!/docs/assets/sparse_decode_efficiency_relative_vllm.png
 *.svg
 wandb/
 /tmp/

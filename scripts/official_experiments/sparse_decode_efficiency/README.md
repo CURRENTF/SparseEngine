@@ -14,6 +14,33 @@ One-off queue, point-refresh, and device-relocation wrappers are archived under
 `$DECODE_DATA_ROOT/scripts/` with their experiment records. Invoke those scripts by
 full path; reusable preparation, sweep, validation, and plotting remain here.
 
+## README figures
+
+The repository READMEs reuse three archived 128K-only figures, in this order:
+
+| View | Archived figure | README asset under `docs/assets/` |
+| --- | --- | --- |
+| Largest measured batch | `decode_capacity_128k_lowbs_max_batch.png` | `sparse_engine_throughput.png` |
+| Absolute throughput lines | `decode_capacity_128k_lowbs.png` | `sparse_decode_efficiency_lowbs.png` |
+| Relative throughput lines | `decode_capacity_128k_lowbs_delta_vllm.png` | `sparse_decode_efficiency_relative_vllm.png` |
+
+SVLLM is the SparseEngine label retained in these figures.
+
+All use H100 80GB, 128K input / 2K output and `boundary_sync_v2`: 32 warmup
+steps followed by a continuous 256-step full-residency decode window, with one
+discarded and three measured workloads. Rates pool measured decode tokens and
+window time; they are not end-to-end serving throughput. Bars select each
+method's largest measured batch, which need not be its peak throughput or a
+verified capacity maximum. Absolute lines display Qwen through BS4 and GLM
+through BS8. Relative lines show `100 * (method throughput / vLLM Vanilla
+throughput - 1)` at matching measured concurrency, with vLLM at 0%. Points without
+a matching baseline are omitted, so Qwen extends through BS3 and GLM through BS6.
+
+The GLM Vanilla and OmniKV BS6 points use memory utilization 0.92; preceding
+points and the vLLM baseline use 0.90. This supplement does not establish a
+capacity maximum at 0.92. Framework-specific selection and cache policies
+remain distinct; these figures do not establish equal quality.
+
 ## Framework color families
 
 The default `palettes/framework_families.json` keeps a fresh, modern palette.
