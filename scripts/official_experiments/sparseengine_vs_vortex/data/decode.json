@@ -43,7 +43,7 @@
     {
       "model": "Qwen3-4B",
       "method": "H2O / H2O-like",
-      "series": "Sparse-Engine",
+      "series": "SparseEngine",
       "concurrency": 14,
       "source": "qwen/02_native_h2o_common/raw_samples.jsonl",
       "source_sha256": "b130f017058c3c6f73fbfff7e712331dd98173c7c74883a3cd16237c0d8ea946",
@@ -93,7 +93,7 @@
     {
       "model": "Qwen3-4B",
       "method": "H2O / H2O-like",
-      "series": "Sparse-Engine (wave2)",
+      "series": "SparseEngine (wave2)",
       "concurrency": 100,
       "source": "qwen/03_native_h2o_wave100/raw_samples.jsonl",
       "source_sha256": "9eeeca222ae584e1c9654b5de2c5857a920ff411b328c38bb5ae3f8f29efdf9d",
@@ -143,7 +143,7 @@
     {
       "model": "Qwen3-4B",
       "method": "QuEST",
-      "series": "Sparse-Engine",
+      "series": "SparseEngine",
       "concurrency": 13,
       "source": "qwen/04_native_quest/raw_samples.jsonl",
       "source_sha256": "efa1ae49db7facd074e90392e560603cac5c96d26c627f48350a4d9ffc6d72c2",
@@ -343,7 +343,7 @@
     {
       "model": "GLM-4.7-Flash",
       "method": "H2O / H2O-like",
-      "series": "Sparse-Engine",
+      "series": "SparseEngine",
       "concurrency": 8,
       "source": "glm/02_native_h2o_common/raw_samples.jsonl",
       "source_sha256": "df7bcf65f7530751b7cb688aa6b4d641e68f7e0ce917fea235f417d6ebb6372e",
@@ -393,7 +393,7 @@
     {
       "model": "GLM-4.7-Flash",
       "method": "H2O / H2O-like",
-      "series": "Sparse-Engine (wave2)",
+      "series": "SparseEngine (wave2)",
       "concurrency": 64,
       "source": "glm/03_native_h2o_wave64/raw_samples.jsonl",
       "source_sha256": "2e3f64a6a655f148d32a5ab95d95b867d1e1de9adeb29804a2d0996c915f702b",
@@ -443,7 +443,7 @@
     {
       "model": "GLM-4.7-Flash",
       "method": "QuEST",
-      "series": "Sparse-Engine",
+      "series": "SparseEngine",
       "concurrency": 8,
       "source": "glm/04_native_quest/raw_samples.jsonl",
       "source_sha256": "0a2479c40137e7ef88baa1e039c5b4fc34c36234ba193401dab38730036d9e6b",

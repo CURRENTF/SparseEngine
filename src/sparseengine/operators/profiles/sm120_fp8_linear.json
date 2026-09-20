@@ -73,7 +73,7 @@
   "provenance": {
     "kind": "repo_offline_microbenchmark",
     "benchmark_workload": "Qwen3-30B and Qwen3.6-27B TP1 dense Linear shapes",
-    "source_repository": "Sparse-Engine",
+    "source_repository": "SparseEngine",
     "source_revision": "bcc93aa+uncommitted-unified-provider-refactor",
     "reproducibility": "provisional: source worktree was dirty and no standalone patch digest was recorded",
     "source_state": "Benchmarked the atomic Triton and FlashInfer groupwise Providers before extending this dispatch profile; run artifacts record the dirty git state",

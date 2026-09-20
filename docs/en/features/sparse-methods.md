@@ -1,6 +1,6 @@
 # Core Sparse Methods
 
-Sparse-Engine is built around a cache-manager-first sparse runtime. The engine
+SparseEngine is built around a cache-manager-first sparse runtime. The engine
 supports physical eviction, logical masking, and hybrid compression without
 forcing `attention.py` to own method-specific state.
 
@@ -21,7 +21,7 @@ Set `sparse_method` to one of the following method names.
 | `quest` | Query-aware page selection | QuEST selects token pages from persistent min/max page summaries. Prefill stays dense. Explicit-KV models score in key coordinates; GLM-4.7-Flash scores the fused MLA latent/RoPE cache with the matching absorbed decode query while keeping the compute payload latent. | `quest_chunk_size`, `quest_skip_layers`, `sink_keep_tokens`, `decode_keep_tokens`, `recent_keep_tokens` |
 | `deltakv` | Hybrid compression | Slim compressor-backed DeltaKV runtime. Legacy `deltakv-less-memory*` names normalize here for older configs, but real benchmark runs still require a matching compressor checkpoint. | `deltakv_checkpoint_path`, `deltakv_latent_dim`, `deltakv_center_ratio`, `deltakv_neighbor_count`, `deltakv_latent_quant_bits`, `full_layer_kv_quant_bits` |
 
-Sparse-Engine uses `sparse_method` unchanged in public commands, `LLM(...)`, the
+SparseEngine uses `sparse_method` unchanged in public commands, `LLM(...)`, the
 runtime config, and internal consumers.
 
 
@@ -66,7 +66,7 @@ can lower decode TPS, especially when all requests already fit on GPU.
 | `omnikv_offload_cache_tokens` | GPU cache capacity in tokens per request per sparse layer. Default `None` sizes it automatically; `0` disables LRU caching. A positive value must cover the selected-token budget. Larger caches use more GPU memory to reduce transfers. |
 
 Prefill acceleration is selected separately with `prefill_sparse_method`.
-Sparse-Engine currently supports `h2o_prefill` for intermediate-chunk KV
+SparseEngine currently supports `h2o_prefill` for intermediate-chunk KV
 compaction, `flashprefill_v2` for sparse prefill attention computation, and
 `omnikv_prefill` for chunked prefill with cross-layer history selection. They
 are alternatives on one axis and can each be combined with a compatible
@@ -117,9 +117,9 @@ this shared slot layout. `enable_omnikv_offload` remains available independently
 > The two score-free decode contracts have different paper provenance. The
 > [SnapKV paper](https://arxiv.org/abs/2404.14469) selects prompt KV from an
 > observation window at the end of the prompt; adding decode-time rescoring and
-> eviction would be a Sparse-Engine extension. The
+> eviction would be a SparseEngine extension. The
 > [H2O paper](https://arxiv.org/abs/2306.14048) instead defines dynamic retention
-> over successive decode steps. Sparse-Engine's intermediate-chunk H2O compaction
+> over successive decode steps. SparseEngine's intermediate-chunk H2O compaction
 > is its own prefill extension. Final-prompt compaction instead belongs to the
 > decode contract because it creates the shorter cache used during generation,
 > even though the mutation executes at the final-prefill boundary. Optional

@@ -33,7 +33,7 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$PWD:$PWD/src" python3 \
 完整参数用 `python3 benchmark/efficiency/bench_probe.py --help` 查询。
 `--monitor-gpus` 是物理 GPU ID，须与 `CUDA_VISIBLE_DEVICES` 对齐。
 Probe 默认每个 scheduler 的 `max_num_batched_tokens=65536`。
-Sparse-Engine 独立默认 `engine_prefill_chunk_size=8192`，可通过
+SparseEngine 独立默认 `engine_prefill_chunk_size=8192`，可通过
 `--hyper-params` 覆盖；调度 token 总预算与 prefill chunk size 是两个独立参数。
 当前 vLLM 适配器没有对应的独立 chunk size 参数，其切块受可用调度 token 预算约束。
 跨拓扑比较须记录这一差异，以及每 replica 和全局的预算。
@@ -112,7 +112,7 @@ sink/recent/selected/full layers，同名预算不保证相同工作量或质量
 
 请求统计契约 `per_request_distribution_v3` 合并各 iteration 的逐请求样本，
 报告 mean/P50/P95/P99；旧批次最大 TTFT 均值为 `batch_max_ttft_ms_mean`。
-Sparse-Engine 在 step 返回观测 token，不额外逐步同步，标记
+SparseEngine 在 step 返回观测 token，不额外逐步同步，标记
 `sparseengine_step_token_publication_no_extra_sync_v1`；vLLM 的
 legacy finished_time / V1 last_token_ts 按 `timing_source` 区分。
 它们是引擎事件，不是 HTTP 客户端延迟；观测边界不一致时不能直接比较。
@@ -140,7 +140,7 @@ decode 排除 prefill 产生的 token；逻辑输入不等于实际计算量。
 
 | 模式 | 当前范围与限制 |
 | --- | --- |
-| 默认请求 probe | Sparse-Engine / vLLM，fixed/churn，显式 TP；模型能力另行约束 |
+| 默认请求 probe | SparseEngine / vLLM，fixed/churn，显式 TP；模型能力另行约束 |
 | 原生连续 decode | 已实现逐 rank 边界同步，不以 TP1 为永久限制；当前编排 DP1，TP/EP 受模型和引擎能力约束 |
 | vLLM / Tangram 连续 decode | 已实现 async 队列边界排空；外部版本和模型须逐组合 smoke；无 wave admission |
 | HiSparse QuEST 连续 decode | 已实现 TP1 overlap 队列边界排空；不是 MLA 适配，无 wave admission |

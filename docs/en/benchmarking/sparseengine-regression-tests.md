@@ -27,7 +27,7 @@ The test plan is controlled by
 
 This layer uses an external trace manifest instead of the synthetic model/method
 matrix. It does not start a GPU server or execute tools. Prepare an idle-GPU server
-separately, using Sparse-Engine vanilla or upstream vLLM; retain its actual MiniSWE
+separately, using SparseEngine vanilla or upstream vLLM; retain its actual MiniSWE
 `server_manifest.json`. Match cache state and client/network placement between runs.
 
 Reuse existing recordings:

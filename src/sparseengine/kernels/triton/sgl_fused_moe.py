@@ -8,7 +8,7 @@ Source: sgl-project/sglang@24d625698d44c78f6e8ab8b7c19f96f45bbaa90a
 ``python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py``.
 
 This local port keeps the BF16/FP16 routed-GEMM path and integrates it with
-Sparse-Engine's provider-owned alignment and reduction contracts. Quantized,
+SparseEngine's provider-owned alignment and reduction contracts. Quantized,
 LoRA, TMA, and fused-collective branches remain owned by their existing
 providers.
 """

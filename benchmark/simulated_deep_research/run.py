@@ -645,7 +645,7 @@ async def preflight(
         if model_card.get("owned_by") != "sparseengine-router":
             raise ValueError(
                 "--require-router was set, but /v1/models did not identify the "
-                "Sparse-Engine smart router."
+                "SparseEngine smart router."
             )
         if not isinstance(healthy_workers, list):
             raise PreflightParseError(
@@ -2661,7 +2661,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run one or more synthetic Deep Research jobs through the "
-            "Sparse-Engine smart router."
+            "SparseEngine smart router."
         )
     )
     parser.add_argument(

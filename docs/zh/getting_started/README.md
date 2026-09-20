@@ -1,12 +1,12 @@
 # 快速开始
 
-本页介绍环境安装、checkpoint 下载和最小 Sparse-Engine 使用示例。
+本页介绍环境安装、checkpoint 下载和最小 SparseEngine 使用示例。
 
 ## 使用 Conda 安装
 
 ```bash
-conda create -n sparse-engine-cu130-py312 python=3.12 -y
-conda activate sparse-engine-cu130-py312
+conda create -n sparseengine-cu130-py312 python=3.12 -y
+conda activate sparseengine-cu130-py312
 
 python -m pip config --site set global.extra-index-url \
   "https://download.pytorch.org/whl/cu130 https://flashinfer.ai/whl"
@@ -40,7 +40,7 @@ CUDA extra 同时要求 `flashinfer-python>=0.6.15,<0.7`。FlashInfer 或 SGL ke
 请按 CUDA 版本执行 `pip install -e ".[cu129]"` 或
 `pip install -e ".[cu130]"` 修复环境。
 
-Sparse-Engine 当前支持未量化 BF16 和 block-scaled FP8 格式的
+SparseEngine 当前支持未量化 BF16 和 block-scaled FP8 格式的
 Qwen3.5/Qwen3.6/Qwen3.8 checkpoint。三者共享 `qwen3_5` 运行时架构和支持矩阵。
 
 其 causal Conv1D 与 decode packing path 仍使用仓库自有 Triton kernel。
@@ -123,14 +123,14 @@ llm.exit()
 
 ## 关键参数
 
-Sparse-Engine runtime 参数定义在 `src/sparseengine/configs/groups.py` 和 `runtime.py` 中，可原样作为 keyword argument 传给 `LLM(...)`。`sparse_method` 与 `engine_prefill_chunk_size` 是规范名称；`sparse_method`、`engine_prefill_chunk_size`、`num_top_tokens`、`model_cls` 和 `compressor_path` 等旧名称会在 runtime boundary 被拒绝。
+SparseEngine runtime 参数定义在 `src/sparseengine/configs/groups.py` 和 `runtime.py` 中，可原样作为 keyword argument 传给 `LLM(...)`。`sparse_method` 与 `engine_prefill_chunk_size` 是规范名称；`sparse_method`、`engine_prefill_chunk_size`、`num_top_tokens`、`model_cls` 和 `compressor_path` 等旧名称会在 runtime boundary 被拒绝。
 
 常用参数：
 
 - `tensor_parallel_size`：启动的 GPU rank 数。
 - `gpu_memory_utilization`：分配给 KV cache 的 GPU 总显存比例。
 - `max_model_len`：允许的最大 prompt 加生成 token 数。
-- `engine_prefill_chunk_size`：Sparse-Engine prefill scheduling 与 memory admission 的 chunk size。
+- `engine_prefill_chunk_size`：SparseEngine prefill scheduling 与 memory admission 的 chunk size。
 - `max_num_batched_tokens`：单 step 的 token 预算。
 - `max_num_seqs_in_batch`：prefill batch 上限，同时作为默认 decode batch 上限。
 - `max_decoding_seqs`：可选的 decode batch 覆盖值；显式设置后，其精确值会纳入 decode CUDA Graph 预捕获 buckets。

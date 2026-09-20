@@ -121,7 +121,7 @@ flowchart TD
 
 Before changing Sparse-VLLM runtime code:
 
-1. Identify the affected native Sparse-Engine runtime path.
+1. Identify the affected native SparseEngine runtime path.
 2. Identify the method family and graph mode: eager, decode graph, prefill
    graph, or both.
 3. Identify the state owner. Persistent physical/prefix-coupled state belongs

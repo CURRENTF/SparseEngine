@@ -1,4 +1,4 @@
 interface:
   display_name: "Code Review"
-  short_description: "Review Sparse-Engine diffs and operator boundaries"
-  default_prompt: "Use $code-review to review Sparse-Engine changes for correctness, operator and runtime architecture, scheduling, reproducibility, public docs hygiene, performance, and tests."
+  short_description: "Review SparseEngine diffs and operator boundaries"
+  default_prompt: "Use $code-review to review SparseEngine changes for correctness, operator and runtime architecture, scheduling, reproducibility, public docs hygiene, performance, and tests."

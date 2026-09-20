@@ -1,4 +1,4 @@
-"""Run a deterministic LongBench v2 subset on the native Sparse-Engine runtime."""
+"""Run a deterministic LongBench v2 subset on the native SparseEngine runtime."""
 
 from __future__ import annotations
 
@@ -413,7 +413,7 @@ def main() -> int:
             )
             llm = getattr(generate, "_sparseengine_llm", None)
             if llm is None:
-                raise RuntimeError("Sparse-Engine adapter did not expose runtime provenance.")
+                raise RuntimeError("SparseEngine adapter did not expose runtime provenance.")
             resolved_config["effective_runtime"] = llm.worker_info(tags=["longbench-v2-quality"])
         else:
             from benchmark.long_bench_v2.external import get_generate_api

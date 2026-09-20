@@ -1,7 +1,7 @@
 # Sparse Method Runtime Architecture
 
 This document defines the control-plane boundary for first-class sparse methods
-in Sparse-Engine. It is the architectural contract for adding a method, refactoring
+in SparseEngine. It is the architectural contract for adding a method, refactoring
 an existing method, or integrating a model with native dynamic sparse attention.
 
 The central rule is:

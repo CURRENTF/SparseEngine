@@ -233,7 +233,7 @@ def _validate_chat_request(
             detail="chain_append_start requires a non-empty chain_id.",
         )
     if request.n != 1:
-        raise HTTPException(status_code=400, detail="Sparse-Engine chat completions currently supports n=1 only.")
+        raise HTTPException(status_code=400, detail="SparseEngine chat completions currently supports n=1 only.")
     if request.store:
         raise HTTPException(status_code=400, detail="Chat Completions store=true is not supported; completions are not persisted.")
     if (

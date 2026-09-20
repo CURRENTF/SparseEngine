@@ -1,4 +1,4 @@
-# Claw-Eval config template for a local Sparse-Engine OpenAI-compatible server.
+# Claw-Eval config template for a local SparseEngine OpenAI-compatible server.
 #
 # The runner script writes a concrete copy into its run directory after setting
 # SPARSEENGINE_OPENAI_BASE_URL, SPARSEENGINE_CLAW_MODEL_ID, and CLAW_EVAL_TRACE_DIR.

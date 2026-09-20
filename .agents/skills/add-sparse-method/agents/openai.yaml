@@ -1,4 +1,4 @@
 interface:
   display_name: "Add Sparse Method"
-  short_description: "Add Sparse-Engine methods safely"
-  default_prompt: "Use $add-sparse-method to add a new Sparse-Engine sparse method following the repo architecture."
+  short_description: "Add SparseEngine methods safely"
+  default_prompt: "Use $add-sparse-method to add a new SparseEngine sparse method following the repo architecture."

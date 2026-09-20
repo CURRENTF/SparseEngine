@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Review Sparse-Engine diffs for correctness, sparse-runtime and operator architecture, scheduling semantics, reproducibility, public documentation hygiene, performance, and tests. Use when reviewing PRs, git diffs, sparse method integrations, operator/provider or kernel changes, platform capability handling, cache-manager or scheduler changes, benchmark/evaluation scripts, docs changes, or when the user asks for a code review; if no range is specified, diff the current branch against main.
+description: Review SparseEngine diffs for correctness, sparse-runtime and operator architecture, scheduling semantics, reproducibility, public documentation hygiene, performance, and tests. Use when reviewing PRs, git diffs, sparse method integrations, operator/provider or kernel changes, platform capability handling, cache-manager or scheduler changes, benchmark/evaluation scripts, docs changes, or when the user asks for a code review; if no range is specified, diff the current branch against main.
 ---
 
 # Code Review
@@ -37,7 +37,7 @@ and apply
 Prioritize:
 
 - inference correctness and tensor/cache invariants
-- Sparse-Engine architecture boundaries
+- SparseEngine architecture boundaries
 - platform abstraction boundaries
 - operator/provider selection and kernel ownership, including upstream-first
   standard operations and repository ownership of non-standard sparse semantics

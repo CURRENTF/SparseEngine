@@ -1,6 +1,6 @@
 # Palu: Compression KV-Cache with Low-Rank Decomposition
 
-> Sparse-Engine vendors the runtime subset only. The upstream benchmark code is
+> SparseEngine vendors the runtime subset only. The upstream benchmark code is
 > intentionally omitted; use `../../benchmark/` for repository-owned runs.
 [[Paper](https://arxiv.org/abs/2407.21118)]
 

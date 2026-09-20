@@ -1,2 +1,2 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Standardized Efficiency & Hardware Profiling Suite for Sparse-Engine."""
+"""Standardized Efficiency & Hardware Profiling Suite for SparseEngine."""

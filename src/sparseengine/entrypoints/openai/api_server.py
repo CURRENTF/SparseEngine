@@ -124,7 +124,7 @@ def create_app(
         finally:
             dispatcher.close()
 
-    app = FastAPI(title="Sparse-Engine OpenAI-compatible API", lifespan=lifespan)
+    app = FastAPI(title="SparseEngine OpenAI-compatible API", lifespan=lifespan)
     app.state.engine = engine
     app.state.dispatcher = dispatcher
     app.state.served_model_name = served_model_name
@@ -187,10 +187,10 @@ def _parse_engine_kwargs(raw_args: list[str]) -> dict[str, Any]:
             raise ValueError(f"Unexpected engine argument {key!r}; expected --name value.")
         name = key[2:].replace("-", "_")
         if name not in allowed_fields:
-            raise ValueError(f"Unknown Sparse-Engine engine argument {key!r}.")
+            raise ValueError(f"Unknown SparseEngine engine argument {key!r}.")
         if idx + 1 >= len(raw_args) or raw_args[idx + 1].startswith("--"):
             if name not in config_fields or not isinstance(config_fields[name].default, bool):
-                raise ValueError(f"Missing value for Sparse-Engine engine argument {key!r}.")
+                raise ValueError(f"Missing value for SparseEngine engine argument {key!r}.")
             value: Any = True
             idx += 1
         else:
@@ -201,12 +201,12 @@ def _parse_engine_kwargs(raw_args: list[str]) -> dict[str, Any]:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Serve Sparse-Engine with an OpenAI-compatible completions API.")
+    parser = argparse.ArgumentParser(description="Serve SparseEngine with an OpenAI-compatible completions API.")
     parser.add_argument("--model", required=True, help="Local Hugging Face model path to load.")
     parser.add_argument("--served-model-name", default=None, help="Model name accepted by OpenAI-compatible endpoints.")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--engine-kwargs", default=None, help="JSON object or JSON file with Sparse-Engine engine kwargs.")
+    parser.add_argument("--engine-kwargs", default=None, help="JSON object or JSON file with SparseEngine engine kwargs.")
     parser.add_argument("--request-log-dir", default=None, help="Optional directory for per-request JSON logs.")
     parser.add_argument(
         "--response-parser",

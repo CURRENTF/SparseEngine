@@ -1,4 +1,4 @@
-"""Latent MLA Triton kernels with explicit Sparse-Engine contracts."""
+"""Latent MLA Triton kernels with explicit SparseEngine contracts."""
 
 from .copy_latent import (
     copy_latent_to_cache,

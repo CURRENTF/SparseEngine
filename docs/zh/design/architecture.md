@@ -1,12 +1,12 @@
 # 架构
 
-Sparse-Engine 只有一个位于 `src/sparseengine/` 下的原生 runtime：sparse-first
+SparseEngine 只有一个位于 `src/sparseengine/` 下的原生 runtime：sparse-first
 inference engine，包含自己的 scheduler、model runner、cache manager、sparse
 controller、模型定义和 Triton kernel。
 
-## Sparse-Engine 流程
+## SparseEngine 流程
 
-Sparse-Engine inference path：
+SparseEngine inference path：
 
 1. `sparseengine.LLM(model, **kwargs)`
 2. `LLMEngine` 按规范 `Config` 字段校验 kwargs。
@@ -20,7 +20,7 @@ Sparse-Engine inference path：
 
 ## 方法所有权
 
-新增 Sparse-Engine 稀疏方法应遵循 cache-manager-first 设计和
+新增 SparseEngine 稀疏方法应遵循 cache-manager-first 设计和
 [稀疏方法运行时架构](sparse-method-runtime.md)：
 
 - 持久物理缓存和跟随 Prefix Cache 的元数据属于

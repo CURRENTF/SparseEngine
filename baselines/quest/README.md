@@ -1,6 +1,6 @@
 # Quest: Query-Aware Sparsity for Efficient Long-Context LLM Inference
 
-> Sparse-Engine vendors the runtime subset only. The upstream benchmark code is
+> SparseEngine vendors the runtime subset only. The upstream benchmark code is
 > intentionally omitted; use `../../benchmark/` for repository-owned runs.
 
 [[paper](https://arxiv.org/abs/2406.10774)] [[poster](./assets/quest_poster.pdf)] [[slides](./assets/quest_slides.pdf)]

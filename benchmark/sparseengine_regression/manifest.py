@@ -642,7 +642,7 @@ def missing_runtime_inputs(resolved: dict[str, Any], model_id: str, method_id: s
 
 def _parse_cli_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Resolve one canonical Sparse-Engine benchmark method config."
+        description="Resolve one canonical SparseEngine benchmark method config."
     )
     parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument("--method", required=True)

@@ -30,7 +30,7 @@ class _H2ORowRef(NamedTuple):
 class H2OCacheManager(SnapKVCacheManager):
     """H2O physical KV eviction with one score vector per layer and sequence.
 
-    Sparse-Engine owns one physical token row shared by all KV heads, so this v1
+    SparseEngine owns one physical token row shared by all KV heads, so this v1
     implementation maintains one cumulative normalized token-importance vector
     aligned with that row. The probability prefill path accumulates normalized
     attention mass. The logits path max-reduces raw QK over the observation

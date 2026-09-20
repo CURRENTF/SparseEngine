@@ -11,11 +11,11 @@ def get_sparseengine_generate_api(
     sparse_method: str | None = None,
     use_cache: bool = True,
 ):
-    """Build the benchmark generation adapter for the native Sparse-Engine runtime."""
+    """Build the benchmark generation adapter for the native SparseEngine runtime."""
     from sparseengine import LLM, SamplingParams
 
     if not use_cache:
-        raise ValueError("Sparse-Engine benchmark generation requires use_cache=True.")
+        raise ValueError("SparseEngine benchmark generation requires use_cache=True.")
 
     public_infer_config = dict(infer_config or {})
     if sparse_method is not None:
@@ -44,7 +44,7 @@ def get_sparseengine_generate_api(
     ):
         if kwargs.get("past_key_values") is not None:
             raise ValueError(
-                "The native Sparse-Engine benchmark adapter does not accept "
+                "The native SparseEngine benchmark adapter does not accept "
                 "external past_key_values."
             )
         if isinstance(prompt, (str, list)) and (

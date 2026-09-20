@@ -27,7 +27,7 @@ def _raise_for_unhealthy(
         for health in unhealthy
     )
     raise RuntimeError(
-        "Sparse-Engine CUDA engine requires healthy FlashInfer and SGL kernel "
+        "SparseEngine CUDA engine requires healthy FlashInfer and SGL kernel "
         f"dependencies during {stage}, but {details}. "
         f"{CUDA_DEPENDENCY_INSTALL_HINT}"
     )

@@ -410,7 +410,7 @@ class SparseVLLMSCBenchSearch:
             while not self.llm.is_finished():
                 if step_count >= self.max_steps:
                     raise RuntimeError(
-                        f"Sparse-Engine SCBench request exceeded max_steps={self.max_steps}."
+                        f"SparseEngine SCBench request exceeded max_steps={self.max_steps}."
                     )
                 step_count += 1
                 finished_outputs, num_tokens = self.llm.step()
@@ -421,7 +421,7 @@ class SparseVLLMSCBenchSearch:
                 if num_tokens == 0:
                     zero_progress_steps += 1
                     if zero_progress_steps >= 50:
-                        raise RuntimeError("Sparse-Engine scheduler made no progress for 50 steps.")
+                        raise RuntimeError("SparseEngine scheduler made no progress for 50 steps.")
                 else:
                     zero_progress_steps = 0
 
@@ -1042,7 +1042,7 @@ def load_model(
 
         llm = SparseLLM(model_name, **sparse_hyper_param)
         llm = SparseVLLMSCBenchSearch(llm, tok, max_steps=scbench_max_steps)
-        print("Sparse-Engine model and tokenizer loaded.")
+        print("SparseEngine model and tokenizer loaded.")
         return llm, tok
 
     if attn_type == "vllm_blend":

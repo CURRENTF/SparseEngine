@@ -1,6 +1,6 @@
 # 可复现性
 
-使用本页的稳定 checklist 复现 Sparse-Engine 实验。不要把本地 run ledger 放入仓库；面向仓库的结果需要证据时，应引用原始 run artifact path。
+使用本页的稳定 checklist 复现 SparseEngine 实验。不要把本地 run ledger 放入仓库；面向仓库的结果需要证据时，应引用原始 run artifact path。
 
 ## 环境
 
@@ -56,7 +56,7 @@ Benchmark 入口不假设 host-specific dataset path。缺少必需 data root �
 
 命令、manifest、`LLM(...)` 与内部配置都应原样使用上述名称。不要再使用 `engine_prefill_chunk_size`、`sparse_method`、`model_cls`、`compressor_path`、`deltakv_checkpoint_path`、`num_top_tokens` 或 `seq_chunk_size` 等旧 key。规范 contract 参见[运行时参数语义](../configuration/runtime-parameter-semantics.md)。
 
-Sparse-Engine 要求显式 integer keep budget；ratio 必须在启动前换算为 token count。
+SparseEngine 要求显式 integer keep budget；ratio 必须在启动前换算为 token count。
 
 ## Smoke Check
 
@@ -72,7 +72,7 @@ PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_engine.py \
   --hyper_params '{"gpu_memory_utilization":0.8,"engine_prefill_chunk_size":512}'
 ```
 
-基于 compressor 的 DeltaKV Sparse-Engine smoke test：
+基于 compressor 的 DeltaKV SparseEngine smoke test：
 
 ```bash
 PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_engine.py \

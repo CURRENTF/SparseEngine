@@ -1,11 +1,11 @@
 ---
 name: add-sparse-method
-description: Add or refactor a first-class Sparse-Engine sparse method alongside vanilla, SnapKV, OmniKV, QuEST, and DeltaKV. Use when Codex needs to introduce a new `sparse_method`, move method logic out of `attention.py` or `utils/`, add method-specific cache metadata or decode-time view building, wire config and registration, and preserve the repo's cache-manager-first architecture.
+description: Add or refactor a first-class SparseEngine sparse method alongside vanilla, SnapKV, OmniKV, QuEST, and DeltaKV. Use when Codex needs to introduce a new `sparse_method`, move method logic out of `attention.py` or `utils/`, add method-specific cache metadata or decode-time view building, wire config and registration, and preserve the repo's cache-manager-first architecture.
 ---
 
 # Add Sparse Method
 
-Implement new Sparse-Engine methods as explicit runtime methods, not as ad-hoc helpers. Keep `attention.py` generic, let `cache_manager` own method state, and let `SparseController` keep scheduling and cross-layer coordination responsibilities.
+Implement new SparseEngine methods as explicit runtime methods, not as ad-hoc helpers. Keep `attention.py` generic, let `cache_manager` own method state, and let `SparseController` keep scheduling and cross-layer coordination responsibilities.
 
 Performance is part of method support. Do not treat a method as supported just
 because it produces tokens: decode throughput must be reasonably competitive

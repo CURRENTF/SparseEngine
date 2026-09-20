@@ -1,4 +1,4 @@
-# Sparse-Engine vs Vortex
+# SparseEngine vs Vortex
 
 Paper comparison recipes, measurement adapters, recorded JSON data, and the
 combined figure. `official_experiments` means experiments maintained by this
@@ -26,8 +26,8 @@ project, not endorsement by Vortex's authors or official algorithm parity.
   the earlier end-to-end output metric separate. `data/decode_summary.json`
   retains the 30 measured windows; `data/provenance.json` identifies measured code.
 
-Sparse-Engine continues to use `benchmark/efficiency/bench_probe.py`. Vortex uses
-its own canonical probe. All decode-window arithmetic is owned by Sparse-Engine's
+SparseEngine continues to use `benchmark/efficiency/bench_probe.py`. Vortex uses
+its own canonical probe. All decode-window arithmetic is owned by SparseEngine's
 `benchmark/efficiency/metrics.py`; the observer supplies events to that collector.
 The old `benchmark/efficiency/plot_vortex_comparison.py` CLI delegates to `plot.py`.
 Actual vFlow algorithms remain in the prepared external Vortex repository;

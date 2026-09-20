@@ -99,7 +99,7 @@ class QuantizationConfig:
                 )
             if quant_method:
                 raise NotImplementedError(
-                    f"Sparse-Engine does not support quant_method={quant_method!r} "
+                    f"SparseEngine does not support quant_method={quant_method!r} "
                     f"for {model_name}."
                 )
             return cls.disabled(
@@ -117,7 +117,7 @@ class QuantizationConfig:
         ).strip().lower()
         if "e4m3" not in weight_dtype:
             raise ValueError(
-                f"Sparse-Engine {model_name} FP8 supports e4m3 weights only, "
+                f"SparseEngine {model_name} FP8 supports e4m3 weights only, "
                 f"got weight_dtype={weight_dtype!r}."
             )
 
@@ -131,7 +131,7 @@ class QuantizationConfig:
         ).strip().lower()
         if activation_scheme != "dynamic":
             raise ValueError(
-                f"Sparse-Engine {model_name} FP8 supports dynamic activation only, "
+                f"SparseEngine {model_name} FP8 supports dynamic activation only, "
                 f"got activation_scheme={activation_scheme!r}."
             )
 
@@ -152,7 +152,7 @@ class QuantizationConfig:
             raise ValueError(f"weight_block_size must be a pair, got {block_size!r}.")
         if block_tuple != (128, 128):
             raise ValueError(
-                f"Sparse-Engine {model_name} FP8 supports "
+                f"SparseEngine {model_name} FP8 supports "
                 "weight_block_size=(128, 128) only, "
                 f"got {block_tuple}."
             )

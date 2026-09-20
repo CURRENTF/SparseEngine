@@ -4,7 +4,7 @@ The stable decode kernels intentionally remain unchanged.  This variant fixes
 the CUDA launch grid and workspace split dimension while deriving the effective
 split ranges from the device-resident context lengths.  The split scheduling
 follows the fixed-upper-bound design used by SGLang's Triton decode attention
-(reference revision ed0a62e4), adapted to Sparse-Engine's slot-table layout.
+(reference revision ed0a62e4), adapted to SparseEngine's slot-table layout.
 """
 
 from __future__ import annotations

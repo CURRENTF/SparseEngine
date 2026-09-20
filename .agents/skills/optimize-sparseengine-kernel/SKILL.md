@@ -1,9 +1,9 @@
 ---
 name: optimize-sparseengine-kernel
-description: Optimize and integrate Sparse-Engine GPU kernels across Triton, TileLang, CUDA/CuTe, and external SGL kernels. Use when Codex needs to identify an LLM inference hotspot, choose a kernel implementation path, write or fuse a kernel, tune an existing kernel, build correctness or microbenchmark coverage, analyze Nsight Compute results, integrate a provider, or validate kernel and end-to-end performance.
+description: Optimize and integrate SparseEngine GPU kernels across Triton, TileLang, CUDA/CuTe, and external SGL kernels. Use when Codex needs to identify an LLM inference hotspot, choose a kernel implementation path, write or fuse a kernel, tune an existing kernel, build correctness or microbenchmark coverage, analyze Nsight Compute results, integrate a provider, or validate kernel and end-to-end performance.
 ---
 
-# Optimize Sparse-Engine Kernel
+# Optimize SparseEngine Kernel
 
 Use one evidence loop from the serving workload to the kernel and back:
 
@@ -23,7 +23,7 @@ Do not assume that a kernel rewrite is useful before locating its contribution
 to the requested workload. If the user already specifies a kernel, proceed but
 state whether end-to-end hotspot evidence exists.
 
-Sparse-Engine performance regressions often come from runtime shape variability,
+SparseEngine performance regressions often come from runtime shape variability,
 host synchronization, control-plane work, metadata movement, or provider
 routing rather than from the arithmetic kernel itself. Before rewriting a
 kernel, check for CUDA Graph recapture, JIT compile-key growth, request-length

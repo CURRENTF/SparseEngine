@@ -167,7 +167,7 @@ def validate_deltakv_runtime(config) -> None:
 
     if config.sparse_method == "deltakv":
         log_once(
-            "DeltaKV support in Sparse-Engine is still experimental and not fully mature; "
+            "DeltaKV support in SparseEngine is still experimental and not fully mature; "
             "verify results carefully before treating them as final.",
             level="WARNING",
         )

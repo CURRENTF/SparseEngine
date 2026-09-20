@@ -1,6 +1,6 @@
 # Features
 
-This directory collects the sparse-method docs that define Sparse-Engine
+This directory collects the sparse-method docs that define SparseEngine
 behavior.
 
 - [Supported Models](supported-models.md)

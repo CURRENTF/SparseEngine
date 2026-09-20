@@ -1,13 +1,13 @@
 # Architecture
 
-Sparse-Engine has one native runtime under `src/sparseengine/`: a sparse-first
+SparseEngine has one native runtime under `src/sparseengine/`: a sparse-first
 inference engine with its own scheduler,
   model runner, cache managers, sparse controller, model definitions, and
   Triton kernels.
 
-## Sparse-Engine Flow
+## SparseEngine Flow
 
-The Sparse-Engine inference path is:
+The SparseEngine inference path is:
 
 1. `sparseengine.LLM(model, **kwargs)`
 2. `LLMEngine` validates kwargs against the canonical `Config` fields.
@@ -25,7 +25,7 @@ customize decode-time views through hooks such as `build_decode_view(...)`.
 
 ## Method Ownership
 
-New Sparse-Engine sparse methods should follow the cache-manager-first design and
+New SparseEngine sparse methods should follow the cache-manager-first design and
 the [sparse method runtime architecture](sparse-method-runtime.md):
 
 - Persistent physical cache state and prefix-coupled metadata belong in

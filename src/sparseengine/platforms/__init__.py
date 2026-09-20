@@ -89,7 +89,7 @@ def _resolve_platform() -> Platform:
         return rocm
 
     raise RuntimeError(
-        "No supported Sparse-Engine platform was detected. Set SPARSEENGINE_PLATFORM=cpu only for "
+        "No supported SparseEngine platform was detected. Set SPARSEENGINE_PLATFORM=cpu only for "
         "import/unit-test paths; real inference currently requires CUDA."
     )
 

@@ -43,7 +43,7 @@ PYTHONPATH="$PWD:$PWD/src" \
   --hyper_params '{"tensor_parallel_size":2,"max_model_len":2048,"engine_prefill_chunk_size":256,"max_num_batched_tokens":512,"max_num_seqs_in_batch":1,"max_decoding_seqs":1,"gpu_memory_utilization":0.02,"mlp_chunk_size":256}'
 ```
 
-该命令只验证原生 Sparse-Engine tiny-random 的 model construction、TP、prefill
+该命令只验证原生 SparseEngine tiny-random 的 model construction、TP、prefill
 和 decode 路径，不代表模型质量。
 
 ## 限制

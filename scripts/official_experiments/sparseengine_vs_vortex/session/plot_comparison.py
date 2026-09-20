@@ -210,7 +210,7 @@ def main():
             rows.append((f'Vortex ({label})', value, '#658EB6'))
         table(axes[i, 1], rows)
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, [s.replace('Sparse-Engine', 'Ours').replace('wave2', 'Max Avai. B') for s in labels],
+    fig.legend(handles, [s.replace('SparseEngine', 'Ours').replace('wave2', 'Max Avai. B') for s in labels],
                loc='upper center', ncol=3, frameon=False)
     fig.subplots_adjust(top=.87, bottom=.20, hspace=.60, wspace=.29)
     fig.text(.06, .045, '32K / 512; 256-step boundary-synchronized windows, mean ± SD (3 runs). GLM H2O uses the SM-fix rerun.\n'

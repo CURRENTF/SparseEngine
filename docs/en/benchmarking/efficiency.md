@@ -35,7 +35,7 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$PWD:$PWD/src" python3 \
 See `python3 benchmark/efficiency/bench_probe.py --help` for all arguments.
 `--monitor-gpus` uses physical IDs aligned with `CUDA_VISIBLE_DEVICES`.
 The probe defaults to `max_num_batched_tokens=65536` per scheduler.
-Sparse-Engine independently defaults to `engine_prefill_chunk_size=8192`; override
+SparseEngine independently defaults to `engine_prefill_chunk_size=8192`; override
 it through `--hyper-params`. The scheduler token budget and prefill chunk size
 are separate controls. vLLM has no equivalent independent chunk-size option in
 these adapters; its chunking follows the available scheduler token budget.
@@ -161,7 +161,7 @@ target combination before measuring performance; implementation alone is not evi
 
 | Mode | Current scope and limits |
 | --- | --- |
-| Default request probe | Sparse-Engine / vLLM, fixed/churn, explicit TP; model capabilities still apply |
+| Default request probe | SparseEngine / vLLM, fixed/churn, explicit TP; model capabilities still apply |
 | Native continuous decode | Per-rank boundary synchronization implemented, not permanently TP1-only; current orchestration uses DP1, TP/EP depend on model/engine capabilities |
 | vLLM / Tangram continuous decode | Async queue boundary draining implemented; smoke-test each external version/model; no wave admission |
 | HiSparse QuEST continuous decode | TP1 overlap queue boundary draining implemented; not an MLA adapter, no wave admission |

@@ -1,4 +1,4 @@
-# Sparse-Engine Operator Integration
+# SparseEngine Operator Integration
 
 Read the sibling
 [`review-operator-organization`](../../review-operator-organization/SKILL.md)

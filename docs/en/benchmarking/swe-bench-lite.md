@@ -62,7 +62,7 @@ The same memory limits are applied to official scorer containers, whose
 failures remain reported by the upstream scorer. Record these limits with the
 run, since resource failures affect the score.
 
-## Sparse-Engine Server
+## SparseEngine Server
 
 Start `sparseengine.entrypoints.openai.api_server` as a separate long-running
 process. A typical command is:
@@ -120,7 +120,7 @@ server.
 
 Run one instance before committing to all 300. `openai/` is the LiteLLM
 provider prefix; `sparseengine-swe` is the exact model name advertised by the
-server. Sparse-Engine does not require authentication, but LiteLLM expects a
+server. SparseEngine does not require authentication, but LiteLLM expects a
 non-empty OpenAI key, so use a dummy local value.
 
 ```bash
@@ -271,7 +271,7 @@ model:
 Provider-specific request fields, such as DeepSeek thinking controls, are not
 part of the shared adapter configuration. Pass them with a provider-specific
 `--mini-extra-config`; the adapter hashes and snapshots that file. Do not reuse
-such a config for Sparse-Engine, and never store credentials in it. Config and
+such a config for SparseEngine, and never store credentials in it. Config and
 server-manifest validation rejects sensitive field names, common provider token
 formats, authorization headers, and URL credentials before snapshotting.
 
@@ -283,7 +283,7 @@ Each run directory contains:
 | --- | --- |
 | `run_config.json` | Immutable semantic experiment configuration and selected instance ids. |
 | `run_manifest.json` | Code revisions, package versions, Python, credential variable name, and runtime policy. |
-| `server_manifest.json` | Snapshot of the local Sparse-Engine server configuration, when applicable. |
+| `server_manifest.json` | Snapshot of the local SparseEngine server configuration, when applicable. |
 | `evaluation_identity.json` | Prediction hash, official run id, and runtime-provenance hash used for cache ownership. |
 | `invocations.jsonl` | Stage invocations and operational concurrency settings. |
 | `status.jsonl` | Append-only stage and batch status events. |

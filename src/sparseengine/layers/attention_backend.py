@@ -31,12 +31,12 @@ def _fake_attention_enabled() -> bool:
 def _allow_fake_attention() -> None:
     if not _env_truthy("SPARSEENGINE_ALLOW_FAKE_ATTENTION"):
         raise RuntimeError(
-            "Sparse-Engine fake attention was requested, but it is disabled by default because it "
+            "SparseEngine fake attention was requested, but it is disabled by default because it "
             "invalidates correctness and benchmark results. Set SPARSEENGINE_ALLOW_FAKE_ATTENTION=1 "
             "only for explicit fake-attention tests or profiling."
         )
     log_once(
-        "Sparse-Engine fake attention is enabled; outputs are not valid for correctness or benchmark results.",
+        "SparseEngine fake attention is enabled; outputs are not valid for correctness or benchmark results.",
         level="WARNING",
     )
 
@@ -89,7 +89,7 @@ def _require_explicit_payload(
 
 
 class TritonAttentionBackend:
-    """Thin backend wrapper around the existing Sparse-Engine Triton attention kernels."""
+    """Thin backend wrapper around the existing SparseEngine Triton attention kernels."""
 
     name = "triton"
 

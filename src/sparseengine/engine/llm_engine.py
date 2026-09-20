@@ -221,7 +221,7 @@ def _resolve_eos_token_ids(model_path, hf_config, tokenizer_eos_token_id):
 
 class LLMEngine:
     """
-    Sparse-Engine 推理引擎的核心入口类。
+    SparseEngine 推理引擎的核心入口类。
     负责协调 Tokenizer、调度器 (Scheduler) 和模型执行器 (ModelRunner)。
     管理多进程张量并行 (Tensor Parallelism) 的生命周期。
     """
@@ -231,7 +231,7 @@ class LLMEngine:
         ignored_keys = sorted(set(kwargs) - config_fields - {"_dp_worker"})
         if ignored_keys:
             raise ValueError(
-                f"Unknown Sparse-Engine config keys: {ignored_keys}. "
+                f"Unknown SparseEngine config keys: {ignored_keys}. "
                 "Runtime parameter aliases and unknown keys are not accepted."
             )
         if int(kwargs.get("data_parallel_size", 1)) > 1 and kwargs.get("_dp_worker") is None:

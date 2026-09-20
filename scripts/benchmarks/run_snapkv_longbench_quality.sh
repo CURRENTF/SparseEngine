@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# LongBench regression quality & full-lifecycle GPU monitoring script for SnapKV on Sparse-Engine
+# LongBench regression quality & full-lifecycle GPU monitoring script for SnapKV on SparseEngine
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

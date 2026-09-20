@@ -1778,7 +1778,7 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help=(
-            "Enable Sparse-Engine chain reuse in the mini-SWE-agent model adapter. "
+            "Enable SparseEngine chain reuse in the mini-SWE-agent model adapter. "
             "When omitted, SPARSEENGINE_CHAIN_CACHE is read once for compatibility; "
             "the resolved value is persisted in run_config.json."
         ),

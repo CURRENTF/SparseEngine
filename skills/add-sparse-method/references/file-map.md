@@ -1,6 +1,6 @@
 # File Map
 
-Use this map to decide which repo files must change when adding a new Sparse-Engine method.
+Use this map to decide which repo files must change when adding a new SparseEngine method.
 
 ## Always Review
 

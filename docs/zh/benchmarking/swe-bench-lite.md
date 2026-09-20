@@ -43,7 +43,7 @@ adapter 默认使用 cached/offline Hugging Face access，并要求所选 Docker
 也不从评测分母中排除。官方评分容器同样施加内存上限，失败仍由上游评分器报告。
 内存限制会影响资源失败率，必须随实验记录。
 
-## Sparse-Engine Server
+## SparseEngine Server
 
 以独立 long-running process 启动 `sparseengine.entrypoints.openai.api_server`。典型命令：
 
@@ -94,7 +94,7 @@ python -m sparseengine.entrypoints.openai.api_server \
 
 ## 单 Instance Smoke Test
 
-运行全部 300 个 instance 前，先运行一个。`openai/` 是 LiteLLM provider prefix；`sparseengine-swe` 是 server 广告的准确 model name。Sparse-Engine 不要求认证，但 LiteLLM 需要非空 OpenAI key，因此使用本地 dummy value。
+运行全部 300 个 instance 前，先运行一个。`openai/` 是 LiteLLM provider prefix；`sparseengine-swe` 是 server 广告的准确 model name。SparseEngine 不要求认证，但 LiteLLM 需要非空 OpenAI key，因此使用本地 dummy value。
 
 ```bash
 export OPENAI_API_KEY=local-sparseengine
@@ -213,7 +213,7 @@ model:
         type: disabled
 ```
 
-DeepSeek thinking control 等 provider-specific request field 不属于共享 adapter config。通过 provider-specific `--mini-extra-config` 传入；adapter 会 hash 并 snapshot 该文件。不要为 Sparse-Engine 复用此类 config，也不要在其中保存 credential。Config 和 server-manifest validation 会在 snapshot 前拒绝敏感 field name、常见 provider token format、authorization header 和 URL credential。
+DeepSeek thinking control 等 provider-specific request field 不属于共享 adapter config。通过 provider-specific `--mini-extra-config` 传入；adapter 会 hash 并 snapshot 该文件。不要为 SparseEngine 复用此类 config，也不要在其中保存 credential。Config 和 server-manifest validation 会在 snapshot 前拒绝敏感 field name、常见 provider token format、authorization header 和 URL credential。
 
 ## 输出
 
@@ -223,7 +223,7 @@ DeepSeek thinking control 等 provider-specific request field 不属于共享 ad
 | --- | --- |
 | `run_config.json` | Immutable semantic experiment config 和 selected instance ID。 |
 | `run_manifest.json` | Code revision、package version、Python、credential variable name 和 runtime policy。 |
-| `server_manifest.json` | 适用时，本地 Sparse-Engine server config 的 snapshot。 |
+| `server_manifest.json` | 适用时，本地 SparseEngine server config 的 snapshot。 |
 | `evaluation_identity.json` | 用于 cache ownership 的 prediction hash、official run ID 和 runtime-provenance hash。 |
 | `invocations.jsonl` | Stage invocation 和 operational concurrency setting。 |
 | `status.jsonl` | Append-only stage 和 batch status event。 |

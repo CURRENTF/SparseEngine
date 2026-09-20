@@ -4,7 +4,7 @@ This repository is research code. The main goal is trustworthy and reproducible 
 
 ## Sparse Method Contributions
 
-When adding or refactoring a first-class Sparse-Engine sparse method, keep
+When adding or refactoring a first-class SparseEngine sparse method, keep
 method-specific runtime state in `src/sparseengine/engine/cache_manager/`, keep
 `src/sparseengine/layers/attention.py` generic, and hook new behavior through
 shared cache-manager interfaces when possible.

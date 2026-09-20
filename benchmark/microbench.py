@@ -337,7 +337,7 @@ def _write_output_dir(args, rows: list[dict[str, Any]]) -> None:
     }
 
     report_lines = [
-        "# Sparse-Engine Microbenchmark",
+        "# SparseEngine Microbenchmark",
         "",
         f"- Model: `{args.model_path}`",
         f"- Methods: `{args.methods}`",

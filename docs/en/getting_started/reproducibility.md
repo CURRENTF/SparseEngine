@@ -1,6 +1,6 @@
 # Reproducibility
 
-Use this page as the stable checklist for reproducing Sparse-Engine experiments.
+Use this page as the stable checklist for reproducing SparseEngine experiments.
 Keep local run ledgers out of this repo; when a repo-facing result needs
 evidence, cite the original run artifact path.
 
@@ -78,7 +78,7 @@ configuration. Do not use legacy keys such as `engine_prefill_chunk_size`,
 [runtime-parameter-semantics.md](../configuration/runtime-parameter-semantics.md)
 for the canonical contract.
 
-Sparse-Engine requires explicit integer keep budgets. Do not pass ratios such as
+SparseEngine requires explicit integer keep budgets. Do not pass ratios such as
 `decode_keep_tokens=0.17`; convert each policy to a token count first.
 
 ## Smoke Checks
@@ -95,7 +95,7 @@ PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_engine.py \
   --hyper_params '{"gpu_memory_utilization":0.8,"engine_prefill_chunk_size":512}'
 ```
 
-For a compressor-backed DeltaKV Sparse-Engine smoke:
+For a compressor-backed DeltaKV SparseEngine smoke:
 
 ```bash
 PYTHONPATH=$PWD/src python scripts/benchmarks/bench_sparse_engine.py \

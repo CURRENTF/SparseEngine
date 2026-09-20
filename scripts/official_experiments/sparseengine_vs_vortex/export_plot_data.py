@@ -22,7 +22,7 @@ for case in summary['cases']:
     if len(selected) != 3:
         raise ValueError(f'Invalid sample count: {case}')
     series = ('Vortex' if case['engine'].startswith('Vortex') else
-              'Sparse-Engine (wave2)' if 'wave2' in case['engine'] else 'Sparse-Engine')
+              'SparseEngine (wave2)' if 'wave2' in case['engine'] else 'SparseEngine')
     cases.append({'model': case['model'],
                   'method': 'H2O / H2O-like' if case['method'] == 'H2O' else case['method'],
                   'series': series, 'concurrency': case['concurrency'],

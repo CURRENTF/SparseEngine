@@ -1,4 +1,4 @@
-"""Structured Sparse-Engine configuration components."""
+"""Structured SparseEngine configuration components."""
 
 from sparseengine.configs.groups import (
     DecodeCudaGraphConfig,

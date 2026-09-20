@@ -293,7 +293,7 @@ class FlashInferGatedDeltaRuleProvider(GatedDeltaRuleProvider):
         # contiguous 3D inputs, so the adapter owns this materialization.
         normalized_q = l2norm_fwd(q.contiguous()).squeeze(0)
         normalized_k = l2norm_fwd(k.contiguous()).squeeze(0)
-        # Sparse-Engine keeps recurrent state in the repo decode kernel's
+        # SparseEngine keeps recurrent state in the repo decode kernel's
         # K-major [N, H, K, V] layout. FlashInfer's public prefill contract is
         # V-major [N, H, V, K], so this adapter owns both conversions. Qwen's
         # K/V dimensions are both 128, making a shape-only check insufficient.

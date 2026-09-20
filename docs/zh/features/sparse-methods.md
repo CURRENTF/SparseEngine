@@ -1,6 +1,6 @@
 # 核心稀疏方法
 
-Sparse-Engine 围绕 cache-manager-first sparse runtime 构建。engine 支持 physical eviction、logical masking 和 hybrid compression，而不强迫 `attention.py` 持有方法特定状态。
+SparseEngine 围绕 cache-manager-first sparse runtime 构建。engine 支持 physical eviction、logical masking 和 hybrid compression，而不强迫 `attention.py` 持有方法特定状态。
 
 ## 支持的方法
 
@@ -19,7 +19,7 @@ Sparse-Engine 围绕 cache-manager-first sparse runtime 构建。engine 支持 p
 | `quest` | Query-aware page selection | QuEST 根据持久化的 page min/max summary 选择 token page，prefill 保持 dense。显式 KV 模型在 key 坐标中评分；GLM-4.7-Flash 使用匹配的 absorbed decode query 对融合 MLA latent/RoPE cache 评分，同时 compute payload 继续保持 latent。 | `quest_chunk_size`, `quest_skip_layers`, `sink_keep_tokens`, `decode_keep_tokens`, `recent_keep_tokens` |
 | `deltakv` | Hybrid compression | 依赖 compressor 的精简 DeltaKV runtime。旧配置中的 `deltakv-less-memory*` 名称会规范到此方法，但实际 benchmark run 仍需要匹配的 compressor checkpoint。 | `deltakv_checkpoint_path`, `deltakv_latent_dim`, `deltakv_center_ratio`, `deltakv_neighbor_count`, `deltakv_latent_quant_bits`, `full_layer_kv_quant_bits` |
 
-Sparse-Engine 在 public command、`LLM(...)`、runtime config 与内部消费者中统一使用 `sparse_method`。
+SparseEngine 在 public command、`LLM(...)`、runtime config 与内部消费者中统一使用 `sparse_method`。
 
 
 
@@ -102,8 +102,8 @@ prefill 和 decode 的完整 attention 层列表可以不同。异构 Gemma 4 KV
 > [!NOTE]
 > 两种 score-free decode contract 的论文来源不同。[SnapKV 论文](https://arxiv.org/abs/2404.14469)
 > 使用 prompt 末尾的 observation window 选择 prompt KV；增加 decode-time
-> 重新评分和淘汰属于 Sparse-Engine 增强。[H2O 论文](https://arxiv.org/abs/2306.14048)
-> 则定义了跨连续 decode step 的动态保留策略。Sparse-Engine 对中间 chunk 的 H2O
+> 重新评分和淘汰属于 SparseEngine 增强。[H2O 论文](https://arxiv.org/abs/2306.14048)
+> 则定义了跨连续 decode step 的动态保留策略。SparseEngine 对中间 chunk 的 H2O
 > 压缩是自己提出的 prefill 扩展。最终 prompt 压缩虽然发生在 final-prefill boundary，
 > 但它准备的是生成阶段消费的短 cache，因此属于 decode contract。可选的在线评分更新
 > 向原始 H2O 算法靠近；周期性的 batch 淘汰和有限 prefill observation window

@@ -20,7 +20,7 @@ or JSONL file, then set:
 export SPARSEENGINE_LONGBENCH_V2_DATA=<LONGBENCH_V2_JSON_OR_JSONL>
 ```
 
-`pred.py` runs the native Sparse-Engine engine. With `--token-buckets-json`, it
+`pred.py` runs the native SparseEngine engine. With `--token-buckets-json`, it
 selects a deterministic subset in configured post-chat-template token buckets
 without truncating source prompts. A bucket with insufficient samples that fit
 the requested model budget fails explicitly. It saves the selected identities and hashes, raw responses,

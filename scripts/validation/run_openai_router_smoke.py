@@ -394,7 +394,7 @@ def build_failure_summary(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a real two-worker Sparse-Engine OpenAI router smoke test.")
+    parser = argparse.ArgumentParser(description="Run a real two-worker SparseEngine OpenAI router smoke test.")
     parser.add_argument("--model", required=True)
     parser.add_argument("--served-model-name", default="router-smoke-model")
     parser.add_argument("--methods", default="omnikv,snapkv")

@@ -71,7 +71,7 @@ class Profiler:
         if not self.enabled or not self.times:
             return
 
-        logger.info(f"\n=== Sparse-Engine Profiler Report (Rank {self.rank}) ===")
+        logger.info(f"\n=== SparseEngine Profiler Report (Rank {self.rank}) ===")
         # 按照总耗时降序排列
         sorted_keys = sorted(self.times.keys(), key=lambda x: self.times[x], reverse=True)
         

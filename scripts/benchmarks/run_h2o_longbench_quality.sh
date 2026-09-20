@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# LongBench regression quality evaluation script for H2O Sparse Attention on Sparse-Engine
+# LongBench regression quality evaluation script for H2O Sparse Attention on SparseEngine
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

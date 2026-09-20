@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Standardized Synthetic Length Sweep & Micro-Efficiency Benchmark for Sparse-Engine & vLLM."""
+"""Standardized Synthetic Length Sweep & Micro-Efficiency Benchmark for SparseEngine & vLLM."""
 
 from __future__ import annotations
 
@@ -671,7 +671,7 @@ def run_sparseengine_probe(
         ),
     }
 
-    print(f"[Sparse-Engine Probe] Initializing LLM with method={args.sparse_method}, max_model_len={max_len_needed}...")
+    print(f"[SparseEngine Probe] Initializing LLM with method={args.sparse_method}, max_model_len={max_len_needed}...")
     llm = LLM(args.model_path, **engine_kwargs)
 
     for p_len in args.prompt_lens:
@@ -816,7 +816,7 @@ def run_sparseengine_probe(
                             expected = int(seq_to_request[seq_id].output_len)
                             if generated != expected:
                                 raise RuntimeError(
-                                    f"Sparse-Engine generated {generated} tokens for seq_id={seq_id}, "
+                                    f"SparseEngine generated {generated} tokens for seq_id={seq_id}, "
                                     f"expected {expected}."
                                 )
                         ttft_ms = float(timing_metrics["ttft_ms"])
@@ -1000,7 +1000,7 @@ def run_sparseengine_churn(
             ),
         }
         print(
-            "[Sparse-Engine Churn] Initializing "
+            "[SparseEngine Churn] Initializing "
             f"method={args.sparse_method}, max_concurrency={concurrency}..."
         )
         engine_init_started = time.perf_counter()
@@ -1084,7 +1084,7 @@ def run_sparseengine_churn(
                                 )
                                 if seq_id in seq_to_request:
                                     raise RuntimeError(
-                                        f"Duplicate Sparse-Engine churn sequence ID: {seq_id}."
+                                        f"Duplicate SparseEngine churn sequence ID: {seq_id}."
                                     )
                                 seq_to_request[seq_id] = request
                                 arrival_times[seq_id] = time.perf_counter()
@@ -1132,7 +1132,7 @@ def run_sparseengine_churn(
                             ):
                                 if observed != expected_seq_ids:
                                     raise RuntimeError(
-                                        f"Sparse-Engine churn {name} coverage mismatch: "
+                                        f"SparseEngine churn {name} coverage mismatch: "
                                         f"missing={sorted(expected_seq_ids - observed)}, "
                                         f"unexpected={sorted(observed - expected_seq_ids)}."
                                     )
@@ -1142,7 +1142,7 @@ def run_sparseengine_churn(
                                 generated = generated_counts[seq_id]
                                 if generated != request.output_len:
                                     raise RuntimeError(
-                                        f"Sparse-Engine churn seq_id={seq_id} generated "
+                                        f"SparseEngine churn seq_id={seq_id} generated "
                                         f"{generated} tokens, expected {request.output_len}."
                                     )
                                 first = first_token_times[seq_id]
@@ -1859,13 +1859,13 @@ def parse_args():
         "--expert-parallel-size",
         type=int,
         default=1,
-        help="Sparse-Engine expert parallel size.",
+        help="SparseEngine expert parallel size.",
     )
     parser.add_argument(
         "--max-num-batched-tokens",
         type=int,
         default=65536,
-        help="Matched scheduler token budget used by Sparse-Engine and vLLM.",
+        help="Matched scheduler token budget used by SparseEngine and vLLM.",
     )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--prefill-wave-size", type=int, default=0,
@@ -2053,7 +2053,7 @@ def main():
             "phase_throughput_contract": (
                 "diagnostic windows only, not execution stages; "
                 "first-token window: prompt tokens / maximum arrival-to-first-token "
-                "duration (Sparse-Engine churn: submission-to-last-first-token); "
+                "duration (SparseEngine churn: submission-to-last-first-token); "
                 "batch decode window: generated tokens after each first token / "
                 "first-first-token-to-last-completion window; request TPOT: mean "
                 "per-request (finish-first)/(generated-1); TPOT-equivalent concurrent "

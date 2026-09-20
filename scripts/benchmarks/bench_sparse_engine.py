@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compatibility wrapper for the Sparse-Engine microbenchmark.
+"""Compatibility wrapper for the SparseEngine microbenchmark.
 
 The benchmark implementation lives under `benchmark/` with the rest of the
 repo benchmark entrypoints. Keep this script so existing runbooks and harnesses

@@ -197,7 +197,7 @@ def _validate_request(request: CompletionRequest, served_model_name: str):
             detail=f"Unknown model {request.model!r}; this server is serving {served_model_name!r}.",
         )
     if request.n != 1:
-        raise HTTPException(status_code=400, detail="Sparse-Engine completions currently supports n=1 only.")
+        raise HTTPException(status_code=400, detail="SparseEngine completions currently supports n=1 only.")
     if request.stop and request.logprobs is not None:
         raise HTTPException(status_code=400, detail="stop with logprobs is not supported yet.")
     if request.chain_id and len(_normalize_prompts(request.prompt)) != 1:

@@ -24,7 +24,7 @@ Create one environment file per worker. For example,
 `~/.config/sparseengine/worker-gpu4.env`:
 
 ```bash
-SPARSEENGINE_REPO=/home/USER/projects/Sparse-Engine
+SPARSEENGINE_REPO=/home/USER/projects/SparseEngine
 SPARSEENGINE_PYTHON=/path/to/python
 SPARSEENGINE_MODEL=/path/to/model
 SPARSEENGINE_SERVED_MODEL_NAME=qwen36-27b-fp8
@@ -43,7 +43,7 @@ restart uses exactly the same runtime settings.
 Create `~/.config/sparseengine/router.env`:
 
 ```bash
-SPARSEENGINE_REPO=/home/USER/projects/Sparse-Engine
+SPARSEENGINE_REPO=/home/USER/projects/SparseEngine
 SPARSEENGINE_PYTHON=/path/to/python
 SPARSEENGINE_WORKER_URLS=http://127.0.0.1:18004,http://127.0.0.1:18005
 SPARSEENGINE_ROUTER_HOST=0.0.0.0

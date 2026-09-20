@@ -1,7 +1,7 @@
 # Supported Models
 
 This page summarizes the model, precision, parallelism, and sparse-method
-combinations supported by Sparse-Engine.
+combinations supported by SparseEngine.
 
 `Precision` describes the checkpoint weight format. `TP`, `DP`, and `EP`
 stand for tensor, data, and expert parallelism. A check mark means that the

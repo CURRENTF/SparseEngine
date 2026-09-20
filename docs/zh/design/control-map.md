@@ -1,6 +1,6 @@
-# Sparse-Engine 控制图
+# SparseEngine 控制图
 
-本页展示 Sparse-Engine runtime 的所有权和 control flow。它不是 benchmark result，不应作为方法声明的证据。请用它判断改动应放在哪里、哪些文档可信，以及报告结果前应运行哪些检查。
+本页展示 SparseEngine runtime 的所有权和 control flow。它不是 benchmark result，不应作为方法声明的证据。请用它判断改动应放在哪里、哪些文档可信，以及报告结果前应运行哪些检查。
 
 ## 文档导航
 
@@ -11,7 +11,7 @@
 
 ## 一句话模型
 
-Sparse-Engine 是 sparse-first inference engine：`Scheduler` 决定运行什么，
+SparseEngine 是 sparse-first inference engine：`Scheduler` 决定运行什么，
 `ModelRunner` 执行，`SparseController` 把具体方法逻辑交给
 `SparseMethodRuntime`，`Attention` 只调用通用接口，`CacheManager` 负责物理
 缓存、空间分配、计算视图、数据重建和 CUDA Graph 使用的稳定元数据。
@@ -72,7 +72,7 @@ flowchart TD
 
 ## 方法类别
 
-| 类别 | Sparse-Engine 方法名 | 核心行为 | 主要文件 |
+| 类别 | SparseEngine 方法名 | 核心行为 | 主要文件 |
 | --- | --- | --- | --- |
 | Dense | `vanilla` / `""` | 完整 KV cache，无 sparse selection。 | `standard.py`、通用 attention path |
 | Streaming window | `streamingllm`, `attention-sink`, `attention_sink` | 物理淘汰，只保留 sink 加 recent token。 | `streamingllm.py`、`standard.py` 风格机制 |
@@ -105,14 +105,14 @@ flowchart TD
 
 ## 改动护栏
 
-修改 Sparse-Engine runtime 代码前：
+修改 SparseEngine runtime 代码前：
 
-1. 确认原生 Sparse-Engine runtime 入口与参数。
+1. 确认原生 SparseEngine runtime 入口与参数。
 2. 确认 method family 和 graph mode：eager、decode graph、prefill graph 或两者。
 3. 确认状态归属。持久物理状态和跟随 Prefix Cache 的状态属于 CacheManager；
    当前步骤和跨层传递的逻辑状态属于 SparseMethodRuntime。
 4. 新配置不要使用 legacy public runtime name。使用 `sparse_method`、`deltakv_checkpoint_path`、`decode_keep_tokens`、`sink_keep_tokens`、`recent_keep_tokens`、`full_attention_layers` 和 `engine_prefill_chunk_size`。
-5. Sparse-Engine keep budget 是 token count，不是 ratio。
+5. SparseEngine keep budget 是 token count，不是 ratio。
 6. 所有 fallback 都必须显式且有文档记录。不要静默忽略错误 config、缺失 checkpoint、缺失 dataset、parse failure 或 metric failure。
 7. 新增或重构稀疏方法时，遵守
    [稀疏方法运行时架构](sparse-method-runtime.md)：`attention.py` 通用、

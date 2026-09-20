@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Evaluate Sparse-Engine methods on the self-contained RULER core task set.
+"""Evaluate SparseEngine methods on the self-contained RULER core task set.
 
 The runner covers retrieval, multi-hop tracing, and aggregation without
 requiring downloaded essays or QA corpora.  It uses this repo's native
-Sparse-Engine inference path and RULER's string-match-all scoring contract.
+SparseEngine inference path and RULER's string-match-all scoring contract.
 """
 
 from __future__ import annotations

@@ -23,7 +23,7 @@ import pandas as pd
 import seaborn as sns
 
 
-PALETTE = {"Vortex": "#87AED4", "Sparse-Engine": "#49B6A3", "Sparse-Engine (wave2)": "#ECAB83"}
+PALETTE = {"Vortex": "#87AED4", "SparseEngine": "#49B6A3", "SparseEngine (wave2)": "#ECAB83"}
 METRICS = {
     "output_token_throughput_tps": ("output_tokens", "End-to-end output throughput (token/s)"),
     "decode_stage_throughput_tps": ("decode_tokens", "Decode-only throughput (token/s)"),
@@ -97,7 +97,7 @@ def main():
     payload = json.loads(source)
     frame = pd.DataFrame(validated_rows(payload))
     models = list(dict.fromkeys(frame.model))
-    series = ["Vortex", "Sparse-Engine"]
+    series = ["Vortex", "SparseEngine"]
     if set(frame.method) != {"QuEST", "H2O / H2O-like"}:
         raise ValueError("Expected QuEST and the explicitly approximate H2O comparison")
     targets = [args.output_dir / f"comparison.{ext}" for ext in ("png", "pdf", "svg")]
@@ -123,7 +123,7 @@ def main():
     axes[0].margins(y=0.20)
     axes[0].set_ylim(bottom=0)
     handles, labels = axes[1].get_legend_handles_labels()
-    labels = [label.replace("Sparse-Engine", "Ours").replace("wave2", "Max Avai. B")
+    labels = [label.replace("SparseEngine", "Ours").replace("wave2", "Max Avai. B")
               for label in labels]
     for ax in axes:
         ax.get_legend().remove()

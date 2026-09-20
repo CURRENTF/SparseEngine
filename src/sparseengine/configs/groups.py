@@ -1,4 +1,4 @@
-"""Composable groups of user-facing Sparse-Engine configuration fields."""
+"""Composable groups of user-facing SparseEngine configuration fields."""
 
 from dataclasses import dataclass, field
 

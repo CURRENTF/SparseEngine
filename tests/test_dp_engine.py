@@ -118,7 +118,7 @@ def test_dp_entrypoint_rejects_unknown_configuration_before_loading_model():
 
     from sparseengine import LLM
 
-    with pytest.raises(ValueError, match="Unknown Sparse-Engine config keys"):
+    with pytest.raises(ValueError, match="Unknown SparseEngine config keys"):
         LLM(
             "unused-model",
             data_parallel_size=2,

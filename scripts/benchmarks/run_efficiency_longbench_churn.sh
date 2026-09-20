@@ -148,7 +148,7 @@ for SYS in "${SYS_ARR[@]}"; do
       --top_k 1 \
       --batch_size 8
 
-    # Run Eval for Sparse-Engine
+    # Run Eval for SparseEngine
     "${PYTHON_BIN}" "${REPO_ROOT}/benchmark/long_bench/eval.py" --path "${SYS_OUT}"
   fi
 

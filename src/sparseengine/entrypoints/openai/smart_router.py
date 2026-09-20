@@ -104,7 +104,7 @@ def create_app(
         profiles=profiles or {},
         route_log_dir=Path(route_log_dir) if route_log_dir else None,
     )
-    app = FastAPI(title="Sparse-Engine OpenAI smart router")
+    app = FastAPI(title="SparseEngine OpenAI smart router")
     app.state.router = router
 
     @app.on_event("startup")
@@ -360,7 +360,7 @@ class SmartRouter:
             if not candidates:
                 raise HTTPException(
                     status_code=503,
-                    detail="No healthy Sparse-Engine worker matches this chain request.",
+                    detail="No healthy SparseEngine worker matches this chain request.",
                 )
             worker, chain_matches = await self._select_chain_owner(
                 candidates, chain_id
@@ -392,12 +392,12 @@ class SmartRouter:
                 raise HTTPException(
                     status_code=503,
                     detail=(
-                        "No healthy chain-capable Sparse-Engine worker matches "
+                        "No healthy chain-capable SparseEngine worker matches "
                         "this new-chain request."
                     ),
                 )
         if not candidates:
-            raise HTTPException(status_code=503, detail="No healthy Sparse-Engine worker matches this request.")
+            raise HTTPException(status_code=503, detail="No healthy SparseEngine worker matches this request.")
         if route_hints.get("target_worker"):
             target = str(route_hints["target_worker"])
             for worker in candidates:
@@ -408,7 +408,7 @@ class SmartRouter:
         match_payload = match_payload_for_request(endpoint, forward_payload)
         probes = await self._probe_workers(candidates, match_payload)
         if not probes:
-            raise HTTPException(status_code=503, detail="No healthy Sparse-Engine worker responded to route probes.")
+            raise HTTPException(status_code=503, detail="No healthy SparseEngine worker responded to route probes.")
         worker, reason = choose_worker(
             probes,
             overload_load_factor=self.overload_load_factor,
@@ -702,7 +702,7 @@ class SmartRouter:
         await self.refresh_worker_info()
         workers = [worker for worker in self.workers if worker.healthy]
         if not workers:
-            raise HTTPException(status_code=503, detail="No healthy Sparse-Engine worker is available.")
+            raise HTTPException(status_code=503, detail="No healthy SparseEngine worker is available.")
         results = await asyncio.gather(
             *[self._broadcast_one(worker, endpoint, payload) for worker in workers],
             return_exceptions=True,
@@ -1065,7 +1065,7 @@ def _load_profiles(value: str | None) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Sparse-Engine OpenAI smart router")
+    parser = argparse.ArgumentParser(description="SparseEngine OpenAI smart router")
     parser.add_argument("--worker-url", "--worker-urls", action="append", required=True)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
@@ -1092,7 +1092,7 @@ def main(argv: list[str] | None = None):
         profiles=_load_profiles(args.profiles_json),
         route_log_dir=args.route_log_dir,
     )
-    logger.info("Starting Sparse-Engine smart router on {}:{} for workers={}", args.host, args.port, worker_urls)
+    logger.info("Starting SparseEngine smart router on {}:{} for workers={}", args.host, args.port, worker_urls)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

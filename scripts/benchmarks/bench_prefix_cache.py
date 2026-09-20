@@ -1491,13 +1491,13 @@ def _append_ledger(output_dir: Path, summaries: list[dict[str, Any]], args: argp
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark Sparse-Engine prefix cache on shared-prefix and dynamic multi-turn traces.")
+    parser = argparse.ArgumentParser(description="Benchmark SparseEngine prefix cache on shared-prefix and dynamic multi-turn traces.")
     parser.add_argument("--model_path", required=True)
     parser.add_argument("--cases", default="baseline_full,prefix_full,prefix_omnikv,prefix_quest")
     parser.add_argument("--workloads", default="shared_prefix,multiturn", help="Comma-separated: shared_prefix,multiturn")
     parser.add_argument("--output_dir", default=None)
     parser.add_argument("--feature", default="prefix_cache")
-    parser.add_argument("--objective", default="evaluate Sparse-Engine prefix cache on realistic multi-turn traces")
+    parser.add_argument("--objective", default="evaluate SparseEngine prefix cache on realistic multi-turn traces")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--continue_on_failure", action="store_true")
     parser.add_argument("--allow_short_trace", action="store_true", help="Allow cache-lifecycle smoke traces that do not enter sparse paths.")

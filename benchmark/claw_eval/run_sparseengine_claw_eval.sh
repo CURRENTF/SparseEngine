@@ -7,7 +7,7 @@ OUTPUT_BASE="${SPARSEENGINE_OUTPUT_DIR:-${REPO_ROOT}/outputs}"
 CACHE_ROOT="${DELTAKV_CACHE_DIR:-${REPO_ROOT}/.cache}"
 CONDA_ENVS_ROOT="${CONDA_ENVS_ROOT:-${HOME}/.conda/envs}"
 RUN_NAME="${RUN_NAME:-claw_eval_$(date +%Y%m%d_%H%M%S)}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-${OUTPUT_BASE}/Sparse-Engine/claw-eval}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-${OUTPUT_BASE}/SparseEngine/claw-eval}"
 RUN_DIR="${OUTPUT_ROOT}/${RUN_NAME}"
 LOG_DIR="${RUN_DIR}/logs"
 TRACE_DIR="${RUN_DIR}/traces"
@@ -54,7 +54,7 @@ CLAW_EVAL_PER_SAMPLE_RESULTS="${RUN_DIR}/per_sample_results.jsonl"
 CLAW_EVAL_FINAL_SUMMARY="${RUN_DIR}/final_summary.json"
 SETUP_ONLY="${SETUP_ONLY:-0}"
 
-SPARSEENGINE_CONDA_ENV="${SPARSEENGINE_CONDA_ENV:-${CONDA_ENVS_ROOT}/sparse-engine-tf530}"
+SPARSEENGINE_CONDA_ENV="${SPARSEENGINE_CONDA_ENV:-${CONDA_ENVS_ROOT}/sparseengine-tf530}"
 CLAW_EVAL_CONDA_ENV="${CLAW_EVAL_CONDA_ENV:-${CONDA_ENVS_ROOT}/claw-eval-py311}"
 SPARSEENGINE_MASTER_PORT="${SPARSEENGINE_MASTER_PORT:-2333}"
 SPARSEENGINE_DATA_PARALLEL_SIZE="${SPARSEENGINE_DATA_PARALLEL_SIZE:-1}"
@@ -541,7 +541,7 @@ wait_for_server() {
       return
     fi
     if [[ "${START_SPARSEENGINE_SERVER}" == "1" ]] && ! kill -0 "${SERVER_PID}" 2>/dev/null; then
-      echo "[ERROR] Sparse-Engine OpenAI server exited early. See ${LOG_DIR}/sparseengine_openai_server.log" >&2
+      echo "[ERROR] SparseEngine OpenAI server exited early. See ${LOG_DIR}/sparseengine_openai_server.log" >&2
       exit 4
     fi
     sleep 2
@@ -657,7 +657,7 @@ main() {
     activate_conda_env "${SPARSEENGINE_CONDA_ENV}"
     export CUDA_VISIBLE_DEVICES
     export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
-    echo "[INFO] Starting Sparse-Engine OpenAI server on GPUs ${CUDA_VISIBLE_DEVICES}"
+    echo "[INFO] Starting SparseEngine OpenAI server on GPUs ${CUDA_VISIBLE_DEVICES}"
     "${SPARSEENGINE_PYTHON_BIN}" -u -m sparseengine.entrypoints.openai.api_server \
       --model "${MODEL_PATH}" \
       --served-model-name "${SERVED_MODEL_NAME}" \

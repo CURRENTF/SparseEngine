@@ -539,7 +539,7 @@ class FlashInferFa2Sm120PagedPrefillAttentionProvider(
 
 @PREFILL_ATTENTION_REGISTRY.register_atomic(ProviderRole.UPSTREAM_STANDARD)
 class SglFa3PagedPrefillAttentionProvider(PrefillAttentionProvider):
-    """SGL FA3 over Sparse-Engine's page-size-one physical KV table."""
+    """SGL FA3 over SparseEngine's page-size-one physical KV table."""
 
     name = "sgl_fa3_paged_prefill_sm90"
     capabilities = AttentionKernelCapabilities(

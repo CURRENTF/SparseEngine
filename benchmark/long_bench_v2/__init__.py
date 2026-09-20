@@ -1,1 +1,1 @@
-"""Native Sparse-Engine integration for the official LongBench v2 benchmark."""
+"""Native SparseEngine integration for the official LongBench v2 benchmark."""

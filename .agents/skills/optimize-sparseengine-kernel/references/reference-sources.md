@@ -32,5 +32,5 @@ hardware, and benchmark protocol.
    before comparing implementation shape.
 3. Port the smallest relevant mechanism rather than copying an entire module.
 4. Retain required license and provenance files and describe local changes.
-5. Rebuild correctness and benchmark baselines under Sparse-Engine's actual
+5. Rebuild correctness and benchmark baselines under SparseEngine's actual
    serving contract.

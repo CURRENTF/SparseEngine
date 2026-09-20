@@ -55,4 +55,4 @@ Useful optimizations:
 
 The official QuEST repo is useful as a kernel reference, but its Python wrapper and controller path are still strongly shaped around batch size 1 in some places.
 
-Do not assume the official wrapper can be dropped into Sparse-Engine's batched engine unchanged. Check the wrapper and batch assumptions before planning an integration.
+Do not assume the official wrapper can be dropped into SparseEngine's batched engine unchanged. Check the wrapper and batch assumptions before planning an integration.

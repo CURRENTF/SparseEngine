@@ -180,9 +180,9 @@ class AsyncEngineDispatcher:
         if self._failed_message is not None:
             return self._failed_message
         if self._closing.is_set():
-            return "Sparse-Engine server is shutting down."
+            return "SparseEngine server is shutting down."
         if not self._thread.is_alive():
-            return "Sparse-Engine dispatcher thread is not running."
+            return "SparseEngine dispatcher thread is not running."
         return None
 
     async def submit(
@@ -553,7 +553,7 @@ class AsyncEngineDispatcher:
             fatal_callback = self._mark_failed(failed_message)
             logger.exception("OpenAI dispatcher stopped after a fatal error: {}", failed_message)
         finally:
-            terminal_message = self.failure_message or "Sparse-Engine server is shutting down."
+            terminal_message = self.failure_message or "SparseEngine server is shutting down."
             try:
                 self._fail_active_requests(active, terminal_message)
                 self._drain_queued_requests(terminal_message)
@@ -572,7 +572,7 @@ class AsyncEngineDispatcher:
             except queue.Empty:
                 return
             if self._closing.is_set():
-                self._put_control(item, {"type": "error", "message": "Sparse-Engine server is shutting down."})
+                self._put_control(item, {"type": "error", "message": "SparseEngine server is shutting down."})
                 continue
             if self._failed_message is not None:
                 self._put_control(item, {"type": "error", "message": self._failed_message})
@@ -596,7 +596,7 @@ class AsyncEngineDispatcher:
             self._resolve_admission(item, asyncio.CancelledError())
             return
         if self._closing.is_set():
-            message = "Sparse-Engine server is shutting down."
+            message = "SparseEngine server is shutting down."
             item.handle.terminal.set()
             self._put(item, {"type": "error", "message": message})
             self._resolve_admission(item, RuntimeError(message))

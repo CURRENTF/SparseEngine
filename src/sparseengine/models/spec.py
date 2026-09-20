@@ -194,6 +194,6 @@ def resolve_model_spec(model_type: str) -> ModelSpec:
     if model_type not in MODEL_SPECS:
         supported = ", ".join(sorted(MODEL_SPECS))
         raise NotImplementedError(
-            f"Unsupported Sparse-Engine model_type={model_type!r}; supported: {supported}."
+            f"Unsupported SparseEngine model_type={model_type!r}; supported: {supported}."
         )
     return MODEL_SPECS[model_type]

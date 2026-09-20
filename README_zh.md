@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="docs/assets/logo.png" alt="Sparse-Engine" style="width:42%; height:auto;">
+  <img src="docs/assets/logo.png" alt="SparseEngine" style="width:42%; height:auto;">
 
   <p>
-    <a href="https://deepwiki.com/CURRENTF/Sparse-Engine"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+    <a href="https://deepwiki.com/CURRENTF/SparseEngine"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
     <a href="https://arxiv.org/abs/2602.08005"><img src="https://img.shields.io/badge/arXiv-2602.08005-b31b1b.svg" alt="arXiv"></a>
     <a href="https://arxiv.org/pdf/2602.08005.pdf"><img src="https://img.shields.io/badge/PDF-download-brightgreen.svg" alt="PDF"></a>
   </p>
@@ -10,15 +10,15 @@
 
 <p align="center"><a href="README.md">English</a> | 简体中文</p>
 
-Sparse-Engine 是一个面向长上下文大语言模型服务、以稀疏机制为首要设计原则的推理引擎。
+SparseEngine 是一个面向长上下文大语言模型服务、以稀疏机制为首要设计原则的推理引擎。
 
 <div align="center">
-  <img src="docs/assets/sparse_engine_throughput.png" alt="Sparse-Engine 吞吐量" style="width:86%; height:auto;">
+  <img src="docs/assets/sparse_engine_throughput.png" alt="SparseEngine 吞吐量" style="width:86%; height:auto;">
 </div>
 
 ## 项目概览
 
-Sparse-Engine 是一个从设计之初就以稀疏性为核心原则的推理框架。它并非简单地在传统 KV 缓存之上叠加稀疏方法，而是重新设计缓存布局、控制流程和内核，使多种稀疏机制能够清晰地接入框架。
+SparseEngine 是一个从设计之初就以稀疏性为核心原则的推理框架。它并非简单地在传统 KV 缓存之上叠加稀疏方法，而是重新设计缓存布局、控制流程和内核，使多种稀疏机制能够清晰地接入框架。
 
 > **说明：** DeltaKV 压缩器训练代码由独立仓库
 > [CURRENTF/DeltaKV](https://github.com/CURRENTF/DeltaKV) 维护。本仓库仅保留
@@ -30,13 +30,13 @@ Sparse-Engine 是一个从设计之初就以稀疏性为核心原则的推理框
 - `LLM(...)`、`Config`、JSON 配置、benchmark manifest 与内部代码使用完全相同的 runtime 参数名。统一使用 `sparse_method`；旧字段 alias 不再接受。
 - 稀疏方法的运行时状态应放在 `src/sparseengine/engine/cache_manager/` 中；`attention.py` 应保持通用。
 - 预填充调度由各方法自行定义并通过注册表管理。其唯一事实来源是 `src/sparseengine/method_registry.py`，而不是基准测试脚本。
-- Sparse-Engine 当前使用两种预填充策略：`all_chunked` 和特殊的 `long_bs1full_short_batch` 策略。
+- SparseEngine 当前使用两种预填充策略：`all_chunked` 和特殊的 `long_bs1full_short_batch` 策略。
 - `long_bs1full_short_batch` 仅适用于注册时声明需要在稀疏化或缓存转换前完成一次完整长预填充的方法。长请求以批大小 1 执行完整预填充，短请求仍使用分块批处理。
 - 基准测试报告应记录稀疏方法、预填充策略、预填充分块大小、提示词长度、批大小以及所用的 DeltaKV 检查点。
 
 ## 核心稀疏方法
 
-Sparse-Engine 支持物理淘汰、逻辑掩码、查询感知选择和混合 KV 压缩。主要方法系列包括 `streamingllm`、`snapkv`、`h2o`、`pyramidkv`、`omnikv`、`quest` 和 `deltakv`。
+SparseEngine 支持物理淘汰、逻辑掩码、查询感知选择和混合 KV 压缩。主要方法系列包括 `streamingllm`、`snapkv`、`h2o`、`pyramidkv`、`omnikv`、`quest` 和 `deltakv`。
 
 | 方法 | 类型 | 简介 |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ Sparse-Engine 支持物理淘汰、逻辑掩码、查询感知选择和混合 KV
 
 ## 快速开始
 
-Sparse-Engine 需要 Python 3.10 或更高版本，默认依赖声明在
+SparseEngine 需要 Python 3.10 或更高版本，默认依赖声明在
 `pyproject.toml` 中。
 
 ### Conda

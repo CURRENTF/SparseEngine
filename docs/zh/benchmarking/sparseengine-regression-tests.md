@@ -2,7 +2,7 @@
 
 ## 真实 Agent 轨迹性能回归
 
-`--layer agent_trace` 可向已启动的 Sparse-Engine vanilla 或 upstream vLLM
+`--layer agent_trace` 可向已启动的 SparseEngine vanilla 或 upstream vLLM
 OpenAI-compatible 服务回放 MiniSWE 轨迹，不启动 GPU 服务、不执行工具，也不评解题分数。
 先检查 GPU 空闲并启动服务，保存真实 `server_manifest.json`；基线和候选运行保持
 相同缓存冷热状态、客户端和网络位置。该层使用外部 trace manifest，不使用合成负载矩阵。

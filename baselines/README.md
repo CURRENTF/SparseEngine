@@ -1,6 +1,6 @@
 # Baseline Runtime Sources
 
-This directory keeps only the baseline code needed by Sparse-Engine's runtime
+This directory keeps only the baseline code needed by SparseEngine's runtime
 adapters. Standalone benchmark, evaluation, profiling, visualization, and
 bundled benchmark-data implementations from vendored baselines are omitted.
 

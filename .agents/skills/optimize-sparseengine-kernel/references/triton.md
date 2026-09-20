@@ -12,7 +12,7 @@ shape distribution. Compare against existing neighboring kernels before
 creating a new family.
 
 Use the external `kernel-triton-writing` skill when it is available. Keep this
-guide authoritative for Sparse-Engine-specific integration and validation.
+guide authoritative for SparseEngine-specific integration and validation.
 
 ## Establish the Baseline
 

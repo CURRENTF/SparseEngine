@@ -427,7 +427,7 @@ class ResearchFailFastTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             with patch("sparseengine.configs.runtime.AutoConfig.from_pretrained", return_value=hf_config):
-                with self.assertRaisesRegex(NotImplementedError, "Unsupported Sparse-Engine model_type"):
+                with self.assertRaisesRegex(NotImplementedError, "Unsupported SparseEngine model_type"):
                     Config(model=tmp)
 
     def test_sparseengine_deltakv_requires_checkpoint_path(self):

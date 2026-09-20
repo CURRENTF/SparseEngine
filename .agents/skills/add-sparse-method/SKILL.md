@@ -1,6 +1,6 @@
 ---
 name: add-sparse-method
-description: Add or refactor a first-class Sparse-Engine sparse method across configuration, capability registration, cache and controller ownership, scheduler admission, typed attention views, model and storage compatibility, CUDA Graph and prefix-cache lifecycles, operators, and reproducible validation. Use for a new canonical sparse_method or an integration whose sparse runtime semantics change; do not use for a kernel/provider optimization that leaves method semantics unchanged.
+description: Add or refactor a first-class SparseEngine sparse method across configuration, capability registration, cache and controller ownership, scheduler admission, typed attention views, model and storage compatibility, CUDA Graph and prefix-cache lifecycles, operators, and reproducible validation. Use for a new canonical sparse_method or an integration whose sparse runtime semantics change; do not use for a kernel/provider optimization that leaves method semantics unchanged.
 ---
 
 # Add Sparse Method

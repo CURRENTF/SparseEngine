@@ -35,7 +35,7 @@ MAX_JOBS=8 python -m pip install ./flashprefill_ops --no-build-isolation
 ```
 
 Package 缺失、版本不兼容或 binary 加载失败会在 Provider 解析阶段明确报错；
-Sparse-Engine 不会把请求的稀疏语义静默替换为 dense Provider。
+SparseEngine 不会把请求的稀疏语义静默替换为 dense Provider。
 
 ## 配置
 

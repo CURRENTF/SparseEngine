@@ -193,7 +193,7 @@ def compare_summaries(off_summary: dict[str, Any], on_summary: dict[str, Any]) -
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run SCBench with Sparse-Engine prefix caching off/on and summarize reuse and speed."
+        description="Run SCBench with SparseEngine prefix caching off/on and summarize reuse and speed."
     )
     parser.add_argument("--model_name_or_path", required=True)
     parser.add_argument("--task", default="scbench_kv")

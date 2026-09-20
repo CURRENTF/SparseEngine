@@ -56,7 +56,7 @@ class RuntimeParamNamingTest(unittest.TestCase):
     def test_unknown_runtime_parameter_fails_at_engine_boundary(self):
         from sparseengine import LLM
 
-        with self.assertRaisesRegex(ValueError, "Unknown Sparse-Engine config keys"):
+        with self.assertRaisesRegex(ValueError, "Unknown SparseEngine config keys"):
             LLM("/tmp/unused-model", vllm_sparse_method="omnikv")
 
     def test_keep_token_budgets_reject_ratio_values(self):
@@ -75,7 +75,7 @@ class RuntimeParamNamingTest(unittest.TestCase):
             "resolved_cache_sparse_method",
         ):
             with self.subTest(key=key):
-                with self.assertRaisesRegex(ValueError, "Unknown Sparse-Engine config keys"):
+                with self.assertRaisesRegex(ValueError, "Unknown SparseEngine config keys"):
                     LLM("/tmp/unused-model", **{key: 1})
 
 

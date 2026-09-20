@@ -15,7 +15,7 @@ from minisweagent.models.litellm_model import LitellmModel
 
 
 class SparseVLLMLitellmModel(LitellmModel):
-    """Replay clean chat history and opt into per-instance Sparse-Engine chains."""
+    """Replay clean chat history and opt into per-instance SparseEngine chains."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -398,7 +398,7 @@ class SparseVLLMLitellmModel(LitellmModel):
             continuation_error = self._continuation_error(messages)
             if continuation_error is not None:
                 raise RuntimeError(
-                    "Sparse-Engine chain transcript is not append-only: "
+                    "SparseEngine chain transcript is not append-only: "
                     f"{continuation_error}."
                 )
         chain_append_start = (
@@ -456,7 +456,7 @@ class SparseVLLMLitellmModel(LitellmModel):
         normalized_chain_id = str(chain_id or "").strip()
         if not normalized_chain_id:
             raise RuntimeError(
-                "Sparse-Engine chain-cache request completed without a chain_id."
+                "SparseEngine chain-cache request completed without a chain_id."
             )
         pending_request_messages = [
             self._chain_message(message) for message in messages
@@ -464,12 +464,12 @@ class SparseVLLMLitellmModel(LitellmModel):
         choices = getattr(response, "choices", None) or []
         if not choices:
             raise RuntimeError(
-                "Sparse-Engine chain-cache response contained no choices."
+                "SparseEngine chain-cache response contained no choices."
             )
         response_message = getattr(choices[0], "message", None)
         if response_message is None:
             raise RuntimeError(
-                "Sparse-Engine chain-cache response contained no assistant message."
+                "SparseEngine chain-cache response contained no assistant message."
             )
         pending_response_message = self._chain_message(response_message)
         finish_reason = str(
@@ -477,7 +477,7 @@ class SparseVLLMLitellmModel(LitellmModel):
         ).strip()
         if not finish_reason:
             raise RuntimeError(
-                "Sparse-Engine chain-cache response omitted finish_reason."
+                "SparseEngine chain-cache response omitted finish_reason."
             )
         chain_status = getattr(response, "chain_status", None)
         if chain_status is None:
@@ -487,7 +487,7 @@ class SparseVLLMLitellmModel(LitellmModel):
         normalized_chain_status = str(chain_status or "").strip()
         if not normalized_chain_status:
             raise RuntimeError(
-                "Sparse-Engine chain-cache response omitted chain_status."
+                "SparseEngine chain-cache response omitted chain_status."
             )
         self._pending_chain_state = (
             normalized_chain_id,
@@ -574,7 +574,7 @@ class SparseVLLMLitellmModel(LitellmModel):
         pending = self._pending_chain_state
         if pending is None:
             raise RuntimeError(
-                "Sparse-Engine chain-cache query completed without pending "
+                "SparseEngine chain-cache query completed without pending "
                 "chain state."
             )
         (

@@ -564,7 +564,7 @@ def validate_model_runtime_compatibility(
         compatibility = QWEN3_MOE_TP_EP_COMPATIBILITY
     if compatibility is None:
         raise NotImplementedError(
-            f"Unsupported Sparse-Engine model_type={model_type!r}."
+            f"Unsupported SparseEngine model_type={model_type!r}."
         )
 
     if bool(decode_graph) and decode_method not in compatibility.decode_graph_methods:

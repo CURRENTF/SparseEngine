@@ -1,6 +1,6 @@
-# Sparse-Engine Review Standards
+# SparseEngine Review Standards
 
-Use these checks for Sparse-Engine's Python/Triton research engine.
+Use these checks for SparseEngine's Python/Triton research engine.
 
 ## Architecture
 
@@ -40,7 +40,7 @@ Prefer fail-fast errors with method/cache-manager name, prompt length, needed/fr
 
 ## OpenAI-Compatible Serving
 
-Serving changes must preserve Sparse-Engine engine semantics instead of adding server-only execution paths.
+Serving changes must preserve SparseEngine engine semantics instead of adding server-only execution paths.
 
 For OpenAI-compatible serving or client changes, inspect `src/sparseengine/entrypoints/openai/api_server.py`, `src/sparseengine/entrypoints/openai/client.py`, `src/sparseengine/sampling_params.py`, `src/sparseengine/layers/sampler.py`, and `tests/test_openai_api_server.py`.
 

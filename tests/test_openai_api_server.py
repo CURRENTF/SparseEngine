@@ -1832,10 +1832,10 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "Missing value"):
             _parse_engine_kwargs(["--max-model-len"])
 
-        with self.assertRaisesRegex(ValueError, "Unknown Sparse-Engine engine argument"):
+        with self.assertRaisesRegex(ValueError, "Unknown SparseEngine engine argument"):
             _parse_engine_kwargs(["--observation-layers", "0"])
 
-        with self.assertRaisesRegex(ValueError, "Unknown Sparse-Engine engine argument"):
+        with self.assertRaisesRegex(ValueError, "Unknown SparseEngine engine argument"):
             _parse_engine_kwargs(["--obs-layer-ids", "0"])
 
         self.assertEqual(_parse_engine_kwargs(["--sparse-method", "snapkv"]), {"sparse_method": "snapkv"})

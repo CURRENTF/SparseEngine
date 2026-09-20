@@ -20,7 +20,7 @@ def tokenize_text_prompt(
         for token_id in prompt
     ):
         raise TypeError(
-            "Sparse-Engine accepts text prompts only: prompt must be a string "
+            "SparseEngine accepts text prompts only: prompt must be a string "
             "or a flat list of integer token IDs; structured image, video, "
             "or MTP request objects are unsupported."
         )

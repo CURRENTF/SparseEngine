@@ -1,6 +1,6 @@
 # 功能
 
-本目录收录定义 Sparse-Engine 行为的稀疏方法文档。
+本目录收录定义 SparseEngine 行为的稀疏方法文档。
 
 - [支持的模型](supported-models.md)
 - [核心稀疏方法](sparse-methods.md)

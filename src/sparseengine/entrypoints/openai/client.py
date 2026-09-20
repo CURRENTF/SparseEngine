@@ -54,7 +54,7 @@ def _post_json(url: str, payload: dict[str, Any]):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Call a Sparse-Engine OpenAI-compatible server.")
+    parser = argparse.ArgumentParser(description="Call a SparseEngine OpenAI-compatible server.")
     parser.add_argument("--base-url", default="http://localhost:8000/v1")
     parser.add_argument("--model", required=True)
     parser.add_argument("--prompt", required=True)

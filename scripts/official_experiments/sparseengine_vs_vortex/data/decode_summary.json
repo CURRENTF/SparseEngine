@@ -11,7 +11,7 @@
     {
       "model": "Qwen3-4B",
       "method": "H2O",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "concurrency": 14,
       "mean_tps": 1626.0453413547668,
       "sd_tps": 1.7827007174715652,
@@ -22,7 +22,7 @@
     {
       "model": "Qwen3-4B",
       "method": "H2O",
-      "engine": "Sparse-Engine wave2",
+      "engine": "SparseEngine wave2",
       "concurrency": 100,
       "mean_tps": 3550.739728243961,
       "sd_tps": 4.061875378686585,
@@ -33,7 +33,7 @@
     {
       "model": "Qwen3-4B",
       "method": "QuEST",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "concurrency": 13,
       "mean_tps": 1157.3248080148212,
       "sd_tps": 0.16185829471727237,
@@ -77,7 +77,7 @@
     {
       "model": "GLM-4.7-Flash",
       "method": "H2O",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "concurrency": 8,
       "mean_tps": 616.8947250174839,
       "sd_tps": 12.886363682964735,
@@ -88,7 +88,7 @@
     {
       "model": "GLM-4.7-Flash",
       "method": "H2O",
-      "engine": "Sparse-Engine wave2",
+      "engine": "SparseEngine wave2",
       "concurrency": 64,
       "mean_tps": 2513.305719000036,
       "sd_tps": 81.6325237217636,
@@ -99,7 +99,7 @@
     {
       "model": "GLM-4.7-Flash",
       "method": "QuEST",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "concurrency": 8,
       "mean_tps": 603.7672881231757,
       "sd_tps": 12.292136398493335,
@@ -157,7 +157,7 @@
       "finished_monotonic_s": 1185322.192814148,
       "model": "Qwen3-4B",
       "method": "H2O",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 0,
       "source_path": "qwen/02_native_h2o_common/raw_samples.jsonl",
       "source_sha256": "b130f017058c3c6f73fbfff7e712331dd98173c7c74883a3cd16237c0d8ea946"
@@ -199,7 +199,7 @@
       "finished_monotonic_s": 1185338.659131013,
       "model": "Qwen3-4B",
       "method": "H2O",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 1,
       "source_path": "qwen/02_native_h2o_common/raw_samples.jsonl",
       "source_sha256": "b130f017058c3c6f73fbfff7e712331dd98173c7c74883a3cd16237c0d8ea946"
@@ -241,7 +241,7 @@
       "finished_monotonic_s": 1185355.12722088,
       "model": "Qwen3-4B",
       "method": "H2O",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 2,
       "source_path": "qwen/02_native_h2o_common/raw_samples.jsonl",
       "source_sha256": "b130f017058c3c6f73fbfff7e712331dd98173c7c74883a3cd16237c0d8ea946"
@@ -369,7 +369,7 @@
       "finished_monotonic_s": 1185629.523093503,
       "model": "Qwen3-4B",
       "method": "H2O",
-      "engine": "Sparse-Engine wave2",
+      "engine": "SparseEngine wave2",
       "iteration": 0,
       "source_path": "qwen/03_native_h2o_wave100/raw_samples.jsonl",
       "source_sha256": "9eeeca222ae584e1c9654b5de2c5857a920ff411b328c38bb5ae3f8f29efdf9d"
@@ -497,7 +497,7 @@
       "finished_monotonic_s": 1185729.764266293,
       "model": "Qwen3-4B",
       "method": "H2O",
-      "engine": "Sparse-Engine wave2",
+      "engine": "SparseEngine wave2",
       "iteration": 1,
       "source_path": "qwen/03_native_h2o_wave100/raw_samples.jsonl",
       "source_sha256": "9eeeca222ae584e1c9654b5de2c5857a920ff411b328c38bb5ae3f8f29efdf9d"
@@ -625,7 +625,7 @@
       "finished_monotonic_s": 1185829.907539556,
       "model": "Qwen3-4B",
       "method": "H2O",
-      "engine": "Sparse-Engine wave2",
+      "engine": "SparseEngine wave2",
       "iteration": 2,
       "source_path": "qwen/03_native_h2o_wave100/raw_samples.jsonl",
       "source_sha256": "9eeeca222ae584e1c9654b5de2c5857a920ff411b328c38bb5ae3f8f29efdf9d"
@@ -666,7 +666,7 @@
       "finished_monotonic_s": 1185909.188757436,
       "model": "Qwen3-4B",
       "method": "QuEST",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 0,
       "source_path": "qwen/04_native_quest/raw_samples.jsonl",
       "source_sha256": "efa1ae49db7facd074e90392e560603cac5c96d26c627f48350a4d9ffc6d72c2"
@@ -707,7 +707,7 @@
       "finished_monotonic_s": 1185928.013103204,
       "model": "Qwen3-4B",
       "method": "QuEST",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 1,
       "source_path": "qwen/04_native_quest/raw_samples.jsonl",
       "source_sha256": "efa1ae49db7facd074e90392e560603cac5c96d26c627f48350a4d9ffc6d72c2"
@@ -748,7 +748,7 @@
       "finished_monotonic_s": 1185946.826322176,
       "model": "Qwen3-4B",
       "method": "QuEST",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 2,
       "source_path": "qwen/04_native_quest/raw_samples.jsonl",
       "source_sha256": "efa1ae49db7facd074e90392e560603cac5c96d26c627f48350a4d9ffc6d72c2"
@@ -1159,7 +1159,7 @@
       "finished_monotonic_s": 1185788.218553619,
       "model": "GLM-4.7-Flash",
       "method": "H2O",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 0,
       "source_path": "glm/02_native_h2o_common/raw_samples.jsonl",
       "source_sha256": "df7bcf65f7530751b7cb688aa6b4d641e68f7e0ce917fea235f417d6ebb6372e"
@@ -1195,7 +1195,7 @@
       "finished_monotonic_s": 1185804.736577225,
       "model": "GLM-4.7-Flash",
       "method": "H2O",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 1,
       "source_path": "glm/02_native_h2o_common/raw_samples.jsonl",
       "source_sha256": "df7bcf65f7530751b7cb688aa6b4d641e68f7e0ce917fea235f417d6ebb6372e"
@@ -1231,7 +1231,7 @@
       "finished_monotonic_s": 1185821.149981487,
       "model": "GLM-4.7-Flash",
       "method": "H2O",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 2,
       "source_path": "glm/02_native_h2o_common/raw_samples.jsonl",
       "source_sha256": "df7bcf65f7530751b7cb688aa6b4d641e68f7e0ce917fea235f417d6ebb6372e"
@@ -1323,7 +1323,7 @@
       "finished_monotonic_s": 1186113.860446473,
       "model": "GLM-4.7-Flash",
       "method": "H2O",
-      "engine": "Sparse-Engine wave2",
+      "engine": "SparseEngine wave2",
       "iteration": 0,
       "source_path": "glm/03_native_h2o_wave64/raw_samples.jsonl",
       "source_sha256": "2e3f64a6a655f148d32a5ab95d95b867d1e1de9adeb29804a2d0996c915f702b"
@@ -1415,7 +1415,7 @@
       "finished_monotonic_s": 1186205.599598348,
       "model": "GLM-4.7-Flash",
       "method": "H2O",
-      "engine": "Sparse-Engine wave2",
+      "engine": "SparseEngine wave2",
       "iteration": 1,
       "source_path": "glm/03_native_h2o_wave64/raw_samples.jsonl",
       "source_sha256": "2e3f64a6a655f148d32a5ab95d95b867d1e1de9adeb29804a2d0996c915f702b"
@@ -1507,7 +1507,7 @@
       "finished_monotonic_s": 1186297.053346366,
       "model": "GLM-4.7-Flash",
       "method": "H2O",
-      "engine": "Sparse-Engine wave2",
+      "engine": "SparseEngine wave2",
       "iteration": 2,
       "source_path": "glm/03_native_h2o_wave64/raw_samples.jsonl",
       "source_sha256": "2e3f64a6a655f148d32a5ab95d95b867d1e1de9adeb29804a2d0996c915f702b"
@@ -1543,7 +1543,7 @@
       "finished_monotonic_s": 1186399.39783243,
       "model": "GLM-4.7-Flash",
       "method": "QuEST",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 0,
       "source_path": "glm/04_native_quest/raw_samples.jsonl",
       "source_sha256": "0a2479c40137e7ef88baa1e039c5b4fc34c36234ba193401dab38730036d9e6b"
@@ -1579,7 +1579,7 @@
       "finished_monotonic_s": 1186417.975449686,
       "model": "GLM-4.7-Flash",
       "method": "QuEST",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 1,
       "source_path": "glm/04_native_quest/raw_samples.jsonl",
       "source_sha256": "0a2479c40137e7ef88baa1e039c5b4fc34c36234ba193401dab38730036d9e6b"
@@ -1615,7 +1615,7 @@
       "finished_monotonic_s": 1186436.577189968,
       "model": "GLM-4.7-Flash",
       "method": "QuEST",
-      "engine": "Sparse-Engine",
+      "engine": "SparseEngine",
       "iteration": 2,
       "source_path": "glm/04_native_quest/raw_samples.jsonl",
       "source_sha256": "0a2479c40137e7ef88baa1e039c5b4fc34c36234ba193401dab38730036d9e6b"

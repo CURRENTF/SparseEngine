@@ -1,6 +1,6 @@
 # MathBench (GSM8K + AIME 2024 + MATH-500)
 
-This benchmark follows the same native Sparse-Engine inference adapter as
+This benchmark follows the same native SparseEngine inference adapter as
 `benchmark/long_bench/pred.py`, but evaluates **pass@1** only.
 
 ## Data format

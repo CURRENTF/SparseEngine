@@ -10,13 +10,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""SGLang fixed-grid Triton decode adapted for Sparse-Engine Gemma 4.
+"""SGLang fixed-grid Triton decode adapted for SparseEngine Gemma 4.
 
 Source: sglang/srt/layers/attention/triton_ops/decode_attention.py at
 ed0a62e4dd006132a2c6434378962528f010c906.
 
 The kernel topology and split scheduling follow SGLang.  The local changes are
-limited to Sparse-Engine's two-dimensional slot table, Gemma 4 sliding-window
+limited to SparseEngine's two-dimensional slot table, Gemma 4 sliding-window
 coordinates, and the optional raw-QK score output used by sparse methods.
 """
 

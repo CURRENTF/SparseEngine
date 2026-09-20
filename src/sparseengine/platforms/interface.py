@@ -58,7 +58,7 @@ class Platform:
         self.validate_environment()
         if not self.supports_inference():
             raise RuntimeError(
-                f"Platform {self.name!r} is detected, but Sparse-Engine inference is not supported "
+                f"Platform {self.name!r} is detected, but SparseEngine inference is not supported "
                 "on this platform in the current build."
             )
 

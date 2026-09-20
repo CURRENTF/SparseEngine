@@ -5,7 +5,7 @@ The decode kernel is adapted from
 `c7fabc4cc65e480b88b7606eb1bc9c340dbd8c8c` under the MIT license.
 
 Local changes implement the GLM-4.7-Flash TP1/TP2/TP4 decode contracts used by
-Sparse-Engine:
+SparseEngine:
 
 - BF16 query and cache tensors;
 - direct strided 20/10/5 TP-local queries, zero-padded inside complete MMA tiles;

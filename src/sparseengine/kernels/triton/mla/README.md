@@ -1,7 +1,7 @@
 # MLA Triton kernels
 
 This directory contains the minimal LightLLM-derived mathematical kernels used
-by Sparse-Engine's GLM-4.7 MLA path. It deliberately has no dependency on the
+by SparseEngine's GLM-4.7 MLA path. It deliberately has no dependency on the
 LightLLM Python package or runtime.
 
 ## Upstream source

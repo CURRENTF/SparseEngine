@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="docs/assets/logo.png" alt="Sparse-Engine" style="width:42%; height:auto;">
+  <img src="docs/assets/logo.png" alt="SparseEngine" style="width:42%; height:auto;">
 
   <p>
-    <a href="https://deepwiki.com/CURRENTF/Sparse-Engine"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+    <a href="https://deepwiki.com/CURRENTF/SparseEngine"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
     <a href="https://arxiv.org/abs/2602.08005"><img src="https://img.shields.io/badge/arXiv-2602.08005-b31b1b.svg" alt="arXiv"></a>
     <a href="https://arxiv.org/pdf/2602.08005.pdf"><img src="https://img.shields.io/badge/PDF-download-brightgreen.svg" alt="PDF"></a>
   </p>
@@ -13,12 +13,12 @@
 A sparse-first inference engine for long-context LLM serving.
 
 <div align="center">
-  <img src="docs/assets/sparse_engine_throughput.png" alt="Sparse-Engine throughput" style="width:86%; height:auto;">
+  <img src="docs/assets/sparse_engine_throughput.png" alt="SparseEngine throughput" style="width:86%; height:auto;">
 </div>
 
 ## Project Overview
 
-Sparse-Engine is an inference framework built with sparsity as the first design principle. Instead of layering sparse methods on top of a conventional KV cache, it rethinks cache layout, controller flow, and kernels so that multiple sparse mechanisms can plug in cleanly.
+SparseEngine is an inference framework built with sparsity as the first design principle. Instead of layering sparse methods on top of a conventional KV cache, it rethinks cache layout, controller flow, and kernels so that multiple sparse mechanisms can plug in cleanly.
 
 > **Note:** DeltaKV compressor training code is maintained separately in
 > [CURRENTF/DeltaKV](https://github.com/CURRENTF/DeltaKV). This repository only
@@ -34,7 +34,7 @@ Sparse-Engine is an inference framework built with sparsity as the first design 
   `src/sparseengine/engine/cache_manager/`; `attention.py` should stay generic.
 - Prefill scheduling is method-specific and registry-owned. The source of
   truth is `src/sparseengine/method_registry.py`, not benchmark scripts.
-- Sparse-Engine currently uses two prefill policies: `all_chunked` and the
+- SparseEngine currently uses two prefill policies: `all_chunked` and the
   special `long_bs1full_short_batch` policy.
 - `long_bs1full_short_batch` is only for methods that are registered to need a
   complete long-prefill pass before their sparse/cache transformation. Long
@@ -45,7 +45,7 @@ Sparse-Engine is an inference framework built with sparsity as the first design 
 
 ## Core Sparse Methods
 
-Sparse-Engine supports physical eviction, logical masking, query-aware selection,
+SparseEngine supports physical eviction, logical masking, query-aware selection,
 and hybrid KV compression. The main method families are `streamingllm`,
 `snapkv`, `h2o`, `pyramidkv`, `omnikv`, `quest`, and `deltakv`.
 
@@ -104,15 +104,15 @@ The full documentation index is maintained in [docs/en/README.md](docs/en/README
 
 ## Quick Start
 
-Sparse-Engine requires Python 3.10 or newer. The canonical CUDA 13 development
+SparseEngine requires Python 3.10 or newer. The canonical CUDA 13 development
 environment uses Python 3.12. Default dependencies are declared in
 `pyproject.toml`.
 
 ### Conda
 
 ```bash
-conda create -n sparse-engine-cu130-py312 python=3.12 -y
-conda activate sparse-engine-cu130-py312
+conda create -n sparseengine-cu130-py312 python=3.12 -y
+conda activate sparseengine-cu130-py312
 
 python -m pip config --site set global.extra-index-url \
   "https://download.pytorch.org/whl/cu130 https://flashinfer.ai/whl"

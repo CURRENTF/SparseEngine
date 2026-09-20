@@ -1,6 +1,6 @@
 # Operator Provider 选择架构
 
-Sparse-Engine 在模型构造阶段只解析一次 operator：
+SparseEngine 在模型构造阶段只解析一次 operator：
 
 ```text
 OpSpec
@@ -22,7 +22,7 @@ OpSpec
 - `DEPENDENCY_ABSENT`：可选上游依赖未安装。
 - `DEPENDENCY_BROKEN`：已安装依赖的版本、ABI 或 callable contract 损坏。
 
-本地 benchmark 覆盖不是 atomic support 状态。尤其不能因为 Sparse-Engine 没有
+本地 benchmark 覆盖不是 atomic support 状态。尤其不能因为 SparseEngine 没有
 在本地测过某个 shape，就拒绝上游实现声明支持的 shape。
 
 ## Repo-Owned DSL Kernel 的可移植性
@@ -34,7 +34,7 @@ kernel，atomic support 应尽量宽，并由语义、tensor contract、DSL/tool
 单独成为 device-name whitelist、compute-capability whitelist 或 atomic rejection
 的理由。
 
-Sparse-Engine 是研究导向项目，无法为所有硬件组合提供预先验证。对于没有已知不兼容
+SparseEngine 是研究导向项目，无法为所有硬件组合提供预先验证。对于没有已知不兼容
 的设备，resolver 可以乐观绑定 portable DSL provider，并在 prepare、JIT、warmup
 或首次执行时尝试编译。无法编译或运行时必须保留清晰的原始错误；不得静默重选
 provider、伪造默认输出或掩盖失败。确认某项不兼容后，应优先用所需硬件特性、DSL

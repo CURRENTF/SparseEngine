@@ -1,6 +1,6 @@
 ---
 name: review-operator-organization
-description: Review Sparse-Engine operator architecture, provider selection, platform capability boundaries, kernel ownership, dependency compatibility, weight layouts, batch-only CUDA Graph adaptation, fallback semantics, and validation. Use for diffs touching src/sparseengine/operators, src/sparseengine/platforms, Triton or external kernels, model-to-operator call sites, quantized weight loading, CUDA Graph constraints, optional kernel dependencies, or backend removal and migration.
+description: Review SparseEngine operator architecture, provider selection, platform capability boundaries, kernel ownership, dependency compatibility, weight layouts, batch-only CUDA Graph adaptation, fallback semantics, and validation. Use for diffs touching src/sparseengine/operators, src/sparseengine/platforms, Triton or external kernels, model-to-operator call sites, quantized weight loading, CUDA Graph constraints, optional kernel dependencies, or backend removal and migration.
 ---
 
 # Review Operator Organization
@@ -114,7 +114,7 @@ graph architecture.
 
 - Treat standard operations as upstream-first. Prefer a mature upstream public
   provider and its maintained dispatcher across the upstream-declared support
-  domain when it satisfies the Sparse-Engine operator contract.
+  domain when it satisfies the SparseEngine operator contract.
 - Keep repository-owned standard Triton or other local implementations as
   portable production fallbacks, correctness baselines, or algorithmic defaults.
   Computation, data-movement, or parallelism improvements may enter the default
@@ -148,11 +148,11 @@ graph architecture.
   atomic provider's correctness support domain.
 - Do not reject an upstream atomic provider only because every supported
   device or shape was not benchmarked locally. Validate the adapter contract,
-  package/API compatibility, and the boundary conditions Sparse-Engine adds,
+  package/API compatibility, and the boundary conditions SparseEngine adds,
   then record upstream-declared support separately from local evidence.
 - Treat raw or internal upstream entry points as locally maintained adapter
   contracts. Do not inherit broad upstream engine validation or dispatch
-  claims unless Sparse-Engine actually uses the corresponding public interface.
+  claims unless SparseEngine actually uses the corresponding public interface.
 - Keep Torch or naive implementations as explicit correctness oracles, not
   automatic production candidates.
 - Do not introduce Hub-downloaded or frozen kernels as implicit runtime
@@ -209,7 +209,7 @@ Match validation to the changed selection surface:
   provider's atomic eligibility. Exact local performance overrides must still
   be tested on every device, contract, shape, and runtime bucket they claim.
 - External-provider tests: use upstream-declared device support for atomic
-  eligibility, validate the public API and Sparse-Engine adapter on available
+  eligibility, validate the public API and SparseEngine adapter on available
   representative hardware, and label the evidence honestly. Lack of local
   access to every upstream-supported device is not by itself a reason to
   shrink that provider to a local hardware whitelist.
