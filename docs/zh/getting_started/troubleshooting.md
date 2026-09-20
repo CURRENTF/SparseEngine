@@ -1,5 +1,20 @@
 # 故障排查
 
+## 还有空闲 KV slots，却发生 chain 驱逐
+
+物理空闲 slots 中可能包含已接入请求尚未兑现的容量预留。
+接入需要回收空间或因容量不足失败时，`chain_admission` 默认以 WARNING 输出 JSON；
+设置 `LOG_LEVEL=DEBUG` 可以同时查看正常接入计划。
+`pressure` 区分 `kv_slots` 和 `resident_rows`，两者也可能同时出现。
+同一事件包含缓存空闲额度、chain/decode 各自的预留、本次请求所需的 slots/驻留位置及缺口。
+逐层数组按 `kv_layer_indices` 排列，不能将各层相加当作独立的 token 容量；数值单位为 slot，不是字节。
+
+`outcome=planned` 只表示计划，不代表已经执行。`victim_chain_ids` 是计划永久淘汰的链，
+`demote_chain_ids` 是有 CPU 快照、可以恢复的链。
+`chain_evicted` 表示链索引已实际移除，不代表 GPU payload 释放已完成；
+`chain_demoted` 表示已释放 GPU 驻留、保留 CPU 副本。
+按 chain/sequence ID 关联事件，并保留服务端错误日志；chain 驱逐本身不能证明 CUDA OOM。
+
 ## `SamplingParams` 不允许 greedy decode
 
 `SamplingParams.temperature` 必须大于 `1e-10`。如需近似 greedy decode，请使用 `1e-5` 之类的极小 temperature。

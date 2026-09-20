@@ -78,6 +78,51 @@ def test_generated_slots_replace_reservation_and_renewal_is_bounded():
     assert ledger.outstanding() == {}
 
 
+def test_final_pending_output_does_not_block_another_decode():
+    # The last submitted output has consumed its slot; keeping its lease alive
+    # until collection used to reject B and trigger unnecessary IDLE eviction.
+    pools = Pools(slots=2)
+    ledger = DecodeReservations(pools, 1)
+    a, b = request(limit=2), request()
+    assert ledger.acquire(a)
+    pools.free['slots'] -= 1
+    a.num_pending_outputs = 1
+    assert not ledger.needs_acquisition(a)
+    assert ledger.outstanding() == {}
+    assert ledger.acquire_many([a, b]) is None
+    before = ledger.outstanding()
+    a.num_pending_outputs -= 1
+    a.append_token(4)
+    assert ledger.outstanding() == before == {'slots': 1}
+    assert pools.free == {'slots': 1}
+
+
+def test_pending_outputs_renew_window_before_collection_and_respect_output_limit():
+    # A fix to outstanding() alone would still miss renewal at the submitted
+    # boundary, or create a lease ending before the newly promised window.
+    pools = Pools(slots=5)
+    ledger = DecodeReservations(pools, 2)
+    seq = request(limit=6)
+    assert ledger.acquire(seq)
+    seq.num_pending_outputs = 2
+    pools.free['slots'] -= 2
+    assert ledger.needs_acquisition(seq)
+    assert ledger.acquire(seq)
+    assert ledger.outstanding() == {'slots': 2}
+    for _ in range(2):
+        seq.num_pending_outputs -= 1
+        seq.append_token(4)
+        assert ledger.outstanding() == {'slots': 2}
+    seq.num_pending_outputs = 2
+    pools.free['slots'] -= 2
+    assert ledger.acquire(seq)
+    assert ledger.outstanding() == {'slots': 1}
+    seq.num_pending_outputs += 1
+    pools.free['slots'] -= 1
+    assert not ledger.needs_acquisition(seq)
+    assert ledger.outstanding() == {}
+
+
 def test_sole_request_can_make_progress_without_a_whole_window():
     ledger = DecodeReservations(Pools(slots=3), 100)
     seq = request()

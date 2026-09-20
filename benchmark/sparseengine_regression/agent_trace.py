@@ -253,7 +253,8 @@ def replay_body(turn, model):
     return body
 
 
-def replay_agent(agent, send, *, sleep=time.sleep, clock=time.perf_counter):
+def replay_agent(agent, send, *, sleep=time.sleep, clock=time.perf_counter,
+                 think_time_scale=1.0, after_turn=None):
     rows = []
     failed = False
     for turn in agent["turns"]:
@@ -262,7 +263,7 @@ def replay_agent(agent, send, *, sleep=time.sleep, clock=time.perf_counter):
         if failed:
             rows.append({**row, "status": "skipped_by_policy", "reason": "previous_turn_failed"})
             continue
-        sleep(turn["think_time_s"] or 0)
+        sleep((turn["think_time_s"] or 0) * think_time_scale)
         start = clock()
         try:
             response = send(turn)
@@ -272,6 +273,10 @@ def replay_agent(agent, send, *, sleep=time.sleep, clock=time.perf_counter):
             if not response.get("choices") or tokens != turn["completion_tokens"]:
                 raise ValueError(f"Response/token work mismatch: expected {turn['completion_tokens']}, got {tokens}")
             row.update(status="success", latency_s=elapsed, completion_tokens=tokens, response=response)
+            if after_turn is not None:
+                prune_start = clock()
+                after_turn(turn)
+                row["prefix_prune_elapsed_s"] = clock() - prune_start
         except Exception as exc:
             error_response = getattr(exc, "response", None)
             if error_response is not None:
@@ -307,6 +312,16 @@ def run_replay(args):
         raise ValueError("agent_trace requires --agent_trace, --agent_api_base and --agent_server_manifest")
     if args.agent_concurrency <= 0 or not math.isfinite(args.agent_request_timeout) or args.agent_request_timeout <= 0:
         raise ValueError("Concurrency and request timeout must be positive")
+    think_scale = getattr(args, "agent_think_time_scale", 1.0)
+    keep_ratio = getattr(args, "agent_prefix_prune_keep_ratio", None)
+    tokenizer_path = getattr(args, "agent_prefix_prune_tokenizer", None)
+    trigger_tokens = getattr(args, "agent_prefix_prune_trigger_tokens", 8192)
+    if trigger_tokens <= 0:
+        raise ValueError("agent_prefix_prune_trigger_tokens must be positive")
+    if not math.isfinite(think_scale) or think_scale < 0:
+        raise ValueError("Think-time scale must be finite and nonnegative")
+    if keep_ratio is not None and (not math.isfinite(keep_ratio) or not 0 <= keep_ratio < 1 or not tokenizer_path):
+        raise ValueError("Tool pruning requires keep ratio in [0,1) and a tokenizer path")
     root = Path(args.agent_trace)
     manifest = load_trace(root)
     if manifest.get("timing_quality") != "measured" and not args.agent_allow_estimated_timing:
@@ -326,6 +341,14 @@ def run_replay(args):
                 "gpu_uuids": gpu_ids, "engine_kwargs": server["engine_kwargs"], "backend": server.get("backend"),
                 "protocol": "closed_loop_recorded_inputs_fixed_decode_count_v1",
                 "timing_boundary": "client_http_nonstreaming", "request_timeout_s": args.agent_request_timeout}
+    if think_scale != 1.0 or keep_ratio is not None:
+        contract.update(protocol="closed_loop_recorded_inputs_fixed_decode_count_v2",
+                        think_time_scale=think_scale,
+                        prefix_prune=({"policy": "kvzip_global", "target": "tool_results",
+                                       "schedule": "accumulated_tool_tokens", "trigger_tokens": trigger_tokens,
+                                       "keep_ratio": keep_ratio}
+                                      if keep_ratio is not None else None),
+                        elapsed_boundary="all_requests_plus_pruning_and_scaled_think_time")
     write(out / "resolved_manifest.json", {"trace": manifest, "server": server, "comparison_contract": contract})
     if args.dry_run:
         write(out / "grade_summary.json", {"status": "skipped_by_policy", "reason": "dry_run", "layer": "agent_trace"})
@@ -335,16 +358,34 @@ def run_replay(args):
     if key:
         headers["Authorization"] = f"Bearer {key}"
     all_rows = []
+    if keep_ratio is not None:
+        # Resolve Transformers' lazy modules once on the main thread. Concurrent
+        # first imports can expose a partially initialized AutoTokenizer module.
+        from transformers import AutoTokenizer
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.reasoning import detect_reasoning_capabilities
+        from sparseengine.entrypoints.openai.render import _chat_request_prompt
 
     def worker(entry):
         agent = read(root / entry["file"])
+        prune = None
+        if keep_ratio is not None:
+            from benchmark.swe_bench_lite.prefix_prune_client import PrefixPruneClient
+            prune = PrefixPruneClient(api_base=args.agent_api_base, tokenizer_path=tokenizer_path,
+                                      keep_ratio=keep_ratio, trigger_tokens=trigger_tokens,
+                                      events_path=out / (entry["file"] + ".prune.jsonl"))
         with httpx.Client(timeout=args.agent_request_timeout, trust_env=False, headers=headers) as client:
             def send(turn):
                 response = client.post(args.agent_api_base.rstrip("/") + "/chat/completions",
                                        json=replay_body(turn, server["served_model_name"]))
                 response.raise_for_status()
                 return response.json()
-            rows = replay_agent(agent, send)
+            def after_turn(turn):
+                # Prune the recorded input that was actually prefetched; never the
+                # generated response, which is not substituted into later inputs.
+                prune._maybe_prune(replay_body(turn, server["served_model_name"]))
+            rows = replay_agent(agent, send, think_time_scale=think_scale,
+                                after_turn=after_turn if prune is not None else None)
         # One writer per agent; no concurrent appends and no lost results on another worker's failure.
         write(out / entry["file"], {"instance_id": agent["instance_id"], "requests": rows})
         return rows

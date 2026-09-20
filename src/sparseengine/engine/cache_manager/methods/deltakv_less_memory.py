@@ -1474,8 +1474,8 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                 seq = candidate
                 break
         if seq is not None and self._should_stage_full_layer_kivi_prefill(seq, size):
-            row_idx = self._get_free_row(seq_id)
-            cur_len = int(self.row_seq_lens[row_idx])
+            row_idx = self.seq_id_to_row.get(seq_id)
+            cur_len = 0 if row_idx is None else int(self.row_seq_lens[row_idx])
             uses_offload_staging = self._should_use_long_prefill_offload_staging([seq])
             if cur_len != 0 and not uses_offload_staging:
                 raise RuntimeError("Full-layer KIVI full-prefill staging only supports first-prefill prompts.")
@@ -1492,7 +1492,10 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                     "Full-layer KIVI full-prefill staging capacity is too small: "
                     f"staging_end={staging_end} staging_slots={self.deltakv_prefill_staging_num_slots}."
                 )
+            if not uses_offload_staging and cur_len + int(size) > self.full_layer_slots_map.shape[1]:
+                raise RuntimeError("KV row length exceeds max_model_len in DeltaKV full-layer KIVI staging.")
             staging_slots = torch.arange(staging_start, staging_end, dtype=torch.int32, device=self.device)
+            row_idx = self._get_free_row(seq_id)
             if not uses_offload_staging:
                 self._deltakv_less_memory_full_prefill_staging_offset = staging_end
                 self.full_layer_slots_map[row_idx, cur_len: cur_len + int(size)] = staging_slots

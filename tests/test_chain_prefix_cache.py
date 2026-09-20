@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pickle
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -31,6 +32,77 @@ from sparseengine.sampling_params import SamplingParams
 
 
 FINGERPRINT = b"chain-test-fingerprint"
+
+
+@pytest.mark.parametrize("pressure", ["kv_slots", "resident_rows", "rejected", "demoted"])
+def test_chain_admission_logs_reservations_and_preserves_failed_state(pressure):
+    """A positive physical free count must not hide reservation-driven eviction."""
+    from sparseengine.utils.log import logger
+
+    config = _h2o_fingerprint_config(
+        engine_prefill_chunk_size=4, max_num_seqs_in_gpu=3,
+    )
+    manager = object.__new__(H2OCacheManager)
+    manager.config = config
+    manager.kv_transformer_layer_indices = lambda: [0]
+    manager._num_free_slots = [100 if pressure == "resident_rows" else 16]
+    manager.free_rows = [[] if pressure == "resident_rows" else [0, 1]]
+    manager.chain_has_residency = lambda seq_id: False
+    coordinator = ChainCacheCoordinator(config, manager)
+    coordinator.decode_reservations = SimpleNamespace(
+        outstanding=lambda: {"layer_0": 0 if pressure == "resident_rows" else 4},
+    )
+    if pressure != "resident_rows":
+        active = coordinator.index.plan_admission(
+            chain_id="active", seq_id=1, token_ids=[1],
+            fingerprint=coordinator.fingerprint, reserved_slots_by_layer=(8,),
+            reserved_rows=1,
+        )
+        coordinator.index.apply_admission(active, fingerprint=coordinator.fingerprint)
+    if pressure != "rejected":
+        idle = coordinator.index.plan_admission(
+            chain_id="idle", seq_id=2, token_ids=[2], fingerprint=coordinator.fingerprint,
+        )
+        coordinator.index.apply_admission(idle, fingerprint=coordinator.fingerprint)
+        coordinator.index.finish("idle", token_ids=[2], processed_token_count=1,
+                                 physical_slots_by_layer=(8,))
+    if pressure == "demoted":
+        coordinator.offload = SimpleNamespace(poll=lambda: None, snapshots={2: object()})
+    before = pickle.dumps(coordinator.index)
+    messages = []
+    sink = logger.add(lambda msg: messages.append(msg.record["message"]), level="DEBUG")
+    try:
+        if pressure == "rejected":
+            with pytest.raises(ChainCapacityError):
+                coordinator.plan_admission(chain_id="incoming", seq_id=3, token_ids=list(range(20)))
+        else:
+            plan = coordinator.plan_admission(chain_id="incoming", seq_id=3, token_ids=list(range(20)))
+            assert plan.victim_chain_ids == (() if pressure == "demoted" else ("idle",))
+    finally:
+        logger.remove(sink)
+    # Planning/logging cannot free or mutate the chains, even on rejection.
+    assert pickle.dumps(coordinator.index) == before
+    events = [json.loads(m.removeprefix("chain_admission ")) for m in messages
+              if m.startswith("chain_admission ")]
+    assert len(events) == 1
+    event = events[0]
+    assert event["required_slots_by_layer"] == [12]  # retain 8 then append chunk of 4
+    if pressure == "resident_rows":
+        assert event["pressure"] == ["resident_rows"]
+        assert event["row_deficit"] == 1
+        assert event["slot_deficits_by_layer"] == [0]
+    else:
+        assert event["cache_free_slot_budgets"] == {"layer_0": 16}
+        assert event["chain_reserved_slots_by_layer"] == [8]
+        assert event["decode_reserved_slots_by_layer"] == [4]
+        assert event["outstanding_reserved_slots_by_layer"] == [12]
+        assert event["slot_deficits_by_layer"] == [8]  # 12 needed - (16 free - 12 reserved)
+        assert event["row_deficit"] == 0
+        assert event["pressure"] == ["kv_slots"]
+    assert event["outcome"] == ("rejected" if pressure == "rejected" else "planned")
+    if pressure != "rejected":
+        assert event["victim_chain_ids"] == ([] if pressure == "demoted" else ["idle"])
+        assert event["demote_chain_ids"] == (["idle"] if pressure == "demoted" else [])
 
 
 def test_score_free_h2o_accepts_non_kernel_aligned_decode_budget():
@@ -1078,6 +1150,9 @@ def test_engine_chain_admission_reuses_resident_seq_and_logical_boundary():
 
         def chain_capacity_deficits(self, **_kwargs):
             return (), 0, (), 0
+
+        def kv_transformer_layer_indices(self):
+            return [0, 1]
 
         def chain_physical_residency(self, _seq_id):
             return (3, 4)

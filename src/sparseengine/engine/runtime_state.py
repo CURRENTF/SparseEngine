@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import deque
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from sparseengine.engine.prefix_cache_coordinator import PrefixCacheCoordinator
 from sparseengine.engine.recurrent_state_manager import RecurrentStateManager
 from sparseengine.engine.sequence import Sequence
 from sparseengine.sampling_params import SamplingParams
+from sparseengine.utils.log import logger
 from sparseengine.utils.profiler import cpu_timing
 
 
@@ -154,6 +156,21 @@ class RuntimeState:
             )
             for name, free in budgets.items()
         }
+        coordinator = self.chain_cache_coordinator
+        if coordinator is not None:
+            # Partial prefills are already covered above. New chain requests
+            # also own capacity before their first prefill chunk is scheduled.
+            partial_ids = {int(seq.seq_id) for seq in waiting
+                           if 0 < seq.num_prefilled_tokens < seq.num_prompt_tokens}
+            chain_slots, _ = coordinator._outstanding_active_reservations(
+                exclude_seq_ids=partial_ids,
+            )
+            for layer, slots in zip(self.cache_manager.kv_transformer_layer_indices(), chain_slots):
+                name = f"layer_{layer}"
+                if name in pending:
+                    pending[name] += int(slots)
+            if "slots" in pending:
+                pending["slots"] += max(chain_slots, default=0)
         extra = self._mixed_prefix_step_reclaimable_slots()
         if extra > 0:
             if "slots" not in budgets:
@@ -435,6 +452,10 @@ class RuntimeState:
         self._free_seq_payload(int(record.seq_id))
         if demote:
             record.resident_rows = 0
+            logger.info("chain_demoted {}", json.dumps({
+                "chain_id": chain_id, "seq_id": int(record.seq_id),
+                "cause": "idle_reclaim",
+            }))
         else:
             coordinator.index.evict(chain_id)
         return {"chain_id": chain_id, "seq_id": int(record.seq_id), "demoted": bool(demote)}

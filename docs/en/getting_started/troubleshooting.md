@@ -1,5 +1,24 @@
 # Troubleshooting
 
+## Chain eviction with free KV slots
+
+Physical free slots can include space reserved for already admitted requests.
+`chain_admission` logs a JSON object at WARNING when admission needs reclamation
+or fails for lack of capacity; use `LOG_LEVEL=DEBUG` for normal admission plans.
+`pressure` distinguishes `kv_slots` from `resident_rows` (both may apply).
+The same event includes cache free-slot budgets, separate chain/decode
+reservations, the incoming request's required slots/rows, and the resulting
+deficits. Per-layer arrays follow `kv_layer_indices`; do not sum layers as if
+they were independent token capacities. Counts are slots, not bytes.
+
+`outcome=planned` does not prove that the plan executed. `victim_chain_ids`
+identifies planned permanent evictions; `demote_chain_ids` identifies chains
+whose CPU snapshots preserve resumability. `chain_evicted` records actual
+removal from the chain index, not completion of GPU payload release.
+`chain_demoted` records release of GPU residency while retaining the CPU copy.
+Correlate events by chain/sequence ID and keep server errors alongside them;
+chain eviction alone is not evidence of CUDA OOM.
+
 ## `SamplingParams` Does Not Allow Greedy Decoding
 
 `SamplingParams.temperature` must be `> 1e-10`. Use a tiny temperature such

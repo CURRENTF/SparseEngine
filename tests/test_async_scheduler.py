@@ -250,3 +250,30 @@ def test_async_configuration_resolves_automatic_and_explicit_execution(tmp_path,
     config = Config(str(tmp_path), async_scheduling=requested, decode_graph=False,
                     max_model_len=512, max_num_seqs_in_batch=2)
     assert config.async_scheduling is expected
+
+
+def test_prefix_maintenance_drains_and_publishes_inflight_tokens_before_scoring():
+    # A prune RPC arriving during lookahead must neither enter synchronous model
+    # execution early nor lose device-generated tokens while making it idle.
+    from collections import deque
+    from sparseengine.engine.llm_engine import LLMEngine
+    e, driver = engine(depth=3, chunk=16)
+    e._async_scheduler = driver
+    seq = request(5, 8, ignore_eos=True)
+    e.scheduler.add(seq)
+    driver.step()
+    assert driver.pending
+    e._pending_prefix_prune_ids = deque(['maintenance'])
+    submitted = sum(m == 'submit_async' for m, _ in e.model_runner.calls)
+    while driver.pending:
+        assert not LLMEngine.run_pending_prefix_prune(e)
+        driver.step()
+    assert seq.num_pending_outputs == 0
+    assert len(seq.completion_token_ids) == 3
+    assert sum(m == 'submit_async' for m, _ in e.model_runner.calls) == submitted
+    e._pending_prefix_prune_ids.clear()
+    for _ in range(10):
+        driver.step()
+        if e.scheduler.is_finished() and not driver.pending:
+            break
+    assert seq.completion_token_ids == list(range(1005,1013))

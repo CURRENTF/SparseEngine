@@ -7,6 +7,12 @@ from dataclasses import dataclass
 from sparseengine.engine.sequence import Sequence
 
 
+def _submitted_output_count(seq: Sequence) -> int:
+    # Async submission has already allocated KV before its output is collected.
+    # Collection transfers pending outputs to completed outputs without new KV.
+    return seq.num_completion_tokens + seq.num_pending_outputs
+
+
 @dataclass
 class DecodeReservation:
     sequence: Sequence
@@ -28,7 +34,7 @@ class DecodeReservations:
             if seq_id == exclude:
                 continue
             seq = reservation.sequence
-            remaining = max(0, reservation.end - seq.num_completion_tokens)
+            remaining = max(0, reservation.end - _submitted_output_count(seq))
             if remaining:
                 costs = self.cache_manager.decode_window_costs(seq, remaining)
                 for name, cost in costs.items():
@@ -37,9 +43,10 @@ class DecodeReservations:
 
     def needs_acquisition(self, seq: Sequence) -> bool:
         reservation = self.requests.get(seq.seq_id)
-        if reservation is not None and seq.num_completion_tokens < reservation.end:
+        submitted = _submitted_output_count(seq)
+        if reservation is not None and submitted < reservation.end:
             return False
-        return seq.num_completion_tokens < seq.max_tokens and not seq.is_recompute_replay
+        return submitted < seq.max_tokens and not seq.is_recompute_replay
 
     def acquire(self, seq: Sequence, *, allow_short: bool = False,
                 prefill_reserve: dict[str, int] | None = None,
@@ -71,7 +78,8 @@ class DecodeReservations:
     def _acquire(self, seq: Sequence, outstanding: dict[str, int],
                  budgets: dict[str, int], prefill_reserve: dict[str, int] | None,
                  allow_short: bool) -> bool:
-        remaining = seq.max_tokens - seq.num_completion_tokens
+        submitted = _submitted_output_count(seq)
+        remaining = seq.max_tokens - submitted
         tokens = min(self.window, remaining)
         costs = self.cache_manager.decode_window_costs(seq, tokens)
 
@@ -95,7 +103,7 @@ class DecodeReservations:
                     hi = mid - 1
             tokens = lo
             costs = self.cache_manager.decode_window_costs(seq, tokens)
-        self.requests[seq.seq_id] = DecodeReservation(seq, seq.num_completion_tokens + tokens)
+        self.requests[seq.seq_id] = DecodeReservation(seq, submitted + tokens)
         for name, cost in costs.items():
             outstanding[name] = outstanding.get(name, 0) + int(cost)
         return True

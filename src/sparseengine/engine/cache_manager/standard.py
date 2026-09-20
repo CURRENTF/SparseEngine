@@ -4,6 +4,7 @@ import os
 import time
 from bisect import bisect_left
 from collections import deque
+from itertools import islice
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -1175,12 +1176,33 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
             "score": None,
         }
 
+    def begin_prefix_prune_scoring_batch(self, requests) -> None:
+        if self._prefix_prune_scoring is not None:
+            raise RuntimeError("another prefix-prune scoring forward is already active.")
+        states = []
+        for request in requests:
+            self.begin_prefix_prune_scoring(**request)
+            states.append(self._prefix_prune_scoring)
+            self._prefix_prune_scoring = None
+        self._prefix_prune_scoring = {"batch": states}
+
+    def finish_prefix_prune_scoring_batch(self) -> list[torch.Tensor]:
+        state = self._prefix_prune_scoring
+        self._prefix_prune_scoring = None
+        if state is None or "batch" not in state:
+            raise RuntimeError("No prefix-prune scoring batch is active.")
+        return [self._finish_prefix_prune_score(item) for item in state["batch"]]
+
     def abort_prefix_prune_scoring(self) -> None:
         self._prefix_prune_scoring = None
 
     def finish_prefix_prune_scoring(self) -> torch.Tensor:
         state = self._prefix_prune_scoring
         self._prefix_prune_scoring = None
+        return self._finish_prefix_prune_score(state)
+
+    @staticmethod
+    def _finish_prefix_prune_score(state) -> torch.Tensor:
         if state is None or not isinstance(state.get("score"), torch.Tensor):
             raise RuntimeError("prefix-prune scoring forward produced no attention scores.")
         score = state["score"]
@@ -1191,8 +1213,9 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
             return logical_score
         return score
 
-    def _prefix_prune_physical_score_window(self):
-        state = self._prefix_prune_scoring
+    def _prefix_prune_physical_score_window(self, state=None):
+        if state is None:
+            state = self._prefix_prune_scoring
         if "physical_window" in state:
             return state["physical_window"]
         row = self.seq_id_to_row[int(state["seq_id"])]
@@ -1223,6 +1246,15 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
         state = self._prefix_prune_scoring
         if state is None:
             return None
+        if "batch" in state:
+            states = state["batch"]
+            if [s.seq_id for s in seqs] != [s["seq_id"] for s in states]:
+                raise RuntimeError("Prefix scoring batch order differs from model inputs.")
+            windows = [self._prefix_prune_physical_score_window(s) for s in states]
+            return PrefillScoreRequest(
+                tuple((start, end) for start, end, _ in windows), "probability",
+                candidate_ranges=tuple((candidate, start) for start, _, candidate in windows),
+            )
         start, end, candidate = self._prefix_prune_physical_score_window()
         return PrefillScoreRequest(((start, end),), "probability",
                                   candidate, end - start)
@@ -1242,51 +1274,42 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
         state = self._prefix_prune_scoring
         if state is None:
             return None
-        if int(chunk_lens.numel()) != 1:
-            raise RuntimeError("prefix-prune scoring requires a single maintenance request.")
-        query_start, query_end, candidate_start = self._prefix_prune_physical_score_window()
-        if int(q.shape[0]) != query_end - query_start:
-            raise RuntimeError(
-                "prefix-prune query window length mismatch: "
-                f"expected={query_end - query_start} actual={int(q.shape[0])}."
-            )
+        states = state.get("batch", [state])
+        if int(chunk_lens.numel()) != len(states):
+            raise RuntimeError("Prefix scoring metadata does not cover the maintenance batch.")
         if view.token_scores is None and not isinstance(view.payload, ExplicitKVPayload):
-            raise TypeError(
-                "prefix-prune scoring requires explicit KV storage, got "
-                f"{type(view.payload).__name__}."
-            )
-        context_len = query_end
-        if view.token_scores is not None:
-            step_score = view.token_scores
-            if step_score.shape != (1, context_len):
-                raise RuntimeError("Prefix-prune score shape does not match physical context.")
-        else:
-            step_score = torch.zeros(
-                (1, context_len), dtype=torch.float32, device=q.device
-            )
-            prefill_score_fwd(
-                q,
-                view.payload.k_cache,
-                step_score,
-                view.meta.req_indices,
-                b_start_loc,
-                view.meta.context_lens,
-                torch.tensor([query_start], dtype=torch.int32, device=q.device),
-                query_end - query_start,
-                view.meta.active_slots,
-                torch.tensor([query_start], dtype=torch.int32, device=q.device),
-                torch.tensor([query_end], dtype=torch.int32, device=q.device),
-                candidate_start=candidate_start,
-                recent_keep_tokens=query_end - query_start,
-                score_mode="probability",
-            )
-        score = step_score[0]
-        accumulated = state.get("score")
-        state["score"] = (
-            score.clone()
-            if accumulated is None
-            else torch.maximum(accumulated, score)  # type: ignore[arg-type]
-        )
+            raise TypeError("Prefix pruning requires explicit KV storage or fused token scores.")
+        offset = 0
+        for i, item in enumerate(states):
+            start, end, candidate = self._prefix_prune_physical_score_window(item)
+            length = end - start
+            if view.token_scores is not None:
+                if view.token_scores.shape[0] != len(states) or view.token_scores.shape[1] < end:
+                    raise RuntimeError("Prefix-prune score shape does not match physical context.")
+                score = view.token_scores[i, :end]
+            else:
+                # Explicit-KV scorer has scalar candidate bounds. Model projections
+                # still run as one batch; score each row with its own normalizer.
+                step_score = torch.zeros((1, end), dtype=torch.float32, device=q.device)
+                starts = torch.tensor([start], dtype=torch.int32, device=q.device)
+                prefill_score_fwd(
+                    q[offset:offset + length], view.payload.k_cache, step_score,
+                    view.meta.req_indices[i:i + 1], torch.zeros_like(starts),
+                    view.meta.context_lens[i:i + 1], starts, length,
+                    view.meta.active_slots, starts,
+                    torch.tensor([end], dtype=torch.int32, device=q.device),
+                    candidate_start=candidate, recent_keep_tokens=length,
+                    score_mode="probability",
+                )
+                score = step_score[0]
+            accumulated = item.get("score")
+            if accumulated is None:
+                item["score"] = score.clone()
+            else:
+                torch.maximum(accumulated, score, out=accumulated)
+            offset += length
+        if offset != q.shape[0]:
+            raise RuntimeError("Prefix-prune query window length mismatch.")
         return None
 
     def mark_materialized_prefix_kv_payload(self, seq: Sequence, payload: object) -> None:
@@ -1680,18 +1703,101 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
             self.seq_id_to_prefix_blocks[seq.seq_id] = chain
             self.prefix_cache.touch_chain(chain)
 
-    def _take_prefix_device_slots(self, count: int) -> torch.Tensor:
+    def _take_device_slots(self, count: int, *, copy: bool = False) -> torch.Tensor:
+        """Reclaim eligible cache entries, then transfer slots out of the free pool."""
         count = int(count)
+        if count < 0:
+            raise ValueError("Device slot count must be non-negative.")
         self._evict_prefix_cache_until_free(count)
         if self._num_free_slots < count:
             raise RuntimeError(
-                "Out of KV cache slots while promoting a CPU prefix: "
+                "Out of KV cache slots after prefix eviction: "
                 f"need={count} free={self._num_free_slots}."
             )
         ptr = self._num_free_slots
-        slots = self.free_slots_stack[ptr - count:ptr].clone()
+        slots = self.free_slots_stack[ptr - count:ptr]
+        if copy:
+            slots = slots.clone()
         self._num_free_slots -= count
         return slots
+
+    def _take_prefix_device_slots(self, count: int) -> torch.Tensor:
+        return self._take_device_slots(count, copy=True)
+
+    @contextmanager
+    def reserve_prefill_slots(
+        self,
+        requests: list[tuple[int, int]],
+        *,
+        prefix_blocks: dict[int, list[PrefixCacheBlock]] | None = None,
+    ):
+        """Reserve an ordered prefix of (seq_id, query_tokens) before execution.
+
+        Callers pin any cached prefixes they need before admission. Eviction uses
+        the ordinary allocator policy and respects those refs. Unconsumed slots
+        and newly claimed rows are returned on exit, including failed forwards.
+        Consumed slots follow the normal row ownership/free_seq lifecycle.
+        CPU-only prefix blocks need promotion headroom, counted once per shared
+        block. Leave that headroom in the pool for the ordinary attach path.
+        """
+        if getattr(self, "_prefill_slot_reservations", None) is not None:
+            raise RuntimeError("A prefill slot reservation is already active.")
+        if not requests or len({sid for sid, _ in requests}) != len(requests):
+            raise ValueError("Prefill reservation requires distinct sequence IDs.")
+        if any(size <= 0 for _, size in requests):
+            raise ValueError("Prefill reservation sizes must be positive.")
+        candidates = []
+        required_slots = []
+        promotion_blocks = set()
+        query_slots = promotion_slots = 0
+        available_rows = len(self.free_rows)
+        for sid, size in requests:
+            if sid not in self.seq_id_to_row:
+                if not available_rows:
+                    break
+                available_rows -= 1
+            candidates.append((sid, size))
+            query_slots += size
+            for block in (() if prefix_blocks is None else prefix_blocks[sid]):
+                if not block.residency.device_present and block.stable_block_id not in promotion_blocks:
+                    promotion_blocks.add(block.stable_block_id)
+                    promotion_slots += self._standard_payload(block).resident_tokens(
+                        self.prefix_cache_block_size
+                    )
+            required_slots.append(query_slots + promotion_slots)
+        if not candidates:
+            raise RuntimeError("Prefill reservation requires an idle cache row.")
+        self._evict_prefix_cache_until_free(required_slots[-1])
+        admitted, total = [], 0
+        for (sid, size), required in zip(candidates, required_slots, strict=True):
+            if required > self._num_free_slots:
+                break
+            admitted.append((sid, size))
+            total += size
+        if not admitted:
+            raise RuntimeError(
+                "Out of KV cache slots after prefix eviction for prefill reservation: "
+                f"need={required_slots[0]} free={self._num_free_slots}."
+            )
+        # Clone once: intervening frees may overwrite the allocator's stack.
+        slots = self._take_device_slots(total, copy=True)
+        reserved, offset = {}, 0
+        for sid, size in admitted:
+            reserved[sid] = slots[offset:offset + size]
+            offset += size
+        new_rows = [sid for sid, _ in admitted if sid not in self.seq_id_to_row]
+        self._prefill_slot_reservations = reserved
+        try:
+            for sid in new_rows:
+                self._get_free_row(sid)
+            yield len(admitted)
+        finally:
+            self._prefill_slot_reservations = None
+            if reserved:
+                self._return_prefix_device_slots(torch.cat(list(reserved.values())))
+            for sid in new_rows:
+                if sid in self.seq_id_to_row:
+                    self.free_seq(sid)
 
     def _return_prefix_device_slots(self, slots: torch.Tensor) -> None:
         slots = slots.to(device=self.device, dtype=torch.int32).reshape(-1)
@@ -1714,22 +1820,30 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
     @torch.no_grad()
     def _allocate(self, seq_id: int, size: int) -> torch.Tensor:
         with profiler.record("cache_allocate"):
-            self._evict_prefix_cache_until_free(size)
-            assert self._num_free_slots >= size, (
-                f"Out of KV cache slots: need {size}, free {self._num_free_slots}"
-            )
-
-            row_idx = self._get_free_row(seq_id)
-            cur_len = self.row_seq_lens[row_idx]
-
-            ptr = self._num_free_slots
-            select_index = self.free_slots_stack[ptr - size: ptr]
-            self._num_free_slots -= size
-
-            self.buffer_req_to_token_slots[row_idx, cur_len: cur_len + size] = select_index
-            self.row_seq_lens[row_idx] += size
-            self.row_logical_lens[row_idx] += size
-
+            existing_row = self.seq_id_to_row.get(seq_id)
+            if existing_row is None and not self.free_rows:
+                raise RuntimeError("No free rows in cache manager buffer!")
+            cur_len = 0 if existing_row is None else int(self.row_seq_lens[existing_row])
+            if size < 0 or cur_len + size > self.buffer_req_to_token_slots.shape[1]:
+                raise ValueError("Prefill allocation exceeds the cache row capacity.")
+            reservations = getattr(self, "_prefill_slot_reservations", None)
+            reserved = None if reservations is None else reservations.get(seq_id)
+            if reserved is not None and reserved.numel() != size:
+                raise RuntimeError("Prefill allocation differs from its slot reservation.")
+            select_index = reserved if reserved is not None else self._take_device_slots(size)
+            try:
+                row_idx = self._get_free_row(seq_id)
+                self.buffer_req_to_token_slots[row_idx, cur_len:cur_len + size] = select_index
+                self.row_seq_lens[row_idx] += size
+                self.row_logical_lens[row_idx] += size
+            except BaseException:
+                if reserved is None:
+                    self._return_prefix_device_slots(select_index)
+                if existing_row is None and seq_id in self.seq_id_to_row:
+                    self.free_rows.appendleft(self.seq_id_to_row.pop(seq_id))
+                raise
+            if reserved is not None:
+                del reservations[seq_id]
             return select_index
 
     def _ensure_decode_buffers(self, batch_size: int):
@@ -1753,18 +1867,17 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
     def _allocate_batch(self, seq_ids: list[int], size: int) -> torch.Tensor:
         assert size == 1, "Batch allocation currently only supports size=1 (Decode)"
         batch_size = len(seq_ids)
-        self._evict_prefix_cache_until_free(batch_size)
-        assert self._num_free_slots >= batch_size, (
-            f"Out of KV cache slots: need {batch_size}, free {self._num_free_slots}"
-        )
+        row_indices, pending_rows = self._plan_decode_rows(seq_ids)
         self._ensure_decode_buffers(batch_size)
-
-        row_indices = [self._get_free_row(sid) for sid in seq_ids]
         cur_lens = self.row_seq_lens[row_indices]
-
-        ptr = self._num_free_slots
-        select_indices = self.free_slots_stack[ptr - batch_size: ptr]
-        self._num_free_slots -= batch_size
+        if np.any(cur_lens >= self.buffer_req_to_token_slots.shape[1]):
+            raise ValueError("Decode allocation exceeds the cache row capacity.")
+        select_indices = self._take_device_slots(batch_size)
+        try:
+            self._commit_decode_rows(pending_rows)
+        except BaseException:
+            self._return_prefix_device_slots(select_indices)
+            raise
 
         rows_gpu = self._static_rows_gpu[:batch_size]
         cols_gpu = self._static_cols_gpu[:batch_size]
@@ -1810,15 +1923,17 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
         self,
         pending: tuple[tuple[int, int], ...],
     ) -> None:
-        for seq_id, expected_row in pending:
-            if not self.free_rows or self.free_rows[0] != expected_row:
-                raise RuntimeError(
-                    "Static decode row plan changed before commit: "
-                    f"expected={expected_row} "
-                    f"actual={self.free_rows[0] if self.free_rows else None}."
-                )
-            row = self.free_rows.popleft()
-            self.seq_id_to_row[seq_id] = row
+        if not pending:
+            return
+        expected = [row for _, row in pending]
+        actual = list(islice(self.free_rows, len(pending)))
+        if actual != expected:
+            raise RuntimeError(
+                "Static decode row plan changed before commit: "
+                f"expected={expected} actual={actual}."
+            )
+        for seq_id, _ in pending:
+            self.seq_id_to_row[seq_id] = self.free_rows.popleft()
 
     @torch.no_grad()
     def _allocate_decode_batch_static(
@@ -1831,22 +1946,19 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
         batch_size = len(seq_ids)
         if not hasattr(self, "row_logical_lens"):
             self.row_logical_lens = self.row_seq_lens.copy()
-        self._evict_prefix_cache_until_free(batch_size)
-        if self._num_free_slots < batch_size:
-            raise RuntimeError(
-                f"Out of KV cache slots: need {batch_size}, free {self._num_free_slots}"
-            )
-
         if row_indices.shape != (batch_size,):
             raise ValueError(
                 "Static decode reservation rows must match the active batch: "
                 f"shape={row_indices.shape} batch={batch_size}."
             )
-
-        self._commit_decode_rows(pending_rows)
-        ptr = self._num_free_slots
-        select_indices = self.free_slots_stack[ptr - batch_size: ptr]
-        self._num_free_slots -= batch_size
+        if np.any(self.row_seq_lens[row_indices] >= self.buffer_req_to_token_slots.shape[1]):
+            raise ValueError("Decode allocation exceeds the cache row capacity.")
+        select_indices = self._take_device_slots(batch_size)
+        try:
+            self._commit_decode_rows(pending_rows)
+        except BaseException:
+            self._return_prefix_device_slots(select_indices)
+            raise
         self.row_seq_lens[row_indices] += 1
         self.row_logical_lens[row_indices] += 1
 

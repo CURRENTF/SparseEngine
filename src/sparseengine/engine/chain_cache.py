@@ -14,6 +14,7 @@ from itertools import islice
 from typing import Any, Iterable
 
 from sparseengine.method_registry import prefill_sparse_method_fingerprint
+from sparseengine.utils.log import logger
 
 
 
@@ -843,6 +844,12 @@ class ChainCacheIndex:
         self.seq_id_to_chain_id.pop(int(record.seq_id), None)
         self._add_tombstone(chain_id)
         self._stats["chain_cache_evicted"] += 1
+        logger.warning("chain_evicted {}", json.dumps({
+            "chain_id": chain_id,
+            "seq_id": int(record.seq_id),
+            "physical_slots_by_layer": record.physical_slots_by_layer,
+            "resident_rows": int(record.resident_rows),
+        }))
         return record
 
     def routing_match(self, chain_id: str) -> dict[str, object]:
@@ -957,6 +964,7 @@ class ChainCacheCoordinator:
         chain_id: str,
         token_count: int,
         decode_reserved_slots_by_layer: tuple[int, ...] = (),
+        diagnostics: dict[str, Any] | None = None,
     ) -> tuple[tuple[int, ...], int, tuple[int, ...], int]:
         if self.offload is not None:
             self.offload.poll()
@@ -974,6 +982,7 @@ class ChainCacheCoordinator:
         outstanding_slots, outstanding_rows = (
             self._outstanding_active_reservations()
         )
+        chain_reserved_slots = outstanding_slots
         outstanding_slots = tuple(
             (outstanding_slots[i] if i < len(outstanding_slots) else 0)
             + (decode_reserved_slots_by_layer[i] if i < len(decode_reserved_slots_by_layer) else 0)
@@ -987,6 +996,27 @@ class ChainCacheCoordinator:
             outstanding_reserved_rows=outstanding_rows,
             needs_resident_row=record is None or record.resident_rows == 0,
         )
+        if diagnostics is not None:
+            budget_hook = getattr(self.cache_manager, "decode_window_budgets", None)
+            diagnostics.update(
+                kv_layer_indices=tuple(self.cache_manager.kv_transformer_layer_indices()),
+                resident_sequence_capacity=getattr(self.config, "max_num_seqs_in_gpu", None),
+                active_chains=sum(r.state is ChainState.ACTIVE for r in self.index.records.values()),
+                idle_chains=sum(r.state is ChainState.IDLE for r in self.index.records.values()),
+                input_tokens=int(token_count),
+                reused_tokens=reused,
+                suffix_tokens=suffix_tokens,
+                existing_slots_by_layer=existing_slots,
+                cache_free_slot_budgets=budget_hook() if callable(budget_hook) else None,
+                chain_reserved_slots_by_layer=chain_reserved_slots,
+                decode_reserved_slots_by_layer=decode_reserved_slots_by_layer,
+                outstanding_reserved_slots_by_layer=outstanding_slots,
+                outstanding_reserved_rows=int(outstanding_rows),
+                required_slots_by_layer=tuple(int(v) for v in required_slots),
+                required_rows=int(required_rows),
+                slot_deficits_by_layer=tuple(int(v) for v in slot_deficits),
+                row_deficit=int(row_deficit),
+            )
         return (
             tuple(int(value) for value in required_slots),
             int(required_rows),
@@ -996,6 +1026,8 @@ class ChainCacheCoordinator:
 
     def _outstanding_active_reservations(
         self,
+        *,
+        exclude_seq_ids: set[int] | None = None,
     ) -> tuple[tuple[int, ...], int]:
         has_residency = getattr(
             self.cache_manager, "chain_has_residency", None
@@ -1007,6 +1039,8 @@ class ChainCacheCoordinator:
         outstanding_rows = 0
         for record in self.index.records.values():
             if record.state is not ChainState.ACTIVE:
+                continue
+            if exclude_seq_ids is not None and int(record.seq_id) in exclude_seq_ids:
                 continue
             reserved = tuple(
                 int(value) for value in record.reserved_slots_by_layer
@@ -1057,6 +1091,10 @@ class ChainCacheCoordinator:
         token_ids: list[int],
     ) -> ChainAdmissionPlan:
         ledger = getattr(self, "decode_reservations", None)
+        diagnostics: dict[str, Any] = {
+            "chain_id": chain_id, "seq_id": int(seq_id),
+            "sparse_method": str(getattr(self.config, "sparse_method", "")),
+        }
         reserved = {} if ledger is None else ledger.outstanding()
         decode_reserved = tuple(reserved.get(f"layer_{layer}", reserved.get("slots", 0))
                                 for layer in self.cache_manager.kv_transformer_layer_indices()) if reserved else ()
@@ -1065,18 +1103,37 @@ class ChainCacheCoordinator:
                 chain_id=chain_id,
                 token_count=len(token_ids),
                 decode_reserved_slots_by_layer=decode_reserved,
+                diagnostics=diagnostics,
             )
         )
-        plan = self._offload_plan(self.index.plan_admission(
-            chain_id=chain_id,
-            seq_id=seq_id,
-            token_ids=token_ids,
-            fingerprint=self.fingerprint,
-            required_slots_by_layer=slots,
-            row_deficit=rows,
-            reserved_slots_by_layer=required_slots,
-            reserved_rows=required_rows,
-        ))
+        diagnostics["pressure"] = [
+            name for name, present in (("kv_slots", any(slots)), ("resident_rows", rows > 0))
+            if present
+        ]
+        try:
+            plan = self._offload_plan(self.index.plan_admission(
+                chain_id=chain_id,
+                seq_id=seq_id,
+                token_ids=token_ids,
+                fingerprint=self.fingerprint,
+                required_slots_by_layer=slots,
+                row_deficit=rows,
+                reserved_slots_by_layer=required_slots,
+                reserved_rows=required_rows,
+            ))
+        except ChainCapacityError as exc:
+            diagnostics.update(outcome="rejected", error=str(exc))
+            logger.warning("chain_admission {}", json.dumps(diagnostics))
+            raise
+        diagnostics.update(
+            outcome="planned", chain_status=plan.status,
+            victim_chain_ids=plan.victim_chain_ids,
+            demote_chain_ids=plan.demote_chain_ids,
+        )
+        logger.log(
+            "WARNING" if diagnostics["pressure"] else "DEBUG",
+            "chain_admission {}", json.dumps(diagnostics),
+        )
         return replace(plan, decode_reserved_slots_by_layer=decode_reserved)
 
     def _offload_plan(self, plan: ChainAdmissionPlan) -> ChainAdmissionPlan:
@@ -1130,6 +1187,10 @@ class ChainCacheCoordinator:
                     raise RuntimeError("Cannot demote a chain without a valid CPU snapshot.")
                 self.cache_manager.free_seq(victim.seq_id)
                 victim.resident_rows = 0
+                logger.info("chain_demoted {}", json.dumps({
+                    "chain_id": chain_id, "seq_id": int(victim.seq_id),
+                    "cause": "chain_admission", "admitting_chain_id": plan.chain_id,
+                }))
             for chain_id in plan.victim_chain_ids:
                 self.offload.drop(self.index.lookup(chain_id).seq_id)
         record = self.index.apply_admission(plan, fingerprint=self.fingerprint)

@@ -34,6 +34,7 @@ class Scheduler:
         decode_capacity_reclaimer: Callable[[Sequence], Sequence | None] | None = None,
         *,
         prefix_cache_hits_refresher: Callable[[list[Sequence]], None] | None = None,
+        prefill_capacity_reclaimer: Callable[[Sequence], bool] | None = None,
     ):
         self.config = config
         self.max_num_seqs_in_batch = config.max_num_seqs_in_batch
@@ -62,6 +63,7 @@ class Scheduler:
         # 对多层异构预算，采用更保守的可用空间估计。
         self.memory_oracle = memory_oracle
         self.decode_capacity_reclaimer = decode_capacity_reclaimer
+        self.prefill_capacity_reclaimer = prefill_capacity_reclaimer
         self.prefix_cache_hits_refresher = prefix_cache_hits_refresher
         self.prefix_cache_hit_refresher = (
             memory_oracle.refresh_prefix_cache_hit
@@ -450,7 +452,7 @@ class Scheduler:
             logger.debug("scheduler_phase {}", self.last_phase_decision)
         return result
 
-    def _schedule_impl(self) -> tuple[list[Sequence], bool, list[Sequence]]:
+    def _schedule_impl(self, *, allow_prefill_reclaim: bool = True) -> tuple[list[Sequence], bool, list[Sequence]]:
         """
         核心调度逻辑。
         返回：(本次要运行的序列列表, 是否是 Prefill 阶段, 本次被抢占的序列列表)
@@ -813,6 +815,19 @@ class Scheduler:
                     physical_free_count=physical_free_count,
                     reserved_prefill=reserved_prefill,
                 )
+            if (
+                not self.decoding and self.waiting and allow_prefill_reclaim
+                and self.prefill_capacity_reclaimer is not None
+                and (deferred_prompt_failure is not None or step_free_count <= 0)
+            ):
+                if getattr(self, "_async_inflight", 0):
+                    from sparseengine.engine.async_scheduling.execution import AsyncDrainRequired
+                    raise AsyncDrainRequired("Prefill capacity reclaim requires completed in-flight KV users")
+                # Zero capacity skips the prefill scan, so no admission failure
+                # is recorded even when IDLE chains can make the prompt fit.
+                seq = deferred_prompt_failure[0] if deferred_prompt_failure else self.waiting[0]
+                if self.prefill_capacity_reclaimer(seq):
+                    return self._schedule_impl(allow_prefill_reclaim=False)
             if blocked_prefill_step_failure is not None and not self.decoding:
                 seq, need, free = blocked_prefill_step_failure
                 raise RuntimeError(

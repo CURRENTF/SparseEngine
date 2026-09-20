@@ -3848,3 +3848,300 @@ def test_prune_new_interval_after_compacted_ancestor_and_score_mapping(block_siz
     expected[[1,4,5,6,9,10,11]] = physical_score
     torch.testing.assert_close(logical_score,expected)
     manager.free_seq(seq.seq_id)
+
+
+@pytest.mark.parametrize('consume', [False, True])
+def test_prefill_reservation_evicts_idle_cache_preserves_pinned_prefix_and_cleans_failure(consume):
+    # A full pool with reclaimable cache is admissible; the scoring target and
+    # active requests must survive, including a failure before/after allocation.
+    manager = _make_standard_manager_for_prefix(block_size=2)
+    manager.free_slots_stack = torch.arange(6, dtype=torch.int32)
+    manager._num_free_slots = 6
+    blocks = []
+    for tokens, slots in [([1,2], [0,1]), ([3,4], [2,3])]:
+        block = PrefixCacheBlock(
+            stable_block_id=manager.prefix_cache.stable_block_id(tokens, None),
+            parent_block_id=None, block_size=2, logical_block_idx=0,
+            token_ids=tuple(tokens),
+            payload=StandardPrefixBlockPayload(token_slots=torch.tensor(slots, dtype=torch.int32)),
+        )
+        manager.prefix_cache.insert_block(block)
+        blocks.append(block)
+    _remove_free_slots(manager, [0,1,2,3])
+    manager.prefix_cache.acquire_block_ref(blocks[0])
+    live = manager._allocate(100, 2).clone()
+    assert manager.num_free_slots == 0
+    with pytest.raises(RuntimeError, match='injected failure'):
+        with manager.reserve_prefill_slots([(-1,2),(-2,2)]) as count:
+            assert count == 1  # Only one row remains; reserve a smaller batch.
+            assert manager.num_free_slots == 0
+            assert manager.prefix_cache.get_block(blocks[0].stable_block_id) is blocks[0]
+            assert manager.prefix_cache.get_block(blocks[1].stable_block_id) is None
+            if consume:
+                allocated = manager._allocate(-1,2).clone()
+                assert set(allocated.tolist()) == {2,3}
+                assert not set(allocated.tolist()).intersection(live.tolist())
+            raise RuntimeError('injected failure')
+    assert manager.num_free_slots == 2
+    assert set(manager.free_slots_stack[:2].tolist()) == {2,3}
+    assert set(manager.seq_id_to_row) == {100}
+    assert len(manager.free_rows) == 1
+    assert blocks[0].ref_count == 1
+    manager.prefix_cache.release_block_ref(blocks[0])
+    manager.free_seq(100)
+    assert manager.num_free_slots == 4
+
+
+def test_prefill_reservation_true_exhaustion_does_not_claim_rows_or_slots():
+    manager = _make_standard_manager_for_prefix()
+    manager.free_slots_stack = torch.arange(2, dtype=torch.int32)
+    manager._num_free_slots = 2
+    manager._allocate(100,2)
+    rows = list(manager.free_rows)
+    with pytest.raises(RuntimeError, match='after prefix eviction'):
+        with manager.reserve_prefill_slots([(-1,1)]):
+            pytest.fail('exhausted reservation was admitted')
+    assert list(manager.free_rows) == rows
+    assert set(manager.seq_id_to_row) == {100}
+    assert manager.num_free_slots == 0
+
+
+def test_prefill_reservation_shrinks_after_exhausting_reclaimable_slots():
+    manager = _make_standard_manager_for_prefix()
+    manager.free_slots_stack = torch.arange(3, dtype=torch.int32)
+    manager._num_free_slots = 3
+    with manager.reserve_prefill_slots([(-1,2),(-2,2)]) as admitted:
+        assert admitted == 1
+        assert manager.num_free_slots == 1
+        manager._allocate(-1,2)
+    assert manager.num_free_slots == 3
+    assert not manager.seq_id_to_row
+    assert len(set(manager.free_slots_stack[:3].tolist())) == 3
+
+
+@pytest.mark.parametrize('capacity,expected,failure', [
+    (9, 0, False), (10, 1, False), (12, 2, False), (10, 1, True),
+])
+def test_prefill_reservation_accounts_for_shared_cpu_prefix_promotion(capacity, expected, failure):
+    # Query-only admission used to consume promotion headroom. Shared prefixes
+    # must cost once, and attach/forward failures must release temporary rows.
+    manager = _make_standard_manager_for_prefix(block_size=2)
+    manager.free_slots_stack = torch.arange(capacity, dtype=torch.int32)
+    manager._num_free_slots = capacity
+    manager.prefix_offload_controller = _FakePrefixOffloadController(manager.prefix_cache)
+    cache = manager.prefix_cache
+    blocks, parent = [], None
+    for i in range(4):
+        tokens = (2 * i, 2 * i + 1)
+        block_id = cache.stable_block_id(list(tokens), parent)
+        block = PrefixCacheBlock(
+            stable_block_id=block_id, parent_block_id=parent, block_size=2,
+            logical_block_idx=i, token_ids=tokens,
+            payload=StandardPrefixBlockPayload(token_slots=None, host_block_index=i),
+            residency=PrefixBlockResidency(device_present=False, host_present=True),
+        )
+        cache.insert_block(block)
+        cache.acquire_block_ref(block)
+        blocks.append(block)
+        parent = block_id
+    error = ('after prefix eviction' if expected == 0 else 'injected failure')
+    guard = pytest.raises(RuntimeError, match=error) if expected == 0 or failure else nullcontext()
+    try:
+        with guard:
+            with manager.reserve_prefill_slots(
+                [(-1, 2), (-2, 2)], prefix_blocks={-1: blocks, -2: blocks},
+            ) as admitted:
+                assert admitted == expected
+                for sid in [-1, -2][:admitted]:
+                    seq = Sequence(list(range(10)))
+                    seq.seq_id = sid
+                    seq.prefix_cache_enabled = True
+                    seq.prefix_cache_hit_len = 8
+                    seq.prefix_cache_hit_last_block_id = parent
+                    seq.prefix_cache_hit_block_count = 4
+                    seq.prefix_cache_block_size = 2
+                    manager._attach_prefix_cache_if_needed(seq)
+                    # Simulate transport completion; allocation and ownership
+                    # transitions above use the actual cache implementation.
+                    for block in blocks:
+                        if block.residency.transfer == PrefixTransferKind.H2D:
+                            cache.finish_h2d(block)
+                    if failure:
+                        raise RuntimeError('injected failure')
+                    manager._allocate(sid, 2)
+        assert not manager.seq_id_to_row
+        assert len(manager.free_rows) == 2
+        assert all(block.ref_count == 1 for block in blocks)
+        assert manager.num_free_slots == capacity - (8 if expected else 0)
+        owned = manager.free_slots_stack[:manager.num_free_slots].tolist()
+        owned += [slot for block in blocks if block.residency.device_present
+                  for slot in block.payload.token_slots.tolist()]
+        assert sorted(owned) == list(range(capacity))
+    finally:
+        for block in blocks:
+            cache.release_block_ref(block)
+
+
+@pytest.mark.parametrize('method', ['standard', 'quest', 'snapkv'])
+def test_decode_row_exhaustion_does_not_partially_claim_a_batch(method):
+    if method == 'quest':
+        manager = _make_quest_manager_for_prefix()
+    else:
+        manager = _make_standard_manager_for_prefix()
+    if method == 'snapkv':
+        from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+        manager = object.__new__(SnapKVCacheManager)
+        manager._num_free_slots = [10]
+        manager.seq_id_to_row = [{}]
+        manager.free_rows = [deque([0])]
+        mapping, rows = manager.seq_id_to_row[0], manager.free_rows[0]
+        allocate = lambda: manager._allocate_batch(0,[10,11],1)
+    else:
+        manager.free_rows = deque([0])
+        mapping, rows = manager.seq_id_to_row, manager.free_rows
+        allocate = lambda: manager._allocate_batch([10,11],1)
+    with pytest.raises(RuntimeError, match='free rows'):
+        allocate()
+    assert not mapping
+    assert list(rows) == [0]
+
+
+def test_static_decode_stale_row_plan_returns_slots_without_partial_row_commit():
+    manager = _make_standard_manager_for_prefix()
+    rows = list(manager.free_rows)
+    before = manager.num_free_slots
+    with pytest.raises(RuntimeError, match='plan changed'):
+        manager._allocate_decode_batch_static([10,11],
+            row_indices=np.array([0,1],dtype=np.int64), pending_rows=((10,0),(11,999)))
+    assert not manager.seq_id_to_row
+    assert list(manager.free_rows) == rows
+    assert manager.num_free_slots == before
+    assert len(set(manager.free_slots_stack[:before].tolist())) == before
+
+
+@pytest.mark.parametrize('method', ['snapkv', 'quest', 'deltakv_full', 'deltakv_raw'])
+@pytest.mark.parametrize('existing', [False, True])
+def test_single_allocation_overflow_preserves_rows_and_pool(method, existing):
+    # Invalid prefill lengths previously claimed empty rows or consumed slots
+    # before failing; appending to a live row must preserve its contents too.
+    mapping = {10: 0} if existing else {}
+    rows = deque([1] if existing else [0, 1])
+    lengths = np.array([3 if existing else 0, 0], dtype=np.int32)
+    slots = torch.full((2, 4), -1, dtype=torch.int32)
+    free_stack = torch.arange(12, dtype=torch.int32)
+    size = 2 if existing else 5
+    if method == 'snapkv':
+        from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+        manager = object.__new__(SnapKVCacheManager)
+        manager.max_model_len = 4
+        manager.seq_id_to_row = [mapping]
+        manager.free_rows = [rows]
+        manager.row_seq_lens = [lengths]
+        manager.buffer_req_to_token_slots = [slots]
+        manager._num_free_slots = [12]
+        manager.free_slots_stack = [free_stack]
+        allocate = lambda: manager._allocate(0, 10, size)
+        free_count = lambda: manager._num_free_slots[0]
+    elif method == 'quest':
+        manager = _make_quest_manager_for_prefix()
+        manager.max_model_len = 4
+        manager.seq_id_to_row = mapping
+        manager.free_rows = rows
+        manager.row_seq_lens = lengths
+        manager.buffer_req_to_token_slots = slots
+        manager._evict_prefix_cache_until_free = lambda _: pytest.fail('invalid request attempted eviction')
+        allocate = lambda: manager._allocate(10, size)
+        free_count = lambda: manager._num_free_pages
+    else:
+        from sparseengine.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager
+        manager = object.__new__(DeltaKVCacheManager)
+        manager.device = torch.device('cpu')
+        manager.seq_id_to_row = mapping
+        manager.free_rows = rows
+        manager.row_seq_lens = lengths
+        manager.full_layer_slots_map = slots
+        manager.sparse_layer_raw_slots_map = slots
+        manager._num_free_slots_full = 12
+        manager._num_free_slots_deltakv_full = 12
+        manager.free_slots_stack_full = free_stack
+        manager.free_slots_stack_deltakv_full = free_stack
+        manager._deltakv_temp_full_reserve = 0
+        manager._deltakv_static_temp_slots_reserved_total = 0
+        if method == 'deltakv_full':
+            allocate = lambda: manager._allocate_full(10, size)
+            free_count = lambda: manager._num_free_slots_full
+        else:
+            allocate = lambda: manager._allocate_deltakv_full(10, size)
+            free_count = lambda: manager._num_free_slots_deltakv_full
+    before = (dict(mapping), list(rows), lengths.copy(), free_count(), slots.clone(), free_stack.clone())
+    with pytest.raises(RuntimeError, match='max_model_len'):
+        allocate()
+    assert mapping == before[0]
+    assert list(rows) == before[1]
+    np.testing.assert_array_equal(lengths, before[2])
+    assert free_count() == before[3]
+    torch.testing.assert_close(slots, before[4])
+    torch.testing.assert_close(free_stack, before[5])
+
+
+def test_quest_single_allocation_without_rows_does_not_evict():
+    manager = _make_quest_manager_for_prefix()
+    manager.free_rows.clear()
+    manager.seq_id_to_row = {10: 0, 11: 1}
+    manager._evict_prefix_cache_until_free = lambda _: pytest.fail('row exhaustion attempted eviction')
+    before = manager._num_free_pages
+    with pytest.raises(RuntimeError, match='free rows'):
+        manager._allocate(12, 1)
+    assert manager.seq_id_to_row == {10: 0, 11: 1}
+    assert not manager.free_rows
+    assert manager._num_free_pages == before
+
+
+@pytest.mark.parametrize('raw', [False, True])
+@pytest.mark.parametrize('exhaustion', ['rows', 'length'])
+def test_deltakv_decode_rejection_preserves_earlier_rows(raw, exhaustion):
+    from sparseengine.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager
+    manager = object.__new__(DeltaKVCacheManager)
+    manager.device = torch.device('cpu')
+    manager.seq_id_to_row = {11: 1} if exhaustion == 'length' else {}
+    manager.free_rows = deque([0])
+    manager.row_seq_lens = np.array([0, 4], dtype=np.int32)
+    manager.full_layer_slots_map = torch.full((2, 4), -1, dtype=torch.int32)
+    manager.sparse_layer_raw_slots_map = manager.full_layer_slots_map.clone()
+    manager._num_free_slots_full = 8
+    manager._num_free_slots_deltakv_full = 8
+    manager._deltakv_temp_full_reserve = 0
+    manager._deltakv_static_temp_slots_reserved_total = 0
+    manager.free_slots_stack_full = torch.arange(8, dtype=torch.int32)
+    manager.free_slots_stack_deltakv_full = torch.arange(8, dtype=torch.int32)
+    before = dict(manager.seq_id_to_row)
+    allocate = manager._allocate_batch_deltakv_full if raw else manager._allocate_batch_full
+    with pytest.raises(RuntimeError, match='free rows' if exhaustion == 'rows' else 'max_model_len'):
+        allocate([10, 11], 1)
+    assert manager.seq_id_to_row == before
+    assert list(manager.free_rows) == [0]
+    assert manager._num_free_slots_full == manager._num_free_slots_deltakv_full == 8
+    assert torch.all(manager.full_layer_slots_map == -1)
+    assert torch.all(manager.sparse_layer_raw_slots_map == -1)
+
+
+@pytest.mark.parametrize('staging_capacity', [2, 8])
+def test_deltakv_staging_overflow_does_not_claim_row_or_advance_cursor(staging_capacity):
+    from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+    manager = object.__new__(DeltaKVLessMemoryCacheManager)
+    manager.device = torch.device('cpu')
+    manager.seq_id_to_row = {}
+    manager.free_rows = deque([0])
+    manager.row_seq_lens = np.zeros(1, dtype=np.int32)
+    manager.full_layer_slots_map = torch.full((1, 2), -1, dtype=torch.int32)
+    manager.deltakv_prefill_staging_num_slots = staging_capacity
+    manager._deltakv_less_memory_full_prefill_staging_offset = 0
+    manager._deltakv_less_memory_prepare_seqs = [SimpleNamespace(seq_id=10)]
+    manager._should_stage_full_layer_kivi_prefill = lambda seq, size: True
+    manager._should_use_long_prefill_offload_staging = lambda seqs: False
+    with pytest.raises(RuntimeError, match='capacity is too small|max_model_len'):
+        manager._allocate_full(10, 3)
+    assert manager.seq_id_to_row == {}
+    assert list(manager.free_rows) == [0]
+    assert manager._deltakv_less_memory_full_prefill_staging_offset == 0
+    assert torch.all(manager.full_layer_slots_map == -1)

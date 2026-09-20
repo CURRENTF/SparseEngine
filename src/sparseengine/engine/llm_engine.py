@@ -1,4 +1,5 @@
 import atexit
+import json
 import gc
 import os
 import pickle
@@ -62,7 +63,7 @@ from sparseengine.engine.chain_cache import (
     RequestAdmission,
     stable_token_digest,
 )
-from sparseengine.utils.profiler import profiler
+from sparseengine.utils.profiler import cpu_timing, profiler
 
 def _moe_workspace_warmup_token_counts(config: Config) -> tuple[int, ...]:
     if config.model_spec.num_experts_field is None:
@@ -395,6 +396,7 @@ class LLMEngine:
                 else None
             ),
             decode_capacity_reclaimer=self._reclaim_idle_chains_for_decode,
+            prefill_capacity_reclaimer=self._reclaim_idle_chains_for_prefill,
         )
 
     def _reclaim_idle_chains_for_decode(self, failure: Sequence) -> Sequence | None:
@@ -415,6 +417,26 @@ class LLMEngine:
             if failure is None:
                 break
         return failure
+
+    def _reclaim_idle_chains_for_prefill(self, seq: Sequence) -> bool:
+        runtime = self.model_runner.runtime_state
+        coordinator = runtime.chain_cache_coordinator
+        if coordinator is None:
+            return False
+        costs = runtime.prompt_admission_costs(seq)
+        for record in coordinator.index.idle_resident_lru():
+            demote = coordinator.offload is not None and record.seq_id in coordinator.offload.snapshots
+            self.model_runner.call("chain_reclaim_idle", record.chain_id, int(record.seq_id), demote)
+            logger.info(
+                "Reclaimed IDLE chain for prefill capacity: chain_id={} seq_id={} demoted={} free_slots={}",
+                record.chain_id, record.seq_id, demote, runtime.num_free_slots,
+            )
+            budgets = runtime.prompt_admission_budgets(
+                self.scheduler.waiting, self.scheduler.engine_prefill_chunk_size,
+            )
+            if all(int(need) <= int(budgets.get(name, 0)) for name, need in costs.items()):
+                return True
+        return False
 
     def _run_startup_batch(
         self,
@@ -1180,6 +1202,7 @@ class LLMEngine:
             bool(include_subtree),
         )
 
+    @cpu_timing.timed
     def prefix_cache_match(self, token_ids: list[int]) -> dict[str, object]:
         return self.model_runner.call(
             "prefix_cache_match",
@@ -1265,55 +1288,89 @@ class LLMEngine:
             raise RuntimeError(f"unknown prefix prune id: {prune_id!r}.")
         return job.to_dict()
 
+    @cpu_timing.timed
     def run_pending_prefix_prune(self) -> bool:
         if not self._pending_prefix_prune_ids:
             return False
-        prune_id = self._pending_prefix_prune_ids.popleft()
-        job = self._prefix_prune_jobs[prune_id]
-        job.status = "running"
-        job.started_at = time.time()
+        asynchronous = getattr(self, "_async_scheduler", None)
+        if asynchronous is not None and asynchronous.pending:
+            # Dispatcher keeps publishing retired outputs while the async
+            # scheduler drains; maintenance must not discard device feedback.
+            return False
+        first = self._prefix_prune_jobs[self._pending_prefix_prune_ids[0]]
+        jobs = [self._prefix_prune_jobs[self._pending_prefix_prune_ids.popleft()]]
+        replay_prefix_ids = None
+        payloads = []
+        if first.policy == "kvzip_global":
+            replay_prefix_ids = list(self.tokenizer.encode(
+                "\nReconstruct the following context span exactly:\n", add_special_tokens=False,
+            ))
+            def payload(job):
+                return dict(token_ids=job.token_ids, ranges=job.ranges or [(job.range_start, job.range_end)],
+                            keep_tokens=job.keep_tokens, allow_recompress=job.allow_recompress,
+                            score_chunk_size=job.score_chunk_size, prev_postfix_size=job.prev_postfix_size,
+                            prune_id=job.prune_id)
+            payloads.append(payload(first))
+            # Bound the actual serialized TP command, not an estimate by token count.
+            from sparseengine.engine.model_runner import TP_SHM_SIZE
+            while self._pending_prefix_prune_ids and len(jobs) < self.config.max_num_seqs_in_batch:
+                candidate = self._prefix_prune_jobs[self._pending_prefix_prune_ids[0]]
+                if candidate.policy != "kvzip_global":
+                    break
+                item = payload(candidate)
+                encoded = pickle.dumps(["prefix_cache_prune_batch", payloads + [item], replay_prefix_ids])
+                if len(encoded) + 4 + self.config.attn_tp_size > TP_SHM_SIZE:
+                    break
+                self._pending_prefix_prune_ids.popleft()
+                jobs.append(candidate)
+                payloads.append(item)
+        for job in jobs:
+            job.status = "running"
+            job.started_at = time.time()
+        diagnostic_start = perf_counter() if cpu_timing.interval_ns else None
         try:
-            replay_prefix_ids = None
-            if job.policy == "kvzip_global":
-                replay_prefix_ids = [
-                    int(token_id)
-                    for token_id in self.tokenizer.encode(
-                        "\nReconstruct the following context span exactly:\n",
-                        add_special_tokens=False,
-                    )
-                ]
-                if not replay_prefix_ids:
-                    raise RuntimeError(
-                        "KVzip reconstruction prompt tokenized to an empty sequence."
-                    )
-            job.result = self.model_runner.call(
-                "prefix_cache_prune",
-                job.token_ids,
-                None if job.ranges is not None else job.range_start,
-                None if job.ranges is not None else job.range_end,
-                job.keep_tokens,
-                job.policy,
-                job.prune_id,
-                job.allow_recompress,
-                job.observation_tokens,
-                job.score_chunk_size,
-                job.prev_postfix_size,
-                replay_prefix_ids,
-                -1_000_000_000 - len(self._prefix_prune_jobs) * 100_000,
-                job.ranges,
-            )
-            job.status = "completed"
+            if first.policy == "kvzip_global":
+                outcomes = self.model_runner.call("prefix_cache_prune_batch", payloads, replay_prefix_ids)
+            else:
+                result = self.model_runner.call(
+                    "prefix_cache_prune", first.token_ids,
+                    None if first.ranges is not None else first.range_start,
+                    None if first.ranges is not None else first.range_end,
+                    first.keep_tokens, first.policy, first.prune_id, first.allow_recompress,
+                    first.observation_tokens, first.score_chunk_size, first.prev_postfix_size,
+                    None, -1_000_000_000, first.ranges,
+                )
+                outcomes = [{"result": result}]
+            if len(outcomes) != len(jobs):
+                raise RuntimeError("Prefix-prune worker returned an incomplete batch.")
+            for job, outcome in zip(jobs, outcomes, strict=True):
+                job.result = outcome.get("result")
+                job.error = outcome.get("error")
+                job.status = "failed" if job.error else "completed"
         except Exception as exc:
-            job.error = f"{type(exc).__name__}: {exc}"
-            message = str(exc).lower()
-            job.status = (
-                "blocked"
-                if "idle" in message or "referenced" in message or "in-flight" in message
-                else "failed"
-            )
-            logger.error("Prefix prune job {} {}: {}", prune_id, job.status, job.error)
+            for job in jobs:
+                job.error = f"{type(exc).__name__}: {exc}"
+                job.status = "failed"
         finally:
-            job.finished_at = time.time()
+            for job in jobs:
+                if job.error:
+                    message = job.error.lower()
+                    if any(word in message for word in ("idle", "referenced", "in-flight")):
+                        job.status = "blocked"
+                    logger.error("Prefix prune job {} {}: {}", job.prune_id, job.status, job.error)
+                job.finished_at = time.time()
+                if diagnostic_start is not None:
+                    logger.info("prefix_prune_timing {}", json.dumps({
+                        "prune_id": job.prune_id, "status": job.status,
+                        "queue_s": job.started_at - job.created_at,
+                        "execution_wall_s": perf_counter() - diagnostic_start,
+                        "logical_tokens": len(job.token_ids),
+                        "candidate_tokens": sum(r - l for l, r in (
+                            job.ranges or [(job.range_start, job.range_end)])),
+                        "keep_tokens": job.keep_tokens, "batch_jobs": len(jobs),
+                        "pending_prunes": len(self._pending_prefix_prune_ids),
+                        **self.worker_routing_load(),
+                    }, separators=(",", ":")))
         return True
 
     def debug_sparse_state_summaries(self, synchronize: bool = False) -> list[dict[str, object]]:
@@ -1558,6 +1615,7 @@ class LLMEngine:
         # scheduler-driven recompute rebuild it later.
         self.model_runner.call("free_slots_batch", preempted_seq_ids)
 
+    @cpu_timing.timed
     def step(self):
         asynchronous = getattr(self, "_async_scheduler", None)
         return asynchronous.step() if asynchronous is not None else self._step_sync()

@@ -4,8 +4,10 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Sequence as ReadOnlySequence
 from dataclasses import dataclass
+
 import time
 
+from sparseengine.utils.profiler import cpu_timing
 from sparseengine.engine.async_scheduling.execution import AsyncDrainRequired
 from sparseengine.engine.sequence import Sequence, SequenceStatus
 from sparseengine.sampling_params import resolve_eos_token_ids
@@ -91,9 +93,12 @@ class AsyncScheduler:
             self.retiring.difference_update(ready)
             self.discarded.difference_update(ready)
 
+    @cpu_timing.timed
     def _submit(self):
         engine = self.engine
         scheduler = engine.scheduler
+        if getattr(engine, "_pending_prefix_prune_ids", ()):
+            return False
         if self.requires_committed_token_history and any(
             any(step.publishes) for step in self.pending
         ):
@@ -149,6 +154,7 @@ class AsyncScheduler:
         self.pending.append(PendingStep(ticket, seqs, snapshots, is_prefill, publishes))
         return True
 
+    @cpu_timing.timed
     def step(self):
         engine = self.engine
         with profiler.record("step"):

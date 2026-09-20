@@ -1435,8 +1435,8 @@ class SnapKVCacheManager(CacheManager):
                 f"Out of KV cache slots: need {size}, free {self._num_free_slots[layer_idx]}"
             )
 
-            row_idx = self._get_free_row(layer_idx, seq_id)
-            cur_len = self.row_seq_lens[layer_idx][row_idx]
+            row_idx = self.seq_id_to_row[layer_idx].get(seq_id)
+            cur_len = 0 if row_idx is None else int(self.row_seq_lens[layer_idx][row_idx])
             if int(cur_len) + int(size) > int(self.max_model_len):
                 raise RuntimeError(
                     "KV row length exceeds max_model_len in _allocate: "
@@ -1444,6 +1444,7 @@ class SnapKVCacheManager(CacheManager):
                     f"cur_len={int(cur_len)} size={int(size)} max_model_len={int(self.max_model_len)}"
                 )
 
+            row_idx = self._get_free_row(layer_idx, seq_id)
             ptr = self._num_free_slots[layer_idx]
             select_index = self.free_slots_stack[layer_idx][ptr - size: ptr]
             self._num_free_slots[layer_idx] -= size
@@ -1478,17 +1479,20 @@ class SnapKVCacheManager(CacheManager):
         assert self._num_free_slots[layer_idx] >= batch_size, (
             f"Out of KV cache slots: need {batch_size}, free {self._num_free_slots[layer_idx]}"
         )
+        needed_rows = len(set(seq_ids).difference(self.seq_id_to_row[layer_idx]))
+        if needed_rows > len(self.free_rows[layer_idx]):
+            raise RuntimeError(
+                f"No free rows for decode batch: need={needed_rows} "
+                f"free={len(self.free_rows[layer_idx])}."
+            )
+        existing = [self.seq_id_to_row[layer_idx][sid] for sid in seq_ids
+                    if sid in self.seq_id_to_row[layer_idx]]
+        if any(int(self.row_seq_lens[layer_idx][row]) + size > self.max_model_len for row in existing):
+            raise RuntimeError("KV row length exceeds max_model_len in _allocate_batch.")
         self._ensure_decode_buffers(batch_size)
 
         row_indices = [self._get_free_row(layer_idx, sid) for sid in seq_ids]
         cur_lens = self.row_seq_lens[layer_idx][row_indices]
-        if len(cur_lens) > 0 and int(max(cur_lens)) + int(size) > int(self.max_model_len):
-            raise RuntimeError(
-                "KV row length exceeds max_model_len in _allocate_batch: "
-                f"layer={layer_idx} max_cur_len={int(max(cur_lens))} "
-                f"size={int(size)} max_model_len={int(self.max_model_len)}"
-            )
-
         ptr = self._num_free_slots[layer_idx]
         select_indices = self.free_slots_stack[layer_idx][ptr - batch_size: ptr]
         self._num_free_slots[layer_idx] -= batch_size

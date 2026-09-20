@@ -1506,6 +1506,17 @@ class QuestCacheManager(PrefixCacheMixin, CacheManager):
     def _allocate(self, seq_id: int, size: int) -> torch.Tensor:
         with profiler.record("cache_allocate"):
             size = int(size)
+            row_idx = self.seq_id_to_row.get(seq_id)
+            cur_len = 0 if row_idx is None else int(self.row_seq_lens[row_idx])
+            max_model_len = int(getattr(self, "max_model_len", self.buffer_req_to_token_slots.shape[1]))
+            if cur_len + size > max_model_len:
+                raise RuntimeError(
+                    "KV row length exceeds max_model_len in QuEST _allocate: "
+                    f"seq_id={seq_id} row={row_idx} cur_len={cur_len} size={size} "
+                    f"max_model_len={max_model_len}"
+                )
+            if row_idx is None and not self.free_rows:
+                raise RuntimeError("No free rows in cache manager buffer!")
             needed_pages = self._required_new_pages(seq_id, size)
             if needed_pages > 0:
                 self._evict_prefix_cache_until_free(needed_pages * self.page_size)
@@ -1515,14 +1526,6 @@ class QuestCacheManager(PrefixCacheMixin, CacheManager):
             )
 
             row_idx = self._get_free_row(seq_id)
-            cur_len = int(self.row_seq_lens[row_idx])
-            max_model_len = int(getattr(self, "max_model_len", self.buffer_req_to_token_slots.shape[1]))
-            if cur_len + size > max_model_len:
-                raise RuntimeError(
-                    "KV row length exceeds max_model_len in QuEST _allocate: "
-                    f"seq_id={seq_id} row={row_idx} cur_len={cur_len} size={size} "
-                    f"max_model_len={max_model_len}"
-                )
 
             if needed_pages > 0:
                 first_new_page = (cur_len + self.page_size - 1) // self.page_size
@@ -1565,7 +1568,7 @@ class QuestCacheManager(PrefixCacheMixin, CacheManager):
         assert size == 1, "Batch allocation currently only supports size=1 (Decode)"
         with profiler.record("cache_allocate"):
             batch_size = len(seq_ids)
-            row_indices = np.asarray([self._get_free_row(seq_id) for seq_id in seq_ids], dtype=np.int64)
+            row_indices, pending_rows = self._plan_decode_rows(np.asarray(seq_ids, dtype=np.int64))
             cur_lens = self.row_seq_lens[row_indices]
             max_model_len = int(getattr(self, "max_model_len", self.buffer_req_to_token_slots.shape[1]))
             if len(cur_lens) > 0 and int(max(cur_lens)) + 1 > max_model_len:
@@ -1584,6 +1587,8 @@ class QuestCacheManager(PrefixCacheMixin, CacheManager):
                 f"Out of QuEST KV pages: need_pages={needed_pages}, free_pages={self._num_free_pages}, "
                 f"size={batch_size}, free_slots={self.num_free_slots}"
             )
+
+            self._commit_decode_rows(pending_rows)
 
             if graph_batch_size is None:
                 rows_gpu = torch.tensor(row_indices, dtype=torch.long, device=self.device)

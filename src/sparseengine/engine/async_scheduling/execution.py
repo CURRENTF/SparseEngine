@@ -6,8 +6,10 @@ the runner stream; a copied result is never an alias of a graph's next output.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import torch
 import torch.distributed as dist
+from sparseengine.utils.profiler import cpu_timing
 from sparseengine.engine.decode_graph_staging import DecodeGraphHostInputs
 from sparseengine.platforms import device_runtime
 
@@ -69,6 +71,7 @@ class AsyncExecution:
         self.keepalive.append(inputs)
         return inputs
 
+    @cpu_timing.timed
     def prepare_inputs(self, input_ids, seqs):
         # Request identity, not the previous batch row, defines feedback.
         missing = any(s.seq_id not in self.last_tokens for s in seqs)
@@ -82,6 +85,7 @@ class AsyncExecution:
             input_ids[len(seqs):].copy_(values[0].expand(input_ids.numel()-len(seqs)))
         self.input_tokens = values
 
+    @cpu_timing.timed
     def apply_penalties(self, logits, seqs):
         if not any(s.has_sampling_penalty for s in seqs):
             return logits
@@ -109,6 +113,7 @@ class AsyncExecution:
                 values.sub_(present.to(values.dtype) * seq.presence_penalty)
         return result
 
+    @cpu_timing.timed
     def submit(self, ticket, seqs, is_prefill):
         if ticket in self.results:
             raise RuntimeError(f"Duplicate asynchronous submission {ticket}")
@@ -160,6 +165,7 @@ class AsyncExecution:
         self.submitted += 1
         self.peak_inflight = max(self.peak_inflight, len(self.results))
 
+    @cpu_timing.timed
     def collect(self, ticket, discarded=()):
         result = self.results[ticket]
         device_runtime.synchronize_event(result.event)  # This result, never the whole stream.
@@ -204,6 +210,7 @@ class AsyncExecution:
                 "device_feedback_requests": len(self.last_tokens),
                 "penalty_requests": len(self.penalties)}
 
+    @cpu_timing.timed
     def prepare_synchronous_execution(self):
         if self.results:
             raise RuntimeError("Synchronous execution requires all asynchronous results to retire")

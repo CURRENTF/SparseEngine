@@ -308,6 +308,17 @@ class PrefillScoreRequest:
     mode: str
     candidate_start: int = 0
     recent_keep_tokens: int = 0
+    candidate_ranges: tuple[tuple[int, int], ...] | None = None
+
+    def candidate_bounds(self, index: int, context: int) -> tuple[int, int]:
+        if self.candidate_ranges is not None:
+            if len(self.candidate_ranges) != len(self.query_ranges):
+                raise ValueError("Candidate ranges must cover the scoring batch.")
+            start, end = self.candidate_ranges[index]
+            if not 0 <= start <= end <= context:
+                raise ValueError("Candidate range is outside the physical context.")
+            return start, end
+        return self.candidate_start, max(self.candidate_start, context - self.recent_keep_tokens)
 
 
 @dataclass(frozen=True)

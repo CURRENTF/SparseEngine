@@ -1416,11 +1416,14 @@ class DeltaKVCacheManager(CacheManager):
 
     @torch.no_grad()
     def _allocate_full(self, seq_id: int, size: int) -> torch.Tensor:
+        row_idx = self.seq_id_to_row.get(seq_id)
+        cur_len = 0 if row_idx is None else int(self.row_seq_lens[row_idx])
+        if cur_len + size > self.full_layer_slots_map.shape[1]:
+            raise RuntimeError("KV row length exceeds max_model_len in DeltaKV _allocate_full.")
         assert self._num_free_slots_full >= size, (
             f"Out of full KV cache slots: need {size}, free {self._num_free_slots_full}"
         )
         row_idx = self._get_free_row(seq_id)
-        cur_len = self.row_seq_lens[row_idx]
 
         ptr = self._num_free_slots_full
         select_index = self.free_slots_stack_full[ptr - size: ptr]
@@ -1435,6 +1438,10 @@ class DeltaKVCacheManager(CacheManager):
 
     @torch.no_grad()
     def _allocate_deltakv_full(self, seq_id: int, size: int) -> torch.Tensor:
+        row_idx = self.seq_id_to_row.get(seq_id)
+        cur_len = 0 if row_idx is None else int(self.row_seq_lens[row_idx])
+        if cur_len + size > self.sparse_layer_raw_slots_map.shape[1]:
+            raise RuntimeError("KV row length exceeds max_model_len in DeltaKV _allocate_deltakv_full.")
         temp_reserve = self._deltakv_unallocated_temp_full_reserve()
         usable = self._num_free_slots_deltakv_full - temp_reserve
         if usable < size:
@@ -1447,7 +1454,6 @@ class DeltaKVCacheManager(CacheManager):
                 "Reduce concurrency/chunk size, or increase deltakv_full_pool_reserve_ratio."
             )
         row_idx = self._get_free_row(seq_id)
-        cur_len = self.row_seq_lens[row_idx]
 
         select_index = self._allocate_persistent_deltakv_full_slots(size, temp_reserve)
 
@@ -1494,7 +1500,7 @@ class DeltaKVCacheManager(CacheManager):
         assert self._num_free_slots_full >= batch_size, (
             f"Out of full KV cache slots: need {batch_size}, free {self._num_free_slots_full}"
         )
-        row_indices = [self._get_free_row(sid) for sid in seq_ids]
+        row_indices = self._get_decode_rows(seq_ids, self.full_layer_slots_map.shape[1])
         cur_lens = self.row_seq_lens[row_indices]
 
         ptr = self._num_free_slots_full
@@ -1526,7 +1532,7 @@ class DeltaKVCacheManager(CacheManager):
                 f"static_temp_reserved={int(getattr(self, '_deltakv_static_temp_slots_reserved_total', 0) or 0)}). "
                 "Reduce concurrency, or increase deltakv_full_pool_reserve_ratio."
             )
-        row_indices = [self._get_free_row(sid) for sid in seq_ids]
+        row_indices = self._get_decode_rows(seq_ids, self.sparse_layer_raw_slots_map.shape[1])
         cur_lens = self.row_seq_lens[row_indices]
 
         select_indices = self._allocate_persistent_deltakv_full_slots(batch_size, temp_reserve)
@@ -1536,6 +1542,19 @@ class DeltaKVCacheManager(CacheManager):
         self.sparse_layer_raw_slots_map[rows_gpu, cols_gpu] = select_indices
         self.deltakv_slot_to_pos[select_indices] = cols_gpu.to(torch.int32)
         return select_indices
+
+    def _get_decode_rows(self, seq_ids: list[int], capacity: int) -> list[int]:
+        needed_rows = len(set(seq_ids).difference(self.seq_id_to_row))
+        if needed_rows > len(self.free_rows):
+            raise RuntimeError(
+                f"No free rows for DeltaKV decode batch: need={needed_rows} free={len(self.free_rows)}."
+            )
+        for seq_id in seq_ids:
+            row = self.seq_id_to_row.get(seq_id)
+            cur_len = 0 if row is None else int(self.row_seq_lens[row])
+            if cur_len + 1 > capacity:
+                raise RuntimeError("KV row length exceeds max_model_len in DeltaKV decode batch.")
+        return [self._get_free_row(seq_id) for seq_id in seq_ids]
 
     def _active_deltakv_raw_slots_for_free(self, row_idx: int, cur_len: int) -> torch.Tensor:
         parts = []

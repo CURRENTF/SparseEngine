@@ -629,7 +629,7 @@ def test_tool_result_pruning_passes_only_verified_token_ranges(monkeypatch, tmp_
         "SPARSEENGINE_PREFIX_PRUNE_TARGET": "tool_results",
         "SPARSEENGINE_PREFIX_PRUNE_TOKENIZER": str(tmp_path),
         "SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO": "0.5",
-        "SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS": "8",
+        "SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS": "1",
         "SPARSEENGINE_PREFIX_PRUNE_EVENTS": str(tmp_path / "events.jsonl"),
     }.items():
         monkeypatch.setenv(key, value)
@@ -678,7 +678,7 @@ def test_tool_prune_advances_only_after_success_and_shares_new_turn_budget(monke
         'SPARSEENGINE_PREFIX_PRUNE_TARGET': 'tool_results',
         'SPARSEENGINE_PREFIX_PRUNE_TOKENIZER': str(tmp_path),
         'SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO': '0.2',
-        'SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS': '4096',
+        'SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS': '1',
         'SPARSEENGINE_PREFIX_PRUNE_EVENTS': str(tmp_path/'events.jsonl'),
     }.items():
         monkeypatch.setenv(key, value)
@@ -736,3 +736,40 @@ def test_tool_prune_advances_only_after_success_and_shares_new_turn_budget(monke
     messages[1]['content'] = 'rewritten old result'
     with pytest.raises(RuntimeError, match='not append-only'):
         model._maybe_prune({'messages': messages})
+
+
+def test_tool_threshold_accumulates_until_commit_without_recompressing(monkeypatch, tmp_path):
+    from benchmark.swe_bench_lite.prefix_prune_client import PrefixPruneClient
+    client = PrefixPruneClient(api_base='http://unused', tokenizer_path=str(tmp_path),
+                               keep_ratio=.2, trigger_tokens=20, events_path=tmp_path/'events.jsonl')
+    dropped, jobs, cursors = [0], [], []
+    def select(chat, message_start, **kwargs):
+        cursors.append(message_start)
+        spans = [(10*i, 10*i+10) for i in range(message_start, len(chat['messages']))]
+        return dict(token_ids=list(range(100)), ranges=spans, eligible_tokens=10*len(spans), tool_tokens=10*len(spans))
+    def match(*args):
+        return dict(block_size=1, prompt_tokens=100, usable_tokens=100, matched_tokens=100,
+                    resident_kv_tokens=100-dropped[0], last_block_id='path')
+    def request(method, path, body=None):
+        if path.endswith('/match'):
+            return match()
+        if method == 'POST':
+            jobs.append(body)
+            dropped[0] += 16
+            return dict(prune_id='job')
+        return dict(status='completed', result=dict(freed_device_slots=16, quality_degraded=True))
+    client._prune_tool_selector = SimpleNamespace(select=select)
+    monkeypatch.setattr(client, '_match_prefix', match)
+    monkeypatch.setattr(client, '_prefix_cache_request', request)
+    messages = []
+    for i in range(5):
+        messages.append(dict(role='tool', content=str(i)))
+        client._maybe_prune(dict(messages=messages))
+        assert len(jobs) == (i+1)//2
+    assert [j['ranges'] for j in jobs] == [[(0,10),(10,20)], [(20,30),(30,40)]]
+    assert [j['keep_tokens'] for j in jobs] == [4,4]
+    assert cursors == [0,0,2,2,4]
+    assert len(client._prune_processed_messages) == 4
+    messages[-1]['content'] = 'rewritten pending body'
+    with pytest.raises(RuntimeError, match='not append-only'):
+        client._maybe_prune(dict(messages=messages))

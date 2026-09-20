@@ -1,4 +1,5 @@
 import asyncio
+
 import os
 import queue
 import threading
@@ -10,6 +11,7 @@ from dataclasses import field
 from typing import Any
 from typing import Callable
 
+from sparseengine.utils.profiler import cpu_timing
 from sparseengine.engine.input_processor import tokenize_text_prompt
 from sparseengine.entrypoints.openai.detokenizer import IncrementalDetokenizer
 from sparseengine.entrypoints.openai.sampling import _find_stop_index
@@ -359,6 +361,7 @@ class AsyncEngineDispatcher:
         if terminal_message is not None:
             raise RuntimeError(terminal_message)
 
+    @cpu_timing.timed
     def _refresh_routing_snapshots(self) -> None:
         worker_routing_load_fn = getattr(
             self.engine,
@@ -565,6 +568,7 @@ class AsyncEngineDispatcher:
                     except Exception:
                         logger.exception("OpenAI dispatcher fatal callback failed")
 
+    @cpu_timing.timed
     def _drain_controls(self):
         while True:
             try:
@@ -590,6 +594,7 @@ class AsyncEngineDispatcher:
                 raise
             self._put_control(item, {"type": "result", "value": value})
 
+    @cpu_timing.timed
     def _admit(self, item: _QueuedRequest, active: dict[int, _ActiveRequest]):
         if item.cancelled.is_set():
             item.handle.terminal.set()
@@ -782,6 +787,7 @@ class AsyncEngineDispatcher:
                 request.handle.reused_tokens = request.reused_tokens
                 request.handle.prefilled_tokens = request.prefilled_tokens
 
+    @cpu_timing.timed
     def _publish_token_deltas(self, active: dict[int, _ActiveRequest]):
         logprob_outputs = {
             seq_id: (token_logprobs, top_logprobs)
@@ -1127,6 +1133,7 @@ class AsyncEngineDispatcher:
             except Exception:
                 logger.exception("Failed to notify queued OpenAI control request during dispatcher shutdown")
 
+    @cpu_timing.timed
     def _publish_finished(
         self,
         active: dict[int, _ActiveRequest],

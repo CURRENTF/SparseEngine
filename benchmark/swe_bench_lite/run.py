@@ -1107,7 +1107,7 @@ class SweBenchLiteRunner:
                 prune_config.update(
                     target="tool_results", tokenizer=self.args.prefix_prune_tokenizer,
                     keep_ratio=self.args.prefix_prune_keep_ratio,
-                    schedule="each_new_tool_turn", trigger_tokens=None,
+                    schedule="accumulated_tool_tokens",
                 )
             else:
                 prune_config.update(
@@ -1822,8 +1822,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prefix-prune-tokenizer", help="Local tokenizer directory matching the server; required for tool_results.")
     parser.add_argument("--prefix-prune-keep-ratio", type=float, default=0.5,
                         help="Shared retention fraction of aligned tool-body tokens; used only for tool_results.")
-    parser.add_argument("--prefix-prune-trigger-tokens", type=int, default=4096,
-                        help="Cached-length trigger for static range mode; ignored for tool_results.")
+    parser.add_argument("--prefix-prune-trigger-tokens", type=int, default=8192,
+                        help="Pending aligned tool-token threshold; cached-length trigger in static range mode.")
     parser.add_argument("--prefix-prune-range-start", type=int, default=512)
     parser.add_argument("--prefix-prune-range-end", type=int, default=4096)
     parser.add_argument("--prefix-prune-keep-tokens", type=int, default=1792)

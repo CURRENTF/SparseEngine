@@ -87,6 +87,28 @@ Trace hash, model, GPU UUIDs, backend, engine settings, concurrency and timeout 
 match. Without a baseline this creates a baseline, not a regression-pass claim.
 `--dry_run` validates the corpus/config without contacting the server.
 
+For local replay without recorded tool/network waits, use
+`--agent_think_time_scale 0`. To exercise incremental radix pruning, add
+`--agent_prefix_prune_keep_ratio 0.2 --agent_prefix_prune_tokenizer "$MODEL_PATH"`.
+The shared MiniSWE client accumulates previously unpruned tool-body tokens until
+`--agent_prefix_prune_trigger_tokens` (default 8192), then keeps the selected
+fraction across all pending ranges and checks physical reuse on the next turn.
+A threshold of 1 restores per-turn pruning. Below-threshold tails remain cached.
+Queued KVzip tasks and their reconstruction chunks can share model forwards;
+per-task ranges and retention budgets remain independent.
+Use a fresh server cache for each replay. Request latency excludes pruning;
+whole replay elapsed time includes pruning and the scaled waits. These settings
+are part of the comparison contract; this replay does not measure solution quality.
+
+For diagnosis, start the server with `SPARSEENGINE_CPU_TIMING_INTERVAL_S=10`
+and replay with `SPARSEENGINE_PREFIX_PRUNE_TIMING=1`. Server `cpu_timing`
+records include async submit/collect, TP coordination, routing snapshots and
+prefix pruning; `prefix_prune_timing` records queue/execution time and request
+counts. Per-agent prune events add client RPC and tool-selection wall times.
+CPU timings are inclusive host observations: do not sum nested stages or treat
+them as GPU kernel time. These diagnostics add no device synchronization and
+are disabled by default; compare performance with the same logging settings.
+
 ## Prerequisites
 
 Configure these paths for the machine running the suite:

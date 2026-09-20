@@ -1324,6 +1324,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--agent_api_base", help="Already-running vanilla OpenAI-compatible server /v1 URL")
     parser.add_argument("--agent_server_manifest", help="Actual target server identity/config/hardware JSON")
     parser.add_argument("--agent_concurrency", type=int, default=16)
+    parser.add_argument("--agent_think_time_scale", type=float, default=1.0,
+                        help="Scale recorded inter-turn waits; 0 measures replay without tool/network waits.")
+    parser.add_argument("--agent_prefix_prune_keep_ratio", type=float, default=None,
+                        help="Prune only newly added tool bodies after every turn using KVzip.")
+    parser.add_argument("--agent_prefix_prune_tokenizer", default=None)
+    parser.add_argument("--agent_prefix_prune_trigger_tokens", type=int, default=8192)
     parser.add_argument("--agent_request_timeout", type=float, default=900)
     parser.add_argument("--agent_api_key_env", default="OPENAI_API_KEY")
     parser.add_argument("--agent_baseline", help="Previous successful agent_trace.json to compare")

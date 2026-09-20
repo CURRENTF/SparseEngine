@@ -262,7 +262,8 @@ class MlaPrefillScores:
         self.owner, self.plan, self.request = owner, plan, request
         self.is_probability = request.mode == "probability"
         self.full_normalizer = (
-            request.candidate_start == 0 and request.recent_keep_tokens == 0
+            request.candidate_ranges is None
+            and request.candidate_start == 0 and request.recent_keep_tokens == 0
         )
         shape = (len(plan.contexts), max(plan.contexts))
         fill = -torch.inf if request.mode == "logits" else 0.0
@@ -312,13 +313,10 @@ class MlaPrefillScores:
         start, end = self.request.query_ranges[i]
         if end <= start:
             return
-        candidate_end = max(
-            self.request.candidate_start,
-            self.plan.contexts[i] - self.request.recent_keep_tokens,
-        )
+        candidate_start, candidate_end = self.request.candidate_bounds(i, self.plan.contexts[i])
         if (
             offset >= candidate_end
-            or offset + keys.shape[0] <= self.request.candidate_start
+            or offset + keys.shape[0] <= candidate_start
         ):
             return
         score_block(
@@ -328,7 +326,7 @@ class MlaPrefillScores:
             self.lse[i],
             query_start=start,
             key_start=offset,
-            candidate_start=self.request.candidate_start,
+            candidate_start=candidate_start,
             candidate_end=candidate_end,
             scale=self.owner.spec.softmax_scale,
             mode=mode,
@@ -353,12 +351,9 @@ class MlaPrefillScores:
                 if end <= start:
                     continue
                 context = self.plan.contexts[i]
-                candidate_end = max(
-                    self.request.candidate_start,
-                    context - self.request.recent_keep_tokens,
-                )
+                candidate_start, candidate_end = self.request.candidate_bounds(i, context)
                 for offset in range(
-                    self.request.candidate_start, candidate_end, self.owner.chunk_size
+                    candidate_start, candidate_end, self.owner.chunk_size
                 ):
                     stop = min(offset + self.owner.chunk_size, candidate_end)
                     slots = view.meta.active_slots[self.plan.rows[i], offset:stop]

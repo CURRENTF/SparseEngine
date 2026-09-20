@@ -329,13 +329,29 @@ and a total keep budget, with no tool-specific metadata.
 The ratio retains `floor(total_eligible_tool_tokens * ratio)` tokens across all
 ranges together; it is not a per-result quota. Use `0 <= ratio < 1`; omit the
 prune policy for a no-pruning baseline. Static range and keep-token options are
-ignored in this mode. After each inference turn with new tool results, only
-previously unprocessed tool bodies are pruned, sharing one keep budget across
-that turn's new ranges. Earlier ranges are never recompressed. The trigger-token
-threshold applies only to static-range mode; tool mode starts on the first
-eligible turn. Empty or unaligned bodies are logged as `skipped_by_policy` and
-advance the message cursor. Failed jobs do not advance it. Rewritten history
-fails explicitly.
+ignored in this mode. Tool bodies accumulate until `--prefix-prune-trigger-tokens`
+(default 8192) aligned, previously unpruned tool tokens are available. All pending
+ranges then share one retention budget. Earlier pruned ranges are never
+recompressed. Set the threshold to 1 to prune each eligible turn. Below-threshold
+bodies remain cached, including at the end of a task; there is no forced final
+prune. Deferred turns are logged as `prune_deferred`. Empty or unaligned bodies
+are logged as `skipped_by_policy`. Failed jobs do not advance the committed
+message cursor. Rewritten history fails explicitly.
+
+Queued KVzip jobs share reconstruction forwards when capacity permits. Each
+batch takes chunks from different tasks first, then fills spare rows with more
+chunks from the same task. Attention boundaries, score accumulators and keep
+budgets remain independent. Batching is bounded by available rows, temporary
+KV slots and the configured prefill token budget. It does not wait to fill a batch.
+Temporary scoring uses the shared cache allocator: it protects each selected
+request's complete cached path, evicts other eligible entries as needed, and
+reserves slots before execution. It reduces the batch when only a subset fits;
+insufficient space after eviction fails explicitly.
+For concurrent serving, leave spare `max_num_seqs_in_gpu` rows beyond the active
+request count; a fully occupied cache cannot batch temporary scoring sequences.
+Queued pruning drains existing asynchronous results through normal publication
+before starting its synchronous forwards.
+
 
 Reuse verification is merged into the next completed turn's prefix match.
 Configuration is saved in `run_config.json`; message cursors, ranges, budgets,

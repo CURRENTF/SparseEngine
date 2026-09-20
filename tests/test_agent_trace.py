@@ -213,3 +213,33 @@ def test_real_http_replay_writes_results_and_detects_regression(tmp_path):
     assert result["status"] == "success" and result["request_count"] == 2
     assert result["elapsed_s"] >= 1.5
     assert all(body["model"] == "target" and body["ignore_eos"] for body in requests)
+
+
+def test_replay_pruning_finishes_before_next_turn_and_excludes_request_latency():
+    # A replay that starts the next turn before pruning cannot test physical reuse.
+    now = [0.0]
+    events = []
+    agent = {"instance_id": "a", "turns": [turn(), turn(1, 90)]}
+    def send(item):
+        events.append(("send", item["turn"], now[0]))
+        now[0] += 2
+        return response()
+    def prune(item):
+        events.append(("prune", item["turn"], now[0]))
+        now[0] += 3
+    rows = replay_agent(agent, send, after_turn=prune, think_time_scale=0,
+                        sleep=lambda delay: now.__setitem__(0, now[0] + delay), clock=lambda: now[0])
+    assert events == [("send", 0, 0), ("prune", 0, 2), ("send", 1, 5), ("prune", 1, 7)]
+    assert [r["latency_s"] for r in rows] == [2, 2]
+    assert [r["prefix_prune_elapsed_s"] for r in rows] == [3, 3]
+
+
+def test_replay_prune_failure_stops_trajectory_without_hiding_model_response():
+    def prune(item):
+        raise RuntimeError("physical reuse failed")
+    rows = replay_agent({"instance_id": "a", "turns": [turn(), turn(1, 0)]},
+                        lambda item: response(), after_turn=prune)
+    assert rows[0]["status"] == "model_failed"
+    assert rows[0]["response"]["id"] == "r"
+    assert "physical reuse failed" in rows[0]["error"]
+    assert rows[1]["status"] == "skipped_by_policy"

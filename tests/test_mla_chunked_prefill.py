@@ -203,6 +203,7 @@ def test_main_attention_max_scores_reuse_output_and_match_full_qk():
     [
         ("logits", False, "triton"),
         ("probability", False, "triton"),
+        ("probability", False, "ragged"),
         ("logits", False, "prepared"),
         ("probability", False, "prepared"),
         ("probability", True, "prepared"),
@@ -218,7 +219,7 @@ def test_chunked_attention_and_scores_match_explicit_oracle(
     # Independent full softmax protects masks, global normalization, physical
     # slot indirection, and score reductions across uneven history/query blocks.
     spec, q, view, cu, project, absorb = make_case()
-    provider = partial_provider(backend, spec, q.device, 3)
+    provider = partial_provider("triton" if backend == "ragged" else backend, spec, q.device, 3)
     runner = ChunkedMlaPrefill(spec, provider, 19)
     contexts, starts = view.meta.context_lens.tolist(), cu.tolist()
     ranges = tuple(
@@ -227,6 +228,9 @@ def test_chunked_attention_and_scores_match_explicit_oracle(
     request = PrefillScoreRequest(
         ranges, mode, 0 if full_normalizer else 3, 0 if full_normalizer else 4
     )
+    bounds = ((1, contexts[0]-9), (5, contexts[1]-7), (0, contexts[2]-3)) if backend == "ragged" else None
+    if bounds is not None:
+        request = replace(request, candidate_ranges=bounds)
     actual, lse, scores = runner.run(q, view, cu, object(), project, absorb, request)
     for i, n in enumerate(contexts):
         a, b = starts[i : i + 2]
@@ -248,10 +252,11 @@ def test_chunked_attention_and_scores_match_explicit_oracle(
         torch.testing.assert_close(actual[a:b].float(), expected, atol=0.006, rtol=0.03)
         torch.testing.assert_close(lse[:, a:b], z.logsumexp(-1), atol=0.003, rtol=0.001)
         observed = raw[:, -(ranges[i][1] - ranges[i][0]) :]
+        lower, upper = bounds[i] if bounds is not None else (request.candidate_start, n-request.recent_keep_tokens)
         valid = (
             mask[-observed.shape[1] :]
-            & (ki[None] >= request.candidate_start)
-            & (ki[None] < n - request.recent_keep_tokens)
+            & (ki[None] >= lower)
+            & (ki[None] < upper)
         )
         if mode == "logits":
             ref = observed.masked_fill(~valid[None], -torch.inf).amax((0, 1))

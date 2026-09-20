@@ -281,6 +281,24 @@ synchronous execution retains its original buffer. GPU graph addresses remain
 fixed. Auxiliary-stream owners must join their work before dependent reads or
 storage reuse, including the step-end handoff.
 
+## Temporary Prefill Resource Admission
+
+Temporary prefix scoring uses the standard cache manager's
+`reserve_prefill_slots` scope. The caller pins the complete cached routes it
+needs, then submits ordered `(seq_id, query_tokens)` costs. The manager applies
+its normal eviction policy and reserves real slots and rows for the largest
+admissible leading batch. The model runner constructs scoring inputs and reduces
+scores; it does not interpret the free-slot count or implement eviction policy.
+Admission includes CPU-only prefix promotion, counting shared blocks once and
+leaving their slots available for the ordinary prefix-attach path.
+
+Reserved slots are consumed by ordinary prefill allocation. Unused reservations
+and newly claimed rows are reclaimed on scope exit; consumed KV follows the
+normal row lifetime. Prefill, decode and prefix promotion share the physical
+slot-taking operation. Existing asynchronous results must retire before this
+synchronous maintenance scope begins. A successful reservation does not permit
+evicting its protected cached prefixes, including non-candidate suffixes.
+
 ## Prefix Cache And CUDA Graph
 
 Prefix-cache support is a physical-state contract, not a controller feature.
