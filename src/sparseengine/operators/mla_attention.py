@@ -653,6 +653,29 @@ class MlaSglFa3Provider(MlaTritonProvider):
             validation_scope=validation_scope,
         )
 
+    def use_compressed_prefill(self, plan, score_request) -> bool:
+        # A runtime route between two prepared algorithms, not a decode step.
+        # The expanded route retains sparse scoring and long-query efficiency.
+        # Keep the conservative query crossover separate from FA3 eligibility.
+        return (
+            score_request is None
+            and not plan.meta.is_sparse
+            and max(b - a for a, b in zip(plan.query_starts, plan.query_starts[1:])) <= 384
+        )
+
+    @torch.no_grad()
+    def run_compressed_prefill(self, q_latent, q_rope, view, plan):
+        payload = view.payload
+        output = torch.empty_like(q_latent, memory_format=torch.contiguous_format)
+        self._record_runtime_kernel_path("sgl_fa3_prefill_latent")
+        return self.fa3.run_varlen(
+            q_rope, q_latent, payload.rope_cache, payload.latent_cache,
+            view.meta.active_slots, view.meta.req_indices, view.meta.context_lens,
+            output, cu_seqlens_q=plan.cu_q,
+            max_seqlen_q=max(b - a for a, b in zip(plan.query_starts, plan.query_starts[1:])),
+            validation_scope=plan.scope, return_softmax_lse=True,
+        )
+
     @torch.no_grad()
     def run_prefill_chunk(self, q, k, v, cu_q, cu_k, max_q, max_k, *, causal):
         output = torch.empty((*q.shape[:2], v.shape[-1]), dtype=q.dtype, device=q.device)

@@ -393,3 +393,52 @@ def test_chunked_prefill_budget_fails_before_projection(split_scratch):
         project.assert_not_called()
     finally:
         reset_context()
+
+
+@pytest.mark.parametrize('budget', [1, 1024 * 1024])
+def test_compressed_prefill_preserves_prefill_hooks_and_budget(budget):
+    from sparseengine.operators.mla_attention import MlaSglFa3Provider
+    attention = _attention(budget=budget)
+    attention._use_compressed_prefill = MlaSglFa3Provider.use_compressed_prefill.__get__(attention.provider)
+    view = _view(torch.empty(2, 1, 512, dtype=torch.bfloat16),
+                 torch.empty(2, 1, 64, dtype=torch.bfloat16),
+                 torch.tensor([[1, 0]], dtype=torch.int32),
+                 torch.tensor([0], dtype=torch.int32),
+                 torch.tensor([2], dtype=torch.int32))
+    manager = SimpleNamespace(**{name: Mock() for name in (
+        'register_attention_key_materializer', 'store_attention_payload',
+        'on_kv_stored', 'before_prefill_layer_attention',
+        'collect_prefill_attention_score', 'record_prefill_query',
+        'record_decode_query', 'on_layer_attention_end')})
+    manager.build_prefill_compute_view = Mock(return_value=view)
+    manager.prefill_score_request = Mock(return_value=None)
+    controller = SimpleNamespace(get_prefill_selection=Mock(return_value=None), on_layer_attention_end=Mock())
+    set_context(True, torch.tensor([0, 1], dtype=torch.int32), manager, seqs=[])
+    get_context().sparse_controller = controller
+    output = torch.ones(1, 5, 256, dtype=torch.bfloat16)
+    attention.provider.run_compressed_prefill = Mock(return_value=(
+        torch.ones(1, 5, 512, dtype=torch.bfloat16), torch.zeros(5, 1)))
+    project = Mock(side_effect=AssertionError('compressed prefill projected history'))
+    def run():
+        return attention.run_cached_attention(
+            torch.empty_like(output), torch.empty(1, 5, 192), torch.empty(1, 5, 64),
+            torch.empty(1, 512), torch.empty(1, 64), project_latent=project,
+            absorb_query=Mock(return_value=torch.ones(1, 5, 512)),
+            reconstruct_values=Mock(return_value=output))
+    try:
+        if budget == 1:
+            with pytest.raises(MemoryError, match='compressed prefill workspace'):
+                run()
+            attention.provider.run_compressed_prefill.assert_not_called()
+        else:
+            assert run() is output
+            assert get_context().is_prefill
+            assert not attention.chunked_prefill.plan.history_prepared
+            manager.record_prefill_query.assert_called_once()
+            manager.collect_prefill_attention_score.assert_called_once()
+            manager.record_decode_query.assert_not_called()
+            manager.on_layer_attention_end.assert_called_once()
+            controller.on_layer_attention_end.assert_called_once()
+        project.assert_not_called()
+    finally:
+        reset_context()

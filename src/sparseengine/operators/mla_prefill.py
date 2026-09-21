@@ -19,10 +19,11 @@ class PrefillPlan:
     contexts: tuple[int, ...]
     query_starts: tuple[int, ...]
     rows: tuple[int, ...]
-    current_slots: torch.Tensor
+    current_slots: torch.Tensor | None
     history_chunks: tuple[tuple[int, int, int, torch.Tensor], ...]
     request_cu_q: tuple[torch.Tensor, ...]
     max_merge_tokens: int
+    history_prepared: bool = False
 
 
 def estimate_mla_prefill_workspace_bytes(
@@ -108,7 +109,7 @@ class ChunkedMlaPrefill:
     def clear(self):
         self.plan = None
 
-    def prepare(self, view, cu_q, scope):
+    def prepare(self, view, cu_q, scope, *, prepare_history=True):
         old = self.plan
         meta = view.meta
         if (
@@ -121,48 +122,55 @@ class ChunkedMlaPrefill:
         ):
             # Packing is shared across layers; optional score outputs are not.
             old.meta = meta
+            if prepare_history and not old.history_prepared:
+                self._prepare_history(old)
             return old
-        contexts = tuple(int(x) for x in meta.context_lens.tolist())
-        starts = tuple(int(x) for x in cu_q.tolist())
-        rows = tuple(int(x) for x in meta.req_indices.tolist())
+        layout = getattr(view, "host_request_layout", None)
+        if layout:
+            contexts = tuple(row[3] for row in layout)
+            starts = tuple(row[0] for row in layout) + (layout[-1][0] + layout[-1][1],)
+            rows = tuple(row[2] for row in layout)
+            if any(b - a != row[1] for a, b, row in zip(starts, starts[1:], layout)):
+                raise ValueError("Invalid host MLA prefill request packing.")
+        else:
+            contexts = tuple(int(x) for x in meta.context_lens.tolist())
+            starts = tuple(int(x) for x in cu_q.tolist())
+            rows = tuple(int(x) for x in meta.req_indices.tolist())
         if (
             len(starts) != len(contexts) + 1
             or len(rows) != len(contexts)
             or starts[0] != 0
         ):
             raise ValueError("Invalid MLA prefill request packing.")
-        current_slots, history, request_cu = [], [], []
-        max_merge_tokens = 0
         for i, (row, context) in enumerate(zip(rows, contexts)):
             qn = starts[i + 1] - starts[i]
             if qn <= 0 or context < qn or context > meta.active_slots.shape[1]:
                 raise ValueError("Invalid MLA query/context length.")
             if not 0 <= row < meta.active_slots.shape[0]:
                 raise ValueError("Invalid MLA request row.")
+        self.plan = PrefillPlan(scope, meta, cu_q, contexts, starts, rows,
+                                None, (), (), 0)
+        if prepare_history:
+            self._prepare_history(self.plan)
+        return self.plan
+
+    def _prepare_history(self, plan):
+        current_slots, history, request_cu = [], [], []
+        for i, (row, context) in enumerate(zip(plan.rows, plan.contexts)):
+            qn = plan.query_starts[i + 1] - plan.query_starts[i]
             cached = context - qn
             if cached > self.chunk_size:
-                max_merge_tokens = max(max_merge_tokens, qn)
-            current_slots.append(meta.active_slots[row, cached:context])
-            request_cu.append(
-                torch.tensor([0, qn], dtype=torch.int32, device=cu_q.device)
-            )
+                plan.max_merge_tokens = max(plan.max_merge_tokens, qn)
+            current_slots.append(plan.meta.active_slots[row, cached:context])
+            request_cu.append(torch.tensor([0, qn], dtype=torch.int32, device=plan.cu_q.device))
             for offset in range(0, cached, self.chunk_size):
                 length = min(self.chunk_size, cached - offset)
-                cu_k = torch.tensor([0, length], dtype=torch.int32, device=cu_q.device)
+                cu_k = torch.tensor([0, length], dtype=torch.int32, device=plan.cu_q.device)
                 history.append((i, offset, length, cu_k))
-        self.plan = PrefillPlan(
-            scope,
-            meta,
-            cu_q,
-            contexts,
-            starts,
-            rows,
-            torch.cat(current_slots),
-            tuple(history),
-            tuple(request_cu),
-            max_merge_tokens,
-        )
-        return self.plan
+        plan.current_slots = torch.cat(current_slots)
+        plan.history_chunks = tuple(history)
+        plan.request_cu_q = tuple(request_cu)
+        plan.history_prepared = True
 
     @staticmethod
     def gather(payload, slots):

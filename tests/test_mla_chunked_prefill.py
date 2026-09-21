@@ -376,3 +376,68 @@ def test_multi_tile_observations_and_empty_candidates(backend):
     p = z.masked_fill(~valid, -torch.inf).softmax(-1).nan_to_num(0)
     ref = p.mean(1).amax(0)
     torch.testing.assert_close(scores[0], ref, atol=2e-4, rtol=0.015)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+@pytest.mark.parametrize("contexts,queries,heads", [
+    ((65,), (1,), 20),
+    ((3072,), (47,), 10),
+    ((37299,), (67,), 10),
+    ((32768,), (384,), 20),
+    ((1024, 6144, 513), (512, 129, 513), 5),
+])
+def test_compressed_prefill_matches_dense_causal_reference(contexts, queries, heads):
+    spec, q, view, cu, project, absorb = make_case(contexts, queries, heads)
+    provider = partial_provider("fa3", spec, q.device, len(contexts))
+    runner = ChunkedMlaPrefill(spec, provider, 16384)
+    plan = runner.prepare(view, cu, object())
+    absorbed = absorb(q[..., :192])
+    for _ in range(2):
+        actual, lse = provider.run_compressed_prefill(absorbed, q[..., 192:], view, plan)
+        start = 0
+        for row, kn, qn in zip(plan.rows, contexts, queries):
+            slots = view.meta.active_slots[row, :kn].long()
+            latent = view.payload.latent_cache[slots, 0].float()
+            rope = view.payload.rope_cache[slots, 0].float()
+            # Direct dense QK/softmax oracle, independent of the FA3 adapter.
+            for offset in range(0, qn, 32):
+                end = min(qn, offset + 32)
+                logits = torch.einsum("qhd,kd->hqk", absorbed[start+offset:start+end].float(), latent)
+                logits += torch.einsum("qhd,kd->hqk", q[start+offset:start+end, :, 192:].float(), rope)
+                logits *= spec.softmax_scale
+                mask = torch.arange(kn, device=q.device)[None] > (kn - qn + torch.arange(offset, end, device=q.device)[:, None])
+                logits.masked_fill_(mask[None], -torch.inf)
+                expected = torch.einsum("hqk,kd->qhd", logits.softmax(-1), latent)
+                torch.testing.assert_close(actual[start+offset:start+end].float(), expected, atol=.003, rtol=.03)
+                torch.testing.assert_close(lse[:, start+offset:start+end], logits.logsumexp(-1), atol=.002, rtol=.001)
+            start += qn
+
+
+def test_compressed_prefill_preserves_score_and_sparse_routes():
+    provider = object.__new__(MlaSglFa3Provider)
+    plan = SimpleNamespace(query_starts=(0, 2, 65), meta=SimpleNamespace(is_sparse=False))
+    assert provider.use_compressed_prefill(plan, None)
+    assert not provider.use_compressed_prefill(plan, object())
+    plan.meta.is_sparse = True
+    assert not provider.use_compressed_prefill(plan, None)
+
+
+
+def test_host_prefill_layout_avoids_readback_and_defers_history(monkeypatch):
+    meta = AttentionViewMeta(torch.arange(24, dtype=torch.int32).view(2, 12),
+                             torch.tensor([1, 0], dtype=torch.int32),
+                             torch.tensor([12, 9], dtype=torch.int32))
+    view = SimpleNamespace(meta=meta, host_request_layout=((0, 3, 1, 12), (3, 2, 0, 9)))
+    cu = torch.tensor([0, 3, 5], dtype=torch.int32)
+    runner = ChunkedMlaPrefill(None, SimpleNamespace(), 4)
+    scope = object()
+    with monkeypatch.context() as m:
+        m.setattr(torch.Tensor, 'tolist', lambda _: pytest.fail('unnecessary metadata readback'))
+        plan = runner.prepare(view, cu, scope, prepare_history=False)
+        assert not plan.history_prepared and plan.current_slots is None
+        assert plan.contexts == (12, 9) and plan.query_starts == (0, 3, 5)
+        # A later score-producing layer can still use the expanded algorithm.
+        assert runner.prepare(view, cu, scope) is plan
+        assert plan.history_prepared
+    assert plan.current_slots.tolist() == [21, 22, 23, 7, 8]
+    assert sum(n for _, _, n, _ in plan.history_chunks) == 16

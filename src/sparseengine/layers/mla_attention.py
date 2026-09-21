@@ -73,6 +73,7 @@ class MLAAttention:
                 f"got {self.spec.qk_head_dim}/{self.spec.value_head_dim}."
             )
         self.chunked_prefill = ChunkedMlaPrefill(spec, provider, history_chunk_size)
+        self._use_compressed_prefill = getattr(provider, "use_compressed_prefill", None)
         self._key_materializer_bindings: dict[
             tuple[int, int], tuple[object, Callable]
         ] = {}
@@ -317,33 +318,57 @@ class MLAAttention:
                     view,
                     context.cu_seqlens_q,
                     context.attention_validation_scope,
+                    prepare_history=False,
                 )
                 request = self.chunked_prefill.score_request(
                     plan, cache_manager.prefill_score_request(layer_idx, context.seqs)
                 )
-                required = estimate_mla_prefill_workspace_bytes(
-                    plan=plan,
-                    spec=self.spec,
-                    chunk_size=self.chunked_prefill.chunk_size,
-                    hidden_size=self.hidden_size,
-                    projection_chunk_size=self.projection_chunk_size,
-                    score_request=request,
-                    kernel_workspace_bytes=self.chunked_prefill.kernel_workspace_bytes(plan),
-                )
-                if required > self.prefill_workspace_bytes:
-                    raise MemoryError(
-                        f"MLA chunked prefill workspace exceeds budget: required={required} "
-                        f"budget={self.prefill_workspace_bytes}. Reduce the token batch or history chunk size."
+                if self._use_compressed_prefill is not None and self._use_compressed_prefill(plan, request):
+                    # Explicit live tensors, including query absorption, latent
+                    # output and value reconstruction. FA3's opaque workspace
+                    # is measured by the existing startup memory profile.
+                    required = q.shape[0] * self.spec.local_q_heads * (
+                        4 * self.spec.kv_lora_rank + 2 * self.spec.value_head_dim
+                    ) * q.element_size()
+                    required += min(q.shape[0], self.projection_chunk_size) * self.hidden_size * q.element_size()
+                    if required > self.prefill_workspace_bytes:
+                        raise MemoryError(
+                            f"MLA compressed prefill workspace exceeds budget: required={required} "
+                            f"budget={self.prefill_workspace_bytes}. Reduce the token batch."
+                        )
+                    with profiler.trace("mla.prefill.latent_attention"):
+                        latent_output, attention_lse = self.provider.run_compressed_prefill(
+                            absorb_query(q_nope), q_rope, view, plan,
+                        )
+                        output = reconstruct_values(latent_output)
+                    scores = None
+                else:
+                    self.chunked_prefill.prepare(
+                        view, context.cu_seqlens_q, context.attention_validation_scope,
                     )
-                output, attention_lse, scores = self.chunked_prefill.run(
-                    q,
-                    view,
-                    context.cu_seqlens_q,
-                    context.attention_validation_scope,
-                    project_latent,
-                    absorb_query,
-                    request,
-                )
+                    required = estimate_mla_prefill_workspace_bytes(
+                        plan=plan,
+                        spec=self.spec,
+                        chunk_size=self.chunked_prefill.chunk_size,
+                        hidden_size=self.hidden_size,
+                        projection_chunk_size=self.projection_chunk_size,
+                        score_request=request,
+                        kernel_workspace_bytes=self.chunked_prefill.kernel_workspace_bytes(plan),
+                    )
+                    if required > self.prefill_workspace_bytes:
+                        raise MemoryError(
+                            f"MLA chunked prefill workspace exceeds budget: required={required} "
+                            f"budget={self.prefill_workspace_bytes}. Reduce the token batch or history chunk size."
+                        )
+                    output, attention_lse, scores = self.chunked_prefill.run(
+                        q,
+                        view,
+                        context.cu_seqlens_q,
+                        context.attention_validation_scope,
+                        project_latent,
+                        absorb_query,
+                        request,
+                    )
                 b_start_loc = context.cu_seqlens_q[:-1]
                 chunk_lens = context.cu_seqlens_q[1:] - context.cu_seqlens_q[:-1]
                 cache_manager.collect_prefill_attention_score(

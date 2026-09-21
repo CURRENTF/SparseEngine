@@ -41,10 +41,13 @@ def test_only_untransformed_physical_current_tokens_are_reused(monkeypatch, chan
     manager.buffer_req_to_token_slots = slots
     manager.layer_batch_state = SimpleNamespace(req_indices=rows, context_lens=lengths)
     manager.kv_layer_index = lambda layer: layer
+    manager.prefill_plan = ((0, 2, 1, 5), (2, 1, 0, 3))
     result = manager.build_prefill_compute_view(0, latent, rope, None)
     if changed is not None:
         assert result.current_mla is None
+        assert result.host_request_layout is None
     else:
+        assert result.host_request_layout == manager.prefill_plan
         assert result.current_mla.latent.data_ptr() == latent.data_ptr()
         assert result.current_mla.rope.data_ptr() == rope.data_ptr()
 

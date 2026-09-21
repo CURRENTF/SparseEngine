@@ -331,6 +331,9 @@ class PrefillComputeView:
     # Optional current tokens in packed query order. Only a cache manager may
     # certify equivalence to the tail of this view, including storage dtype.
     current_mla: MlaLatentWrite | None = None
+    # Cache-owner-certified CPU coordinates: (query start, query length,
+    # physical request row, visible context length). No device readback needed.
+    host_request_layout: tuple[tuple[int, int, int, int], ...] | None = None
 
 
 @dataclass(frozen=True)

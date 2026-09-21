@@ -39,6 +39,7 @@ from sparseengine.models.qwen3 import Qwen3MLP
 from sparseengine.operators.activation import resolve_silu_and_mul_provider
 from sparseengine.operators.attention_capabilities import AttentionScoreKind
 from sparseengine.operators.mla_attention import MlaAttentionOpSpec
+from sparseengine.operators.mla_projection import project_mla_values
 from sparseengine.operators.moe import (
     MoeOpSpec,
     append_shared_expert_route,
@@ -235,10 +236,7 @@ class Glm4MoeLiteAttention(nn.Module):
             self.kv_lora_rank,
         )
         v_weight = kv_b_weight[:, self.qk_nope_head_dim :]
-        return torch.bmm(
-            latent_output.transpose(0, 1),
-            v_weight.transpose(1, 2),
-        ).transpose(0, 1)
+        return project_mla_values(latent_output, v_weight)
 
     def forward(
         self,

@@ -426,7 +426,7 @@ class StandardCacheManager(PrefixCacheMixin, CacheManager):
             return view
         return replace(view, current_mla=MlaLatentWrite(
             latent=k_current.unsqueeze(1), rope=v_current.unsqueeze(1),
-        ))
+        ), host_request_layout=getattr(self, "prefill_plan", None))
 
     def get_layer_compute_tensors(self, layer_idx: int, selection: SparseSelection | None = None):
         del selection

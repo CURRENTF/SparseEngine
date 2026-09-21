@@ -399,7 +399,8 @@ class SglFa3DecodeKernel:
         max_seqlen_q: int,
         num_splits: int | None = None,
         validation_scope: object | None = None,
-    ) -> torch.Tensor:
+        return_softmax_lse: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         split_count = self.num_splits if num_splits is None else int(num_splits)
         if split_count < 0:
             raise ValueError(
@@ -466,6 +467,11 @@ class SglFa3DecodeKernel:
             ),
             validation_scope=validation_scope,
         )
+        if return_softmax_lse:
+            lse = result[1]
+            if lse.dtype != torch.float32 or lse.shape != (q_rope.shape[1], q_rope.shape[0]):
+                raise RuntimeError("FA3 returned invalid latent prefill LSE.")
+            return output, lse
         return output
 
     def run_explicit_varlen(
