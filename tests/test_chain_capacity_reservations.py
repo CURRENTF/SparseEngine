@@ -31,6 +31,57 @@ def allocate(manager, state, seq_id, length):
     state._resident_seq_ids.add(seq_id)
 
 
+def test_active_reservations_follow_finish_resume_and_invalidate():
+    manager, coordinator, state = runtime()
+    index = coordinator.index
+    for name, sid, reserve in [('a', 1, (3, 5)), ('b', 2, (7, 11))]:
+        plan = index.plan_admission(chain_id=name, seq_id=sid, token_ids=[1],
+            fingerprint=coordinator.fingerprint, reserved_slots_by_layer=reserve, reserved_rows=1)
+        index.apply_admission(plan, fingerprint=coordinator.fingerprint)
+    assert coordinator._outstanding_active_reservations() == ((10, 16), 2)
+    allocate(manager, state, 1, 1)
+    assert coordinator._outstanding_active_reservations() == ((9, 15), 1)
+    index.finish('a', token_ids=[1], processed_token_count=1, physical_slots_by_layer=(1, 1))
+    assert coordinator._outstanding_active_reservations() == ((7, 11), 1)
+    assert set(index.active_records) == {'b'}
+    plan = index.plan_admission(chain_id='a', seq_id=1, token_ids=[1, 2],
+        fingerprint=coordinator.fingerprint, reserved_slots_by_layer=(4, 6))
+    index.apply_admission(plan, fingerprint=coordinator.fingerprint)
+    assert coordinator._outstanding_active_reservations() == ((11, 17), 1)
+    assert coordinator._outstanding_active_reservations(exclude_seq_ids={1}) == ((7, 11), 1)
+    index.invalidate('b')
+    assert coordinator._outstanding_active_reservations() == ((4, 6), 0)
+    index.invalidate('a')
+    manager.free_seq(1)
+    assert not index.active_records
+    assert coordinator._outstanding_active_reservations() == ((), 0)
+    plan = index.plan_admission(chain_id='reset', seq_id=3, token_ids=[1],
+        fingerprint=coordinator.fingerprint, reserved_slots_by_layer=(2, 2), reserved_rows=1)
+    index.apply_admission(plan, fingerprint=coordinator.fingerprint)
+    index.reset()
+    assert not index.active_records
+    assert coordinator._outstanding_active_reservations() == ((), 0)
+
+
+def test_active_chain_without_prefill_promises_does_not_read_physical_layers(monkeypatch):
+    """Completed prefills owe zero; live row-only and slot promises still count."""
+    manager, coordinator, state = runtime()
+    index = coordinator.index
+    for name, sid, slots, rows in [('done', 1, (), 0), ('row', 2, (), 1), ('slots', 3, (5, 7), 1)]:
+        plan = index.plan_admission(chain_id=name, seq_id=sid, token_ids=[1],
+            fingerprint=coordinator.fingerprint, reserved_slots_by_layer=slots, reserved_rows=rows)
+        index.apply_admission(plan, fingerprint=coordinator.fingerprint)
+    allocate(manager, state, 1, 1)
+    allocate(manager, state, 3, 2)
+    read = manager.chain_physical_residency
+    def checked(seq_id):
+        assert seq_id != 1, 'A completed prefill has no outstanding promise to evaluate'
+        return read(seq_id)
+    monkeypatch.setattr(manager, 'chain_physical_residency', checked)
+    assert coordinator._outstanding_active_reservations() == ((3, 5), 1)
+    assert coordinator._outstanding_active_reservations(exclude_seq_ids={3}) == ((), 1)
+
+
 def test_final_prefill_releases_peak_before_next_chain_admission(monkeypatch):
     # Old releases only at turn finish caused needless LRU eviction during
     # decode. Supply post-compaction storage; this tests lifecycle, not kernels.

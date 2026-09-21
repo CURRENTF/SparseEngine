@@ -177,7 +177,7 @@ class AsyncExecution:
             if seq.seq_id not in ignored:
                 if not result.is_prefill:
                     tokens = [input_by_id[seq.seq_id]]
-                cache._record_prefix_materialization(seq, tokens, slots)
+                cache._record_frozen_prefix_materialization(seq, tokens, slots)
         if result.prefix_records:
             live = [s for s in result.seqs if s.seq_id not in ignored]
             cache.publish_pending_prefix_blocks(live)
@@ -218,6 +218,22 @@ class AsyncExecution:
         # feedback and penalties from accepted history on the next submission.
         self.last_tokens.clear()
         self.penalties.clear()
+
+    def assert_releasable(self, seq_ids) -> None:
+        """Control-boundary guard; a completed event is not a retired result.
+
+        Reuse the existing result ownership, not a second per-request counter.
+        Do not wait here: the driver must retire the affected tickets first.
+        Unrelated requests may remain in flight.
+        """
+        if not self.results:
+            return
+        targets = set(seq_ids)
+        for ticket, result in self.results.items():
+            if any(seq.seq_id in targets for seq in result.seqs):
+                raise AsyncDrainRequired(
+                    f"Cache release requires asynchronous ticket {ticket} to retire."
+                )
 
     def forget(self, seq_ids):
         for seq_id in seq_ids:

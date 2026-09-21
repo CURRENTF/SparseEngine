@@ -1,5 +1,6 @@
 """Whole-turn chain snapshots. Physical state remains owned by CacheManager."""
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -63,6 +64,9 @@ class ChainOffloadController:
         if self.stream is None:
             raise RuntimeError("Cannot create chain offload stream.")
         self.snapshots: dict[int, ChainSnapshot] = {}
+        # Transfer queue only. Completed host snapshots stay in snapshots and
+        # must not make admission polling proportional to retained history.
+        self._pending: OrderedDict[int, ChainSnapshot] = OrderedDict()
         self.used_bytes = 0
         self.d2h_bytes = 0
         self.h2d_bytes = 0
@@ -94,17 +98,23 @@ class ChainOffloadController:
         snapshot = self.snapshots[seq_id]
         if snapshot.completion is not None:
             device_runtime.synchronize_event(snapshot.completion)
+            self._pending.pop(seq_id)
             snapshot.completion = None
             snapshot.keepalive.clear()
             snapshot.valid = True
         return snapshot
 
     def poll(self) -> None:
-        for snapshot in self.snapshots.values():
-            if snapshot.completion is not None and device_runtime.is_event_complete(snapshot.completion):
-                snapshot.completion = None
-                snapshot.keepalive.clear()
-                snapshot.valid = True
+        # All D2H events share one stream. Query only the oldest pending copy;
+        # targeted waits can remove another entry without scanning this queue.
+        while self._pending:
+            seq_id, snapshot = next(iter(self._pending.items()))
+            if not device_runtime.is_event_complete(snapshot.completion):
+                break
+            self._pending.popitem(last=False)
+            snapshot.completion = None
+            snapshot.keepalive.clear()
+            snapshot.valid = True
 
     def invalidate(self, seq_id: int) -> None:
         if seq_id in self.snapshots:
@@ -142,8 +152,7 @@ class ChainOffloadController:
             if not reuse:
                 kv[layer] = tuple(HostTensorPool(((length, *tensor.shape[1:]),), dtype=tensor.dtype).tensors[0]
                                   for tensor in (k, v))
-            row = self.manager.seq_id_to_row[layer][seq_id]
-            slots[layer] = self.manager.buffer_req_to_token_slots[layer][row, :length].to(torch.int64).clone()
+            slots[layer] = self.manager.chain_token_slots(layer, seq_id).to(dtype=torch.int64, copy=True)
             indices[layer] = torch.arange(length, dtype=torch.int64, device=self.device)
         for name, tensor in state.tensors.items():
             if not reuse:
@@ -168,6 +177,7 @@ class ChainOffloadController:
             device_runtime.synchronize_stream(self.stream)
             raise
         self.snapshots[seq_id] = snapshot
+        self._pending[seq_id] = snapshot
         self.used_bytes += nbytes
         self.d2h_bytes += nbytes
 
@@ -180,15 +190,17 @@ class ChainOffloadController:
             raise RuntimeError("Cannot restore an invalid chain snapshot.")
         if self.manager.chain_has_residency(seq_id):
             raise RuntimeError("Cannot restore over a resident chain.")
-        # Check every layer before mutating any allocator.
-        for layer, (k, _) in snapshot.kv.items():
-            if not self.manager.free_rows[layer] or self.manager._num_free_slots[layer] < len(k):
-                raise RuntimeError("Chain restore has insufficient reserved GPU rows/slots.")
-        for layer in snapshot.kv:
-            self.manager._get_free_row(layer, seq_id)
+        layers = tuple(self.manager.kv_transformer_layer_indices())
+        if set(snapshot.kv) != set(layers):
+            raise RuntimeError("Chain snapshot does not cover the runtime KV layers.")
+        # The manager preflights and rolls back its own physical layout. Offload
+        # must not manipulate row deques or layer allocator counters directly.
+        allocated = self.manager.allocate_chain_restore(
+            seq_id, tuple(len(snapshot.kv[layer][0]) for layer in layers),
+        )
         try:
-            slots = {layer: self.manager._allocate(layer, seq_id, len(k)).to(torch.int64).clone()
-                     for layer, (k, _) in snapshot.kv.items()}
+            slots = {layer: value.to(dtype=torch.int64, copy=True)
+                     for layer, value in allocated.items()}
             indices = {layer: torch.arange(len(k), dtype=torch.int64, device=self.device)
                        for layer, (k, _) in snapshot.kv.items()}
             producer, completion = self._event(), self._event()

@@ -46,10 +46,14 @@ def make_rank(window=6):
 def engine_with_ranks(ranks):
     driver = ranks[0][2]
     calls = []
+    runners = []
+    for rank in ranks:
+        runner = object.__new__(ModelRunner)
+        runner.runtime_state = rank[2]
+        runners.append(runner)
     def call(method, *args):
         calls.append((method, args))
-        results = [getattr(ModelRunner, method)(SimpleNamespace(runtime_state=r[2]), *args)
-                   for r in ranks]
+        results = [getattr(runner, method)(*args) for runner in runners]
         assert all(result == results[0] for result in results)
         return results[0]
     engine = object.__new__(LLMEngine)

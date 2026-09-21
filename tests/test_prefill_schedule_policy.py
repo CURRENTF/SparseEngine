@@ -3172,13 +3172,17 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         seq.prefix_cache_hit_last_block_id = b"block"
         seq.prefix_cache_block_size = 4
         seq.prefix_cache_method = "omnikv"
+        state = seq.__getstate__()
+        self.assertIsInstance(state[15], tuple)
         restored = object.__new__(Sequence)
-        restored.__setstate__(seq.__getstate__())
+        restored.__setstate__(state)
 
         self.assertTrue(restored.prefix_cache_enabled)
         self.assertEqual(restored.prefix_cache_hit_len, 8)
         self.assertEqual(restored.prefix_cache_hit_block_count, 2)
         self.assertEqual(restored.prefix_cache_hit_last_block_id, b"block")
+        self.assertIsInstance(restored.token_ids, list)
+        self.assertEqual(restored.prompt_token_ids, tuple(seq.token_ids))
 
     def test_sequence_ipc_carries_recompute_prefill_and_decode_inputs(self):
         seq = seq_with_len(4)
@@ -3188,7 +3192,9 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         seq.current_chunk_size = 2
 
         restored_prefill = object.__new__(Sequence)
-        restored_prefill.__setstate__(seq.__getstate__())
+        prefill_state = seq.__getstate__()
+        self.assertIsInstance(prefill_state[15], list)
+        restored_prefill.__setstate__(prefill_state)
         self.assertTrue(restored_prefill.is_recompute_prefill)
         self.assertEqual(restored_prefill.replay_input_token_ids, [0, 1])
 

@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+from contextlib import nullcontext
 from multiprocessing import get_context
 from multiprocessing.shared_memory import SharedMemory
 from types import SimpleNamespace
@@ -32,6 +33,7 @@ def _runner():
     runner = object.__new__(ModelRunner)
     runner.world_size = 1
     runner.parallel_context = SimpleNamespace(attn_tp_size=1, attn_tp_rank=0, attn_dp_size=1)
+    runner.runtime_state = SimpleNamespace(prefix_cache_lookup_batch=lambda **_: nullcontext())
     return runner
 
 
@@ -1000,11 +1002,81 @@ def test_prefix_batch_splits_before_publishing_oversized_payload():
     received = []
     for buf in signalled:
         n = int.from_bytes(buf[:4], "little")
-        name, batch = pickle.loads(buf[4:n + 4])
+        name, batch, boundaries = pickle.loads(buf[4:n + 4])
         assert name == "refresh_prefix_cache_hits"
+        assert boundaries == (not received, len(received) + len(batch) == len(seqs))
         received.extend(batch)
     assert received == seqs
     assert 1 < len(signalled) <= len(seqs)
+
+
+def test_split_prefix_batches_keep_worker_memos_and_retire_cancelled_requests():
+    """Fragment-local eviction used to rehash every waiting request on TP workers."""
+    import pickle
+    from cache_contracts.cases import make_radix
+    from sparseengine.engine.cache_manager.prefix_cache_mixin import PrefixLookupCache
+    from sparseengine.engine.runtime_state import RuntimeState
+    from sparseengine.engine.sequence import Sequence
+
+    seqs = [Sequence([1000 + i, 2000 + i, 3000 + i]) for i in range(7)]
+    runners = [_runner(), _runner()]
+    for rank, runner in enumerate(runners):
+        manager = make_radix('')
+        manager.prefix_lookup_cache = PrefixLookupCache(max_entries=2)
+        runner.parallel_context = SimpleNamespace(attn_tp_size=2, attn_tp_rank=rank)
+        runner.runtime_state = RuntimeState(config=manager.config, cache_manager=manager)
+        runner._sync_prefix_cache_batch_result = lambda *_: None
+    root, worker = runners
+    size = len(pickle.dumps(['refresh_prefix_cache_hits', seqs[:2], (True, False)]))
+    root.shm = SimpleNamespace(buf=bytearray(size + 4 + 2))
+    received = []
+
+    def consume():
+        size = int.from_bytes(root.shm.buf[:4], 'little')
+        name, *args = pickle.loads(root.shm.buf[4:size + 4])
+        received.append(name)
+        worker.call(name, *args)
+
+    root.event = [(SimpleNamespace(set=consume), SimpleNamespace(clear=lambda: None))]
+    new = Sequence([4000, 5000, 6000])
+    for batch, expected_hashes in [(seqs, 7), (seqs, 7), ([new, *seqs[:-1]], 8),
+                                    ([seqs[3], seqs[1]], 8), ([], 8)]:
+        root.call('refresh_prefix_cache_hits', batch)
+        for runner in runners:
+            manager = runner.runtime_state.cache_manager
+            assert manager.prefix_cache.block_id_generation_requests == expected_hashes
+            assert set(manager.prefix_lookup_cache.entries) == {seq.seq_id for seq in batch}
+            assert manager.prefix_lookup_cache._batch_entries is None
+    assert len(received) > 5
+
+
+def test_single_prefix_rpc_fallback_preserves_batch_lifetime():
+    """A singleton fallback must close the same lookup pass on every rank."""
+    from cache_contracts.cases import make_radix
+    from sparseengine.engine.model_runner import _RPCPayloadTooLarge
+    from sparseengine.engine.runtime_state import RuntimeState
+    from sparseengine.engine.sequence import Sequence
+
+    runner = _runner()
+    manager = make_radix('')
+    runner.runtime_state = RuntimeState(config=manager.config, cache_manager=manager)
+    runner.parallel_context = SimpleNamespace(attn_tp_size=2, attn_tp_rank=0)
+    runner._sync_tp_rpc_status = lambda *_: None
+    runner._sync_prefix_cache_lookup_result = lambda *_: None
+    published = []
+
+    def write(name, *args, **kwargs):
+        if name == 'refresh_prefix_cache_hits':
+            raise _RPCPayloadTooLarge('injected unpublished oversized batch')
+        published.append((name, args[-1]))
+
+    runner.write_shm = write
+    seqs = [Sequence([1, 2, 3]), Sequence([4, 5, 6])]
+    runner.call('refresh_prefix_cache_hits', seqs)
+    assert published == [('refresh_prefix_cache_hit', (True, False)),
+                         ('refresh_prefix_cache_hit', (False, True))]
+    assert set(manager.prefix_lookup_cache.entries) == {seq.seq_id for seq in seqs}
+    assert manager.prefix_lookup_cache._batch_entries is None
 
 
 def _prefix_batch_gloo_worker(rank, rendezvous, output):

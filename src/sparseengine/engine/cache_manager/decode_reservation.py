@@ -21,6 +21,8 @@ class DecodeReservation:
 
 class DecodeReservations:
     def __init__(self, cache_manager, window: int):
+        if type(window) is not int or window <= 0:
+            raise ValueError("Decode reservation window must be a positive integer.")
         self.cache_manager = cache_manager
         self.window = window
         self.requests: dict[int, DecodeReservation] = {}

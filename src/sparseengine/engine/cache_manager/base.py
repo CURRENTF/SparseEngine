@@ -470,12 +470,34 @@ class CacheManager(ABC):
     ) -> "CacheManager":
         def create_manager(manager_cls):
             if allocation_budget_bytes is None:
-                return manager_cls(config, parallel_context)
-            return manager_cls(
-                config,
-                parallel_context,
-                allocation_budget_bytes=allocation_budget_bytes,
-            )
+                manager = manager_cls(config, parallel_context)
+            else:
+                manager = manager_cls(
+                    config,
+                    parallel_context,
+                    allocation_budget_bytes=allocation_budget_bytes,
+                )
+            if getattr(config, "enable_prefix_caching", False):
+                # Cold wiring only: no conformance observer or wrapper in decode.
+                mode = config.resolved_prefix_cache_mode
+                if mode == "chain":
+                    from .chain_contract import validate_chain_manager
+
+                    validate_chain_manager(
+                        manager, CacheManager,
+                        offload=bool(config.enable_prefix_cache_offload),
+                    )
+                elif mode == "radix":
+                    from .radix_contract import validate_radix_manager
+
+                    layout = getattr(manager, "runtime_layout", None)
+                    validate_radix_manager(
+                        manager, CacheManager,
+                        mixed=bool(getattr(layout, "linear_attention_layer_indices", ())),
+                    )
+                else:
+                    raise ValueError(f"Invalid enabled cache protocol: {mode!r}.")
+            return manager
 
         sparse_method = resolve_cache_sparse_method(
             config.sparse_method,
@@ -1730,8 +1752,9 @@ class CacheManager(ABC):
         del seq, block_start, block_end
         raise RuntimeError("This cache manager does not support mixed prefix KV payloads.")
 
-    def attach_prefix_kv_payload(self, seq: Sequence, payload: object) -> None:
-        del seq, payload
+    def attach_prefix_kv_payloads(self, seq: Sequence, payloads: list[object]) -> None:
+        """Attach contiguous KV aliases atomically; failure leaves no new aliases."""
+        del seq, payloads
         raise RuntimeError("This cache manager does not support mixed prefix KV payload attach.")
 
     def validate_prefix_kv_attach(self, seq: Sequence) -> bool:

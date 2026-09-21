@@ -325,12 +325,21 @@ class RuntimeState:
 
     def _free_seq_payload(self, seq_id: int) -> None:
         self.decode_reservations.release(seq_id)
-        self.cache_manager.free_seq(seq_id)
-        if self.prefix_cache_coordinator is not None:
-            self.prefix_cache_coordinator.release_seq(seq_id)
-        if self.recurrent_state_manager is not None:
-            self.recurrent_state_manager.free_seq(seq_id)
-        self._resident_seq_ids.discard(int(seq_id))
+        try:
+            self.cache_manager.free_seq(seq_id)
+        finally:
+            # A post-detach write-through failure must not strand recurrent
+            # state or coordinator refs. The runner fences execution first;
+            # cleanup errors propagate, never silently resume a failed worker.
+            try:
+                if self.prefix_cache_coordinator is not None:
+                    self.prefix_cache_coordinator.release_seq(seq_id)
+            finally:
+                try:
+                    if self.recurrent_state_manager is not None:
+                        self.recurrent_state_manager.free_seq(seq_id)
+                finally:
+                    self._resident_seq_ids.discard(int(seq_id))
 
     def chain_admission_plan(
         self,
@@ -379,7 +388,7 @@ class RuntimeState:
             # A failed restore retains the CPU snapshot and must not leave an
             # ACTIVE writer or an outstanding reservation that can never run.
             if plan.status == "resumed":
-                record.state = ChainState.IDLE
+                self.chain_cache_coordinator.index._set_record_state(record, ChainState.IDLE)
                 record.reserved_slots_by_layer = ()
                 record.reserved_rows = 0
             raise
@@ -402,23 +411,32 @@ class RuntimeState:
     ) -> dict[str, object]:
         if self.chain_cache_coordinator is None:
             raise RuntimeError("Chain prefix cache is not enabled for this runtime.")
-        self.cache_manager.on_chain_turn_finished(
-            int(seq_id),
-            int(processed_token_count),
-        )
-        self.decode_reservations.release(seq_id)
-        record = self.chain_cache_coordinator.finish_values(
-            chain_id=str(chain_id),
-            seq_id=int(seq_id),
-            processed_token_digest=bytes(processed_token_digest),
-            processed_token_count=int(processed_token_count),
-        )
+        coordinator = self.chain_cache_coordinator
+        # Reject stale owners before a method can compact or clear its sidecars.
+        record = coordinator.index.lookup(str(chain_id))
+        if int(record.seq_id) != int(seq_id):
+            raise ChainOwnerMismatchError(
+                f"Chain owner mismatch for {chain_id!r}: "
+                f"resident_seq_id={record.seq_id}, finished_seq_id={int(seq_id)}.",
+                chain_id=str(chain_id),
+            )
+        if record.state is not ChainState.ACTIVE:
+            raise ChainBusyError("Only an ACTIVE chain turn may finish.", chain_id=str(chain_id))
         try:
-            self.chain_cache_coordinator.save_finished_chain(record)
+            self.cache_manager.on_chain_turn_finished(
+                int(seq_id), int(processed_token_count),
+            )
+            self.decode_reservations.release(seq_id)
+            record = coordinator.finish_values(
+                chain_id=str(chain_id), seq_id=int(seq_id),
+                processed_token_digest=bytes(processed_token_digest),
+                processed_token_count=int(processed_token_count),
+            )
+            coordinator.save_finished_chain(record)
         except Exception:
-            # Do not publish a new processed boundary with an old driver token
-            # history when snapshot submission fails before completion RPC returns.
-            self.chain_cache_coordinator.invalidate(record.chain_id)
+            # Method finalization and physical-residency publication can fail
+            # too, not just D2H submission. Never expose their half-finished turn.
+            coordinator.invalidate(record.chain_id)
             self._free_seq_payload(int(record.seq_id))
             raise
         return {
@@ -476,13 +494,9 @@ class RuntimeState:
                 chain_id=str(chain_id),
             )
         record = self.chain_cache_coordinator.invalidate(str(chain_id))
-        has_residency = getattr(
-            self.cache_manager, "chain_has_residency", None
-        )
-        if callable(has_residency) and has_residency(int(record.seq_id)):
-            self._free_seq_payload(int(record.seq_id))
-        else:
-            self._resident_seq_ids.discard(int(record.seq_id))
+        # A queued/CPU-only/failed-prepare request may own reservations and
+        # method metadata without owning any physical row. Cleanup is idempotent.
+        self._free_seq_payload(int(record.seq_id))
         return {
             "chain_id": record.chain_id,
             "seq_id": int(record.seq_id),
@@ -539,6 +553,12 @@ class RuntimeState:
             self.prefix_cache_coordinator.refresh_prefix_cache_hit(seq)
             return
         self.cache_manager.refresh_prefix_cache_hit(seq)
+
+    def prefix_cache_lookup_batch(self, *, first: bool, last: bool) -> ContextManager[None]:
+        owner = (self.prefix_cache_coordinator
+                 if self.prefix_cache_coordinator is not None else self.cache_manager)
+        cache = getattr(owner, "prefix_lookup_cache", None)
+        return cache.batch(first=first, last=last) if cache is not None else nullcontext()
 
     def clear_prefix_cache_hit(self, seq: Sequence) -> None:
         self.cache_manager.clear_prefix_cache_hit(seq)

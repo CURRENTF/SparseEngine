@@ -286,7 +286,7 @@ def _make_glm_graph_lane(
     manager._scheduler_capacity_snapshot_depth = 0
     manager._scheduler_freeable_block_ids = None
     manager.prefix_offload_controller = None
-    manager._prefix_offload_step_h2d_operations = []
+    manager._prefix_offload_step_h2d_operations = {}
     manager._prefix_write_through_candidates = {}
     manager._init_prefix_cache_runtime()
 
@@ -595,7 +595,7 @@ def _make_glm_full_graph_lane(
     manager._scheduler_capacity_snapshot_depth = 0
     manager._scheduler_freeable_block_ids = None
     manager.prefix_offload_controller = None
-    manager._prefix_offload_step_h2d_operations = []
+    manager._prefix_offload_step_h2d_operations = {}
     manager._prefix_write_through_candidates = {}
     manager._init_prefix_cache_runtime()
 
@@ -898,7 +898,7 @@ def _initialize_glm_method_cache_manager(
         manager._scheduler_capacity_snapshot_depth = 0
         manager._scheduler_freeable_block_ids = None
         manager.prefix_offload_controller = None
-        manager._prefix_offload_step_h2d_operations = []
+        manager._prefix_offload_step_h2d_operations = {}
         manager._prefix_write_through_candidates = {}
         manager._init_prefix_cache_runtime()
         return manager

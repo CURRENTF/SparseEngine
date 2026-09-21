@@ -80,6 +80,9 @@ sparseengine = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "cuda: requires a real CUDA device",
+]
 
 [tool.uv]
 conflicts = [

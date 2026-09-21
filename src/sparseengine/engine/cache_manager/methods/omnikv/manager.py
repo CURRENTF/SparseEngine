@@ -250,8 +250,9 @@ class OmniKVCacheManager(StandardCacheManager):
             self.lru.planned.clear()
 
     def free_seq(self, seq_id):
-        if self.lru is not None:
-            self.lru.invalidate(self.seq_id_to_row[seq_id])
+        row = self.seq_id_to_row.get(seq_id)
+        if self.lru is not None and row is not None:
+            self.lru.invalidate(row)
         return super().free_seq(seq_id)
 
     def _prepare_prefill(self, seqs):
