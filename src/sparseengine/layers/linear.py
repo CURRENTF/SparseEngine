@@ -171,7 +171,46 @@ class LinearBase(nn.Module):
             raise ValueError(f"{type(self).__name__} does not accept loaded_shard_id={loaded_shard_id!r}.")
         self._copy_quantized_weight_and_scale(loaded_weight, loaded_scale)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _project_local(
+        self, x: torch.Tensor, bias: torch.Tensor | None,
+        out: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if out is not None and not self.quantized:
+            differentiable = torch.is_grad_enabled() and (
+                x.requires_grad or self.weight.requires_grad
+                or (bias is not None and bias.requires_grad)
+            )
+            if not differentiable:
+                if bias is None:
+                    return torch.mm(x, self.weight.t(), out=out)
+                return torch.addmm(bias, x, self.weight.t(), out=out)
+        result = (self.quant_provider(x, self.weight, self.weight_scale_inv, bias)
+                  if self.quantized else F.linear(x, self.weight, bias))
+        # Quantized providers own their output layout. Autograd uses ordinary
+        # operations because Torch's mm/addmm out= contract is inference-only.
+        return result if out is None else out.copy_(result)
+
+    def forward_chunked(
+        self, x: torch.Tensor, chunk_size: int, *,
+        chunk_buffer: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Project a [tokens, local_input_features] matrix in bounded chunks.
+
+        The optional scratch buffer is only used for a multi-chunk projection;
+        a short projection retains the ordinary forward allocation contract.
+        """
+        if chunk_size <= 0:
+            raise ValueError("Projection chunk_size must be positive")
+        if x.shape[0] <= chunk_size:
+            return self(x)
+        output = (x.new_empty((x.shape[0], self.weight.shape[0]))
+                  if chunk_buffer is None else chunk_buffer)
+        for start in range(0, x.shape[0], chunk_size):
+            end = min(start + chunk_size, x.shape[0])
+            self(x[start:end], out=output[start:end])
+        return output
+
+    def forward(self, x: torch.Tensor, *, out=None) -> torch.Tensor:
         raise NotImplementedError
 
 
@@ -189,10 +228,8 @@ class ReplicatedLinear(LinearBase):
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         param.data.copy_(loaded_weight)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.quantized:
-            return self.quant_provider(x, self.weight, self.weight_scale_inv, self.bias)
-        return F.linear(x, self.weight, self.bias)
+    def forward(self, x: torch.Tensor, *, out=None) -> torch.Tensor:
+        return self._project_local(x, self.bias, out)
 
 
 class MergedReplicatedLinear(ReplicatedLinear):
@@ -300,18 +337,7 @@ class ColumnParallelLinear(LinearBase):
         self._copy_quantized_weight_and_scale(weight_shard, scale_shard)
 
     def forward(self, x: torch.Tensor, *, out: torch.Tensor | None = None) -> torch.Tensor:
-        if out is not None and not self.quantized:
-            # Inference callers can assemble chunked projections directly in
-            # their final buffer. Like torch.mm(out=), this requires no grad.
-            if self.bias is None:
-                return torch.mm(x, self.weight.t(), out=out)
-            return torch.addmm(self.bias, x, self.weight.t(), out=out)
-        if self.quantized:
-            result = self.quant_provider(x, self.weight, self.weight_scale_inv, self.bias)
-        else:
-            result = F.linear(x, self.weight, self.bias)
-        # Quantized providers retain ownership of their output/workspace layout.
-        return result if out is None else out.copy_(result)
+        return self._project_local(x, self.bias, out)
 
 
 class AbsorbedColumnParallelLinear(ColumnParallelLinear):
@@ -639,14 +665,10 @@ class RowParallelLinear(LinearBase):
         bias = self.bias if self.tp_rank == 0 else None
         if out is not None and not self.quantized:
             with profiler.trace("linear.projection_into"):
-                if bias is None:
-                    y = torch.mm(x, self.weight.t(), out=out)
-                else:
-                    y = torch.addmm(bias, x, self.weight.t(), out=out)
-        elif self.quantized:
-            y = self.quant_provider(x, self.weight, self.weight_scale_inv, bias)
+                y = self._project_local(x, bias, out)
         else:
-            y = F.linear(x, self.weight, bias)
+            # Reduce provider-owned output before copying to the destination.
+            y = self._project_local(x, bias)
         if self.reduce_results:
             y = self.parallel_context.attn_tp.all_reduce(y)
         # Preserve both in-place and out-of-place collective implementations.

@@ -414,7 +414,11 @@ def test_qwen3_attention_passes_raw_key_without_clone():
     qkv = torch.randn(2, 16)
     expected_raw_key = qkv[:, 8:12].view(2, 1, 4)
     attention.qkv_proj = FixedProjection(qkv)
-    attention.o_proj = torch.nn.Identity()
+    class IdentityOutputProjection(torch.nn.Identity):
+        def forward_chunked(self, x, chunk_size, *, chunk_buffer=None):
+            return self(x)
+
+    attention.o_proj = IdentityOutputProjection()
     attention.q_norm = torch.nn.Identity()
     attention.k_norm = torch.nn.Identity()
     attention.rotary_emb = PairIdentity()

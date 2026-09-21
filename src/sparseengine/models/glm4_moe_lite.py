@@ -38,8 +38,7 @@ from sparseengine.models.layout import resolve_attention_qk_head_dim
 from sparseengine.models.qwen3 import Qwen3MLP
 from sparseengine.operators.activation import resolve_silu_and_mul_provider
 from sparseengine.operators.attention_capabilities import AttentionScoreKind
-from sparseengine.operators.mla_attention import MlaAttentionOpSpec
-from sparseengine.operators.mla_projection import project_mla_values
+from sparseengine.operators.mla_attention import MlaAttentionOpSpec, project_mla_values
 from sparseengine.operators.moe import (
     MoeOpSpec,
     append_shared_expert_route,
@@ -190,32 +189,15 @@ class Glm4MoeLiteAttention(nn.Module):
         )
 
     def _project_kv_history(self, latent: torch.Tensor) -> torch.Tensor:
-        if int(latent.shape[0]) <= self.proj_chunk_size:
-            return self.kv_b_proj(latent)
-        output = torch.empty(
-            latent.shape[0],
-            self.local_heads * (self.qk_nope_head_dim + self.v_head_dim),
-            dtype=latent.dtype,
-            device=latent.device,
-        )
-        for start in range(0, int(latent.shape[0]), self.proj_chunk_size):
-            end = min(start + self.proj_chunk_size, int(latent.shape[0]))
-            with profiler.trace("mla.prefill.kv_projection.chunk_into"):
-                self.kv_b_proj(latent[start:end], out=output[start:end])
-        return output
+        return self.kv_b_proj.forward_chunked(latent, self.proj_chunk_size)
 
     def _project_output(
         self, value_output: torch.Tensor, chunk_buffer: torch.Tensor
     ) -> torch.Tensor:
-        flattened = value_output.flatten(1, -1)
-        if int(flattened.shape[0]) <= self.proj_chunk_size:
-            return self.o_proj(flattened)
-        # Only chunked projection needs the old hidden-state storage to assemble
-        # a complete result. Callers consume the returned tensor in either case.
-        for start in range(0, int(flattened.shape[0]), self.proj_chunk_size):
-            end = min(start + self.proj_chunk_size, int(flattened.shape[0]))
-            self.o_proj(flattened[start:end], out=chunk_buffer[start:end])
-        return chunk_buffer
+        return self.o_proj.forward_chunked(
+            value_output.flatten(1, -1), self.proj_chunk_size,
+            chunk_buffer=chunk_buffer,
+        )
 
     def _decode_absorbed_query(self, q_nope: torch.Tensor) -> torch.Tensor:
         kv_b_weight = self.kv_b_proj.absorbed_weight.view(

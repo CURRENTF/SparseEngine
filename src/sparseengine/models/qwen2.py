@@ -97,13 +97,9 @@ class Qwen2Attention(nn.Module):
     def _o_proj_chunked(
         self, x: torch.Tensor, chunk_buffer: torch.Tensor
     ) -> torch.Tensor:
-        chunk_size = int(self.proj_chunk_size)
-        if int(x.shape[0]) <= chunk_size:
-            return self.o_proj(x)
-        for start in range(0, int(x.shape[0]), chunk_size):
-            end = min(start + chunk_size, int(x.shape[0]))
-            self.o_proj(x[start:end], out=chunk_buffer[start:end])
-        return chunk_buffer
+        return self.o_proj.forward_chunked(
+            x, self.proj_chunk_size, chunk_buffer=chunk_buffer
+        )
 
     def forward(
         self,
@@ -177,11 +173,10 @@ class Qwen2MLP(nn.Module):
         if self.mlp_chunk_size <= 0:
             raise ValueError(f"mlp_chunk_size must be > 0, got {mlp_chunk_size}.")
 
-    def _forward_chunk(self, x):
+    def _forward_chunk(self, x, *, out=None):
         gate_up = self.gate_up_proj(x)
         x = self.act_fn(gate_up)
-        x = self.down_proj(x)
-        return x
+        return self.down_proj(x) if out is None else self.down_proj(x, out=out)
 
     def forward(self, x):
         chunk_size = int(self.mlp_chunk_size)
@@ -191,7 +186,7 @@ class Qwen2MLP(nn.Module):
         out = torch.empty_like(x)
         for start in range(0, int(x.shape[0]), chunk_size):
             end = min(start + chunk_size, int(x.shape[0]))
-            out[start:end].copy_(self._forward_chunk(x[start:end]))
+            self._forward_chunk(x[start:end], out=out[start:end])
         return out
 
 

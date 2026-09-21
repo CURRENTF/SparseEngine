@@ -1,8 +1,10 @@
 import unittest
 from unittest.mock import patch
 
+import pytest
 import torch
 
+from sparseengine.models.llama import LlamaMLP
 from sparseengine.models.qwen2 import Qwen2MLP
 from sparseengine.models.qwen3 import Qwen3MLP
 from sparseengine.distributed import ParallelContext, ParallelGroup
@@ -38,6 +40,36 @@ class MLPChunkingTest(unittest.TestCase):
 
     def test_qwen3_mlp_chunking_matches_full_forward(self):
         self._assert_chunked_matches_full(Qwen3MLP)
+
+
+
+@pytest.mark.parametrize("cls", [Qwen2MLP, Qwen3MLP, LlamaMLP])
+@pytest.mark.parametrize("tokens", [1, 32, 33, 97])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_chunked_mlp_matches_independent_reference(cls, tokens, device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    extra = {"mlp_bias": True} if cls is LlamaMLP else {}
+    with patch("sparseengine.layers.linear.get_parallel_context",
+               return_value=_single_process_parallel_context()):
+        layer = cls(128, 256, "silu", mlp_chunk_size=32, **extra).to(device, dtype)
+    with torch.no_grad():
+        for param in layer.parameters():
+            param.normal_(std=0.02)
+    x = torch.randn(tokens, 128, device=device, dtype=dtype)
+    with torch.inference_mode():
+        gate, up = torch.nn.functional.linear(
+            x.float(), layer.gate_up_proj.weight.float(),
+            None if layer.gate_up_proj.bias is None else layer.gate_up_proj.bias.float(),
+        ).chunk(2, dim=-1)
+        expected = torch.nn.functional.linear(
+            torch.nn.functional.silu(gate) * up, layer.down_proj.weight.float(),
+            None if layer.down_proj.bias is None else layer.down_proj.bias.float(),
+        )
+        actual = layer(x)
+    torch.testing.assert_close(actual.float(), expected, atol=.001 if device == "cuda" else 1e-6,
+                               rtol=.03 if device == "cuda" else 1e-5)
 
 
 if __name__ == "__main__":

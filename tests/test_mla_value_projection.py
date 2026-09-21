@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from sparseengine.operators.mla_projection import project_mla_values
+from sparseengine.operators.mla_attention import project_mla_values
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')

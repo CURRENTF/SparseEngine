@@ -282,13 +282,9 @@ class Qwen35FullAttention(nn.Module):
     def _o_proj_chunked(
         self, x: torch.Tensor, chunk_buffer: torch.Tensor
     ) -> torch.Tensor:
-        chunk_size = int(self.proj_chunk_size)
-        if int(x.shape[0]) <= chunk_size:
-            return self.o_proj(x)
-        for start in range(0, int(x.shape[0]), chunk_size):
-            end = min(start + chunk_size, int(x.shape[0]))
-            self.o_proj(x[start:end], out=chunk_buffer[start:end])
-        return chunk_buffer
+        return self.o_proj.forward_chunked(
+            x, self.proj_chunk_size, chunk_buffer=chunk_buffer
+        )
 
     def forward(self, positions: torch.Tensor, hidden_states: torch.Tensor) -> torch.Tensor:
         qkv_gate = self.qkv_gate_proj(hidden_states)
