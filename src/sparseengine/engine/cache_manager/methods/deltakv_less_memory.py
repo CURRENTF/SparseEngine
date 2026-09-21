@@ -1282,6 +1282,38 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
         self._deltakv_materialized_local_req = local_req
         return active[:batch_size, :width], local_req[:batch_size]
 
+    def get_prefill_compute_view(
+        self,
+        layer_idx: int,
+        k_current: torch.Tensor,
+        v_current: torch.Tensor,
+        selection: SparseSelection,
+        active_slots: torch.Tensor,
+        req_indices: torch.Tensor,
+        context_lens: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if (
+            selection.kind == "deltakv"
+            and layer_idx in self.deltakv_layer_to_idx
+            and not self.has_prefill_staging_view(layer_idx)
+        ):
+            # build_prefill_compute_view has already reconstructed selected KV
+            # and materialized raw keys as post-RoPE temporary slots. Preserve
+            # that indexed view instead of copying it into the decode workspace,
+            # which is not sized for padded prefill history (batch * width).
+            l_idx = self.deltakv_layer_to_idx[layer_idx]
+            return (
+                self.deltakv_full_kv_cache[0, l_idx],
+                self.deltakv_full_kv_cache[1, l_idx],
+                active_slots,
+                req_indices,
+                context_lens,
+            )
+        return super().get_prefill_compute_view(
+            layer_idx, k_current, v_current, selection,
+            active_slots, req_indices, context_lens,
+        )
+
     def get_layer_compute_view(
         self,
         layer_idx: int,
