@@ -252,9 +252,13 @@ class DeltaKVCacheManager(CacheManager):
         return int(self.config.max_model_len)
 
     def _max_decode_scratch_seqs(self) -> int:
-        max_seqs = max(int(self.config.max_num_seqs_in_batch), int(self.config.max_decoding_seqs))
-        if bool(getattr(self.config, "decode_graph", False)):
-            capture_sizes = getattr(self.config, "decode_graph_capture_sizes", None) or []
+        return self.decode_scratch_sequence_capacity(self.config)
+
+    @staticmethod
+    def decode_scratch_sequence_capacity(config) -> int:
+        max_seqs = max(int(config.max_num_seqs_in_batch), int(config.max_decoding_seqs))
+        if bool(getattr(config, "decode_graph", False)):
+            capture_sizes = getattr(config, "decode_graph_capture_sizes", None) or []
             if capture_sizes:
                 max_seqs = max(max_seqs, max(int(size) for size in capture_sizes))
         return max_seqs

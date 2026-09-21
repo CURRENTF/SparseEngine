@@ -341,3 +341,79 @@ def test_omnikv_cache_cannot_evict_tokens_selected_in_the_same_step():
     config.omnikv_offload_cache_tokens = 1
     with pytest.raises(ValueError, match="cover the full selected-token budget"):
         plan_omnikv_pools(config, [0], 4, 8, 2048)
+
+
+@pytest.mark.parametrize("latent_bits,reserve_ratio", [(4, 0.1), (0, 0.0)])
+def test_deltakv_profile_budget_funds_fixed_pools_and_profile_requests(latent_bits, reserve_ratio):
+    # Regression: an otherwise idle GPU failed before profiling because the
+    # temporary budget omitted reconstruction scratch for eight decode rows.
+    # Meta tensors exercise the real allocator without allocating GPU memory.
+    from sparseengine.configs.groups import DeltaKVConfig
+    from sparseengine.engine.cache_manager.methods.deltakv_less_memory_cuda_graph import DeltaKVLessMemoryCudaGraphCacheManager
+
+    config = _config(sparse_method="deltakv")
+    for key, value in vars(DeltaKVConfig()).items():
+        setattr(config, key, value)
+    config.runtime_layout = RuntimeLayout.dense(32)
+    config.parallel_topology.attn_tp_size = 1
+    config.full_attention_layers = [0, 2, 7, 13, 16, 26]
+    config.max_model_len = 131072
+    config.max_num_batched_tokens = 65536
+    config.engine_prefill_chunk_size = 8192
+    config.max_num_seqs_in_batch = 4
+    config.max_decoding_seqs = 8
+    config.max_num_seqs_in_gpu = 12
+    config.sink_keep_tokens = 64
+    config.recent_keep_tokens = 256
+    config.decode_keep_tokens = 4096
+    config.decode_graph = True
+    config.decode_graph_capture_sizes = [1, 2, 4, 8]
+    config.deltakv_latent_dim = 512
+    config.deltakv_latent_quant_bits = latent_bits
+    config.deltakv_latent_quant_group_size = 32
+    config.full_layer_kv_quant_bits = 0
+    config.deltakv_full_pool_reserve_ratio = reserve_ratio
+    slots = profiling_kv_slots(config)
+    budget = profiling_kv_budget_bytes(config, slots)
+    config.startup_cache_phase = "profiling"
+    manager = object.__new__(DeltaKVLessMemoryCudaGraphCacheManager)
+    manager.config = config
+    manager.hf_config = config.hf_config
+    manager.device = torch.device("meta")
+    manager.num_kv_heads = 8
+    manager.head_dim = 128
+    manager.max_model_len = config.max_model_len
+    manager.max_buffer_rows = config.max_num_seqs_in_gpu
+    manager.full_layer_ids = config.full_attention_layers
+    manager.deltakv_layer_ids = [i for i in range(32) if i not in config.full_attention_layers]
+    manager._get_available_slots_info = lambda: (budget, 2 * 8 * 128 * 2)
+    manager.allocate_kv_cache()
+
+    # An independent workload bound: keep the entire profiling prompt in raw
+    # form alongside the allocator's reserved decode scratch, and allow its
+    # latent representation plus all full-layer tokens.
+    assert manager.deltakv_full_num_slots - manager._deltakv_decode_reconstruct_full_reserve >= slots
+    assert manager.deltakv_latent_num_slots >= slots
+    assert manager.full_num_slots >= slots
+    # Sum actual KV payloads and workspaces, including quantization scales,
+    # rather than duplicating the sizing formula. Index/row metadata is
+    # measured separately by startup's runtime-persistent memory profile.
+    payload_names = {
+        "full_kv_cache", "deltakv_full_kv_cache", "deltakv_materialized_kv_cache",
+        "deltakv_prefill_staging_kv_cache", "deltakv_prefill_staging_pre_rope_k_cache",
+        "deltakv_latent_cache", "deltakv_latent_scales", "deltakv_latent_mins",
+    }
+    tensors = [value for key, value in vars(manager).items()
+               if key in payload_names and isinstance(value, torch.Tensor)]
+    allocated = sum(t.numel() * t.element_size() for t in tensors)
+    assert allocated <= budget
+
+    # The production rebuild must reserve reconstruction before sizing the
+    # variable pools too; it must not retain the profiling-only prompt reserve.
+    config.startup_cache_phase = "production"
+    manager.allocate_kv_cache()
+    assert manager.deltakv_full_num_slots > manager._deltakv_decode_reconstruct_full_reserve
+    assert manager._deltakv_centers_capacity > 0
+    tensors = [value for key, value in vars(manager).items()
+               if key in payload_names and isinstance(value, torch.Tensor)]
+    assert sum(t.numel() * t.element_size() for t in tensors) <= budget

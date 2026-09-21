@@ -39,6 +39,29 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
     not active in the slim runtime.
     """
 
+    @classmethod
+    def profiling_kv_budget_bytes(cls, config, num_slots: int, slot_bytes_per_layer: int) -> int:
+        """Profile raw full-layer storage with its fixed reconstruction pools."""
+        layers = int(config.runtime_layout.num_kv_layers)
+        full_layers = len(config.full_attention_layers)
+        sparse_layers = layers - full_layers
+        rows = int(config.max_num_seqs_in_gpu)
+        decode_rows = cls.decode_scratch_sequence_capacity(config)
+        sink = int(config.sink_keep_tokens)
+        recent = int(config.recent_keep_tokens)
+        top = int(config.decode_keep_tokens)
+        raw_slots = cls._resident_sparse_raw_overhead_slots(rows, sink, recent)
+        raw_slots += cls._decode_reconstruct_scratch_slots(decode_rows, top, sink, recent)
+        fixed_bytes = (raw_slots + int(num_slots)) * sparse_layers * slot_bytes_per_layer
+        # Prefill stages one layer's K/V plus pre-RoPE K, even for short profiles.
+        fixed_bytes += int(config.max_model_len) * slot_bytes_per_layer * 3 // 2
+        fixed_bytes += cls.materialized_sparse_compute_slot_capacity(
+            config, decode_rows, sink, recent, top,
+        ) * slot_bytes_per_layer
+        # Retain the conservative temporary payload allowance, but do not use
+        # it to pay for method-owned fixed buffers needed at every capacity.
+        return fixed_bytes + int(num_slots) * layers * slot_bytes_per_layer * 2
+
     def _extra_workspace_reserve_bytes(self) -> int:
         return 0
 
@@ -389,8 +412,12 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
         return int(max_seqs) * (int(sink) + 2 * int(recent) + 1)
 
     def _materialized_sparse_compute_slots(self, max_seqs: int, sink: int, recent: int, top_decode: int) -> int:
+        return self.materialized_sparse_compute_slot_capacity(self.config, max_seqs, sink, recent, top_decode)
+
+    @staticmethod
+    def materialized_sparse_compute_slot_capacity(config, max_seqs: int, sink: int, recent: int, top_decode: int) -> int:
         max_decode_visible = int(sink) + int(top_decode) + max(2 * int(recent), int(recent) + 1)
-        return max(1, int(max_seqs) * max_decode_visible, int(getattr(self.config, "max_num_batched_tokens", 0) or 0))
+        return max(1, int(max_seqs) * max_decode_visible, int(getattr(config, "max_num_batched_tokens", 0) or 0))
 
     def _already_postrope_mask(
         self,
@@ -663,9 +690,27 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
         total_top_slots = self._decode_reconstruct_scratch_slots(max_seqs, top_decode, sink, recent)
         deltakv_persistent_overhead_slots = self._resident_sparse_raw_overhead_slots(max_admission_seqs, sink, recent)
         deltakv_overhead_slots = deltakv_persistent_overhead_slots + total_top_slots
+        if not full_kivi_enabled and getattr(config, "startup_cache_phase", None) == "profiling":
+            # Reuse the startup workload definition instead of passing a
+            # method-specific capacity field through ModelRunner/Config.
+            from sparseengine.engine.startup.capacity import profiling_kv_slots
+
+            deltakv_overhead_slots += profiling_kv_slots(config)
         full_overhead_slots = self._resident_full_layer_raw_overhead_slots(max_admission_seqs, sink, recent)
 
-        memory_max_tokens = max(1, int(persistent_memory / per_token_bytes))
+        capacity_memory = persistent_memory
+        if not full_quant_enabled and not full_kivi_enabled:
+            # Raw recent windows and decode reconstruction are fixed costs,
+            # not part of the center-ratio cost of each resident token.
+            capacity_memory -= deltakv_overhead_slots * (
+                num_deltakv_layers * slot_bytes_per_layer + sparse_ref_slot_bytes
+            )
+            if capacity_memory <= 0:
+                raise RuntimeError(
+                    "Not enough GPU memory for DeltaKV fixed raw pools: "
+                    f"persistent_memory={persistent_memory} raw_overhead_slots={deltakv_overhead_slots}."
+                )
+        memory_max_tokens = max(1, int(capacity_memory / per_token_bytes))
         reserve_ratio = float(config.deltakv_full_pool_reserve_ratio)
         if reserve_ratio > 0:
             reserve_ratio = max(0.0, min(0.5, reserve_ratio))
