@@ -126,6 +126,17 @@ binds both prepared phase operators to the model as one lifecycle and closes
 them together. Phase selection remains independent, so hybrid upstream
 prefill/decode pairs are valid when their shared cache contract matches.
 
+MLA also resolves compressed prefill independently of decode and expanded-KV
+prefill. Its compressed portfolio prefers SGL FA3 when the device and tensor
+contract are supported, with repository Triton latent prefill as the portable
+fallback. Decode score requirements do not filter this prefill portfolio.
+The Triton path reads paged latent/RoPE caches directly, supports packed varlen
+queries with bottom-right causal masking, and returns natural-log LSE for
+prefill scoring. Its split-KV scratch is included in the prefill workspace
+budget. Runtime dispatch chooses between already prepared compressed and
+expanded paths; query-length crossover heuristics are not atomic support
+limits or universal performance guarantees.
+
 ## Dependency And Evidence Rules
 
 FlashInfer and SGL kernel are required by the canonical CUDA installation. The

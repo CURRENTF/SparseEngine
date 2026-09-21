@@ -124,3 +124,12 @@ Full-attention provider 会在准备任一阶段前，统一检查 head、dtype�
 page layout 和 page-table contract。之后两个 prepared phase operator 作为同一个
 生命周期一次性绑定到模型，并统一关闭。两个阶段仍独立选择，因此只要共享 cache
 contract 兼容，就允许组合不同的上游 prefill/decode provider。
+
+MLA 的 compressed prefill 也独立于 decode 和 expanded-KV prefill 解析。
+设备及张量 contract 兼容时优先使用 SGL FA3，否则由仓库自有的 Triton latent
+prefill 提供 portable fallback。Decode 的 score 要求不参与此 prefill portfolio
+的筛选。Triton 路径直接读取 paged latent/RoPE cache，支持 packed varlen query、
+右下对齐的 causal mask，并返回用于 prefill scoring 的自然对数 LSE。
+Split-KV 临时空间计入 prefill workspace 预算。运行时只在已准备好的 compressed
+和 expanded 路径间 dispatch；query 长度交叉点的启发式规则不代表 atomic 支持
+边界，也不是普遍的性能保证。

@@ -32,6 +32,8 @@ description: Standardize SparseEngine paper efficiency comparisons, capacity swe
 - 用户指定共享前缀时，请求模式可用 `--enable-prefix-caching --shared-prompt
   --prompt-length-jitter 0`；每轮新前缀，核对逐请求 `num_cached_tokens`，
   不凭配置假定只执行一次 prefill，也不把事件窗口称为纯 decode 阶段。
+  `--prime-shared-prompt` 可先生成 1 token 建立每轮前缀；`prefix_prime` 单独计时，
+  实测 workload 排除这段时间，不能作为冷缓存 E2E。
 - 阶段诊断：`benchmark/microbench.py --synchronize_step_timing`。
 - 计时与统计：`benchmark/efficiency/metrics.py`；连续窗口复用 `PipelinedDecodeWindow`。
 - 扫描、配置和绘图：复用 `scripts/official_experiments/` 对应目录；

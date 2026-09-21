@@ -220,6 +220,7 @@ class MlaTritonProvider(MlaAttentionProvider):
         self._runtime_kernel_path_counts: dict[str, dict[str, int]] = {}
         self._runtime_fallback_reasons: dict[str, int] = {}
         self._prefill = None
+        self._compressed_prefill = None
         if (
             self.device.type == "cuda"
             and type(self).run_prefill_chunk is MlaTritonProvider.run_prefill_chunk
@@ -228,6 +229,13 @@ class MlaTritonProvider(MlaAttentionProvider):
 
             caps = platforms.current_platform.get_device_caps(self.device.index)
             self._prefill = resolve_mla_prefill(self.spec, caps)
+        if self.device.type == "cuda":
+            from sparseengine.operators.mla_compressed_prefill import resolve_mla_compressed_prefill
+
+            caps = platforms.current_platform.get_device_caps(self.device.index)
+            self._compressed_prefill = resolve_mla_compressed_prefill(
+                self.spec, caps, max_batch_size=self.max_batch_size,
+            )
 
     def run_prefill_chunk(self, q, k, v, cu_q, cu_k, max_q, max_k, *, causal):
         if self._prefill is None:
@@ -241,6 +249,26 @@ class MlaTritonProvider(MlaAttentionProvider):
     def prefill_workspace_bytes(self, **shape):
         # Upstream FA3 owns its opaque workspace; startup profiling includes it.
         return 0 if self._prefill is None else self._prefill.workspace_bytes(**shape)
+
+    def use_compressed_prefill(self, plan, score_request) -> bool:
+        """Select the independently prepared short-query prefill provider."""
+        # Provisional crossover, not an atomic eligibility or speed guarantee.
+        return (
+            self._compressed_prefill is not None
+            and (score_request is None or score_request.mode in {"logits", "probability"})
+            and not plan.meta.is_sparse
+            and max(b - a for a, b in zip(plan.query_starts, plan.query_starts[1:])) <= 384
+        )
+
+    @torch.no_grad()
+    def run_compressed_prefill(self, q_latent, q_rope, view, plan):
+        if self._compressed_prefill is None:
+            raise RuntimeError("Compressed MLA prefill was not prepared on a CUDA device")
+        self._record_runtime_kernel_path(self._compressed_prefill.kernel_path)
+        return self._compressed_prefill.run(q_latent, q_rope, view, plan)
+
+    def compressed_prefill_workspace_bytes(self, plan):
+        return 0 if self._compressed_prefill is None else self._compressed_prefill.workspace_bytes(plan)
 
     @classmethod
     def bind(
@@ -266,6 +294,10 @@ class MlaTritonProvider(MlaAttentionProvider):
             "prefill": (
                 operator_binding_report(self._prefill).as_dict()
                 if self._prefill is not None else None
+            ),
+            "compressed_prefill": (
+                operator_binding_report(self._compressed_prefill).as_dict()
+                if self._compressed_prefill is not None else None
             ),
             "launch_config_source": (
                 "explicit_config" if self._fixed_launch_config is not None else
@@ -580,11 +612,14 @@ class MlaSglFa3Provider(MlaTritonProvider):
             max_batch_size=max_batch_size,
             launch_config=launch_config,
         )
-        self.fa3 = SglFa3DecodeKernel(
-            device=self.device,
-            max_batch_size=self.max_batch_size,
-            softmax_scale=self.spec.softmax_scale,
-        )
+        if self._compressed_prefill is not None and self._compressed_prefill.name == "sgl_fa3_latent":
+            self.fa3 = self._compressed_prefill.kernel
+        else:
+            self.fa3 = SglFa3DecodeKernel(
+                device=self.device,
+                max_batch_size=self.max_batch_size,
+                softmax_scale=self.spec.softmax_scale,
+            )
 
     @classmethod
     def supports(
@@ -608,6 +643,10 @@ class MlaSglFa3Provider(MlaTritonProvider):
             "implementation_source": "sglang-kernel",
             "prefill_kernel_path": "sgl_kernel.fa3.fwd",
             "decode_kernel_path": "sgl_kernel.fa3.fwd",
+            "compressed_prefill": (
+                operator_binding_report(self._compressed_prefill).as_dict()
+                if self._compressed_prefill is not None else None
+            ),
         }
 
     @torch.no_grad()
@@ -651,30 +690,6 @@ class MlaSglFa3Provider(MlaTritonProvider):
             # Zero enables FA3's measured context-aware split heuristic.
             num_splits=0,
             validation_scope=validation_scope,
-        )
-
-    def use_compressed_prefill(self, plan, score_request) -> bool:
-        # A runtime route between two prepared algorithms, not a decode step.
-        # Scores are produced separately in latent space for the short route.
-        # The expanded route retains sparse views and long-query efficiency.
-        # Keep the conservative query crossover separate from FA3 eligibility.
-        return (
-            (score_request is None or score_request.mode in {"logits", "probability"})
-            and not plan.meta.is_sparse
-            and max(b - a for a, b in zip(plan.query_starts, plan.query_starts[1:])) <= 384
-        )
-
-    @torch.no_grad()
-    def run_compressed_prefill(self, q_latent, q_rope, view, plan):
-        payload = view.payload
-        output = torch.empty_like(q_latent, memory_format=torch.contiguous_format)
-        self._record_runtime_kernel_path("sgl_fa3_prefill_latent")
-        return self.fa3.run_varlen(
-            q_rope, q_latent, payload.rope_cache, payload.latent_cache,
-            view.meta.active_slots, view.meta.req_indices, view.meta.context_lens,
-            output, cu_seqlens_q=plan.cu_q,
-            max_seqlen_q=max(b - a for a, b in zip(plan.query_starts, plan.query_starts[1:])),
-            validation_scope=plan.scope, return_softmax_lse=True,
         )
 
     @torch.no_grad()

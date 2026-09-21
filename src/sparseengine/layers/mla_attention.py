@@ -335,6 +335,7 @@ class MLAAttention:
                         projection_chunk_size=self.projection_chunk_size,
                         score_request=request,
                     )
+                    required += self.provider.compressed_prefill_workspace_bytes(plan)
                     if required > self.prefill_workspace_bytes:
                         raise MemoryError(
                             f"MLA compressed prefill workspace exceeds budget: required={required} "

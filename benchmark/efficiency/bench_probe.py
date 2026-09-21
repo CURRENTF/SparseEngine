@@ -282,6 +282,44 @@ def _trace_for_iteration(
     return trace
 
 
+def _prime_shared_prompt(args, llm, trace):
+    """Build the iteration's prefix outside the measured four-request workload."""
+    if not getattr(args, "prime_shared_prompt", False):
+        return None
+    import torch
+
+    torch.cuda.synchronize()
+    started = time.perf_counter()
+    prompt = trace[0].prompt_token_ids
+    if args.engine == "sparseengine":
+        from sparseengine import SamplingParams
+        seq_id = llm.add_request(prompt, SamplingParams(
+            temperature=0.0, top_p=1.0, top_k=1, ignore_eos=True, max_tokens=1))
+        finished = []
+        hits = 0
+        while not llm.is_finished():
+            outputs, _ = llm.step()
+            finished.extend(outputs)
+            for observed_id, observed_hits in llm.last_step_prompt_cache_hits:
+                if observed_id == seq_id:
+                    hits = max(hits, int(observed_hits))
+        if len(finished) != 1 or len(finished[0][1]) != 1:
+            raise RuntimeError("Native prefix primer did not produce exactly one token")
+    else:
+        from vllm import SamplingParams
+        outputs = llm.generate([{"prompt_token_ids": prompt}], sampling_params=SamplingParams(
+            temperature=0.0, top_p=1.0, top_k=1, ignore_eos=True, max_tokens=1,
+            detokenize=False), use_tqdm=False)
+        if len(outputs) != 1 or len(outputs[0].outputs) != 1 or len(outputs[0].outputs[0].token_ids) != 1:
+            raise RuntimeError("vLLM prefix primer did not produce exactly one token")
+        hits = outputs[0].num_cached_tokens
+    torch.cuda.synchronize()
+    result = {"elapsed_s": time.perf_counter() - started, "num_cached_tokens": hits,
+              "prompt_len": len(prompt), "generated_tokens": 1}
+    print(f"  Prefix prime (excluded from request workload): {result}", flush=True)
+    return result
+
+
 def _attach_churn_comparisons(rows: list[dict[str, Any]]) -> None:
     fixed_by_case: dict[tuple[Any, ...], dict[str, Any]] = {}
     for row in rows:
@@ -702,6 +740,7 @@ def run_sparseengine_probe(
                         vary_output_lengths=False,
                     )
                     width = wave_size or len(warmup_trace)
+                    _prime_shared_prompt(args, llm, warmup_trace)
                     for offset in range(0, len(warmup_trace), width):
                         waiting_for_first = set()
                         for request in warmup_trace[offset:offset + width]:
@@ -743,6 +782,7 @@ def run_sparseengine_probe(
                             request_count=bs,
                             vary_output_lengths=False,
                         )
+                        prefix_prime = _prime_shared_prompt(args, llm, trace)
                         graph_before = llm.debug_sparse_state_summaries()[0]["decode_graph"]
                         t_start = time.perf_counter()
 
@@ -873,6 +913,7 @@ def run_sparseengine_probe(
                             "iteration": it,
                             "status": "success",
                             "elapsed_s": elapsed_s,
+                            "prefix_prime": prefix_prime,
                             "ttft_ms": ttft_ms,
                             "batch_max_ttft_ms": max(row["ttft_ms"] for row in request_results),
                             **request_summary(request_results),
@@ -1407,6 +1448,7 @@ def _run_vllm_fixed_probe(args, model_specs, llm, dp_size):
                         {"prompt_token_ids": request.prompt_token_ids}
                         for request in warmup_trace
                     ]
+                    _prime_shared_prompt(args, llm, warmup_trace)
                     llm.generate(warmup_prompts, sampling_params=sampling_params, use_tqdm=False)
 
                 torch.cuda.synchronize()
@@ -1432,6 +1474,7 @@ def _run_vllm_fixed_probe(args, model_specs, llm, dp_size):
                             {"prompt_token_ids": request.prompt_token_ids}
                             for request in trace
                         ]
+                        prefix_prime = _prime_shared_prompt(args, llm, trace)
                         torch.cuda.synchronize()
                         started = time.perf_counter()
                         outputs = llm.generate(
@@ -1494,6 +1537,7 @@ def _run_vllm_fixed_probe(args, model_specs, llm, dp_size):
                             "engine": "vllm",
                             "data_parallel_size": dp_size,
                             "request_adapter": "async_dp_round_robin" if dp_size > 1 else "offline_llm",
+                            "prefix_prime": prefix_prime,
                             "sparse_method": args.sparse_method,
                             "scenario": "fixed_batch",
                             "prompt_len": p_len,
@@ -1864,6 +1908,8 @@ def parse_args():
                         help="Enable prefix caching in fixed request-mode probes.")
     parser.add_argument("--shared-prompt", action="store_true",
                         help="Use identical prompts within each fixed workload; fresh prompts each iteration.")
+    parser.add_argument("--prime-shared-prompt", action="store_true",
+                        help="Build each shared prefix with one output token before timing the request workload; record prime time separately.")
     parser.add_argument(
         "--prompt-length-jitter",
         type=float,
@@ -1944,6 +1990,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.prime_shared_prompt and not (args.shared_prompt and args.enable_prefix_caching):
+        raise ValueError("--prime-shared-prompt requires shared prompts and prefix caching")
     if args.enable_prefix_caching or args.shared_prompt:
         if args.scenario != "fixed" or args.decode_only_steps or args.engine not in {"sparseengine", "vllm"}:
             raise ValueError("Prefix reuse probes require native/vLLM fixed request mode")
@@ -2084,6 +2132,7 @@ def main():
             "trace_generator_version": TRACE_GENERATOR_VERSION,
             "prefix_caching_enabled": args.enable_prefix_caching,
             "shared_prompt_within_workload": args.shared_prompt,
+            "shared_prompt_primed_before_workload": args.prime_shared_prompt,
             "cross_engine_trace_contract": "same seed, token IDs, and per-request lengths",
             "iteration_prompt_reuse_allowed": False,
             "phase_throughput_contract": (

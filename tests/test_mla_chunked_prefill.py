@@ -16,6 +16,12 @@ from sparseengine.operators.mla_prefill import ChunkedMlaPrefill
 
 
 def partial_provider(backend, spec, device, batch_size):
+    if backend == "triton_latent":
+        from sparseengine import platforms
+        from sparseengine.operators.mla_compressed_prefill import TritonLatentPrefill
+
+        provider = TritonLatentPrefill(spec, platforms.current_platform.get_device_caps(device.index))
+        return SimpleNamespace(run_compressed_prefill=provider.run)
     if backend == "triton":
         return SimpleNamespace()
     if backend == "prepared":
@@ -379,6 +385,7 @@ def test_multi_tile_observations_and_empty_candidates(backend):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+@pytest.mark.parametrize("backend", ["fa3", "triton_latent"])
 @pytest.mark.parametrize("contexts,queries,heads", [
     ((65,), (1,), 20),
     ((3072,), (47,), 10),
@@ -386,9 +393,9 @@ def test_multi_tile_observations_and_empty_candidates(backend):
     ((32768,), (384,), 20),
     ((1024, 6144, 513), (512, 129, 513), 5),
 ])
-def test_compressed_prefill_matches_dense_causal_reference(contexts, queries, heads):
+def test_compressed_prefill_matches_dense_causal_reference(contexts, queries, heads, backend):
     spec, q, view, cu, project, absorb = make_case(contexts, queries, heads)
-    provider = partial_provider("fa3", spec, q.device, len(contexts))
+    provider = partial_provider(backend, spec, q.device, len(contexts))
     runner = ChunkedMlaPrefill(spec, provider, 16384)
     plan = runner.prepare(view, cu, object())
     absorbed = absorb(q[..., :192])
@@ -415,6 +422,7 @@ def test_compressed_prefill_matches_dense_causal_reference(contexts, queries, he
 
 def test_compressed_prefill_preserves_score_and_sparse_routes():
     provider = object.__new__(MlaSglFa3Provider)
+    provider._compressed_prefill = object()
     plan = SimpleNamespace(query_starts=(0, 2, 65), meta=SimpleNamespace(is_sparse=False))
     assert provider.use_compressed_prefill(plan, None)
     for mode in ("logits", "probability"):
@@ -450,15 +458,16 @@ def test_host_prefill_layout_avoids_readback_and_defers_history(monkeypatch):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+@pytest.mark.parametrize("backend", ["fa3", "triton_latent"])
 @pytest.mark.parametrize("mode,candidate,recent", [
     ("logits", 0, 0), ("logits", 130, 3),
     ("probability", 0, 0), ("probability", 130, 3),
 ])
-def test_compressed_prefill_independent_scores_match_expanded_oracle(mode, candidate, recent):
+def test_compressed_prefill_independent_scores_match_expanded_oracle(mode, candidate, recent, backend):
     # Ragged/permuted physical rows, multiple query tiles, empty candidate rows,
     # noncontiguous absorbed queries and repeated output reset.
     spec, q, view, cu, project, absorb = make_case((239, 29, 65), (137, 17, 1), heads=5)
-    provider = partial_provider("fa3", spec, q.device, 3)
+    provider = partial_provider(backend, spec, q.device, 3)
     runner = ChunkedMlaPrefill(spec, provider, 53)
     if mode == "logits":
         view = replace(view, meta=replace(view.meta, attn_score=torch.empty(3, 239, device=q.device)))

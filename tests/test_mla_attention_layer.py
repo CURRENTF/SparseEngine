@@ -395,12 +395,14 @@ def test_chunked_prefill_budget_fails_before_projection(split_scratch):
         reset_context()
 
 
-@pytest.mark.parametrize('budget', [1, 1024 * 1024])
+@pytest.mark.parametrize('budget,scratch', [(1, 0), (1024 * 1024, 0), (1024 * 1024, 1024 * 1024)])
 @pytest.mark.parametrize('score_mode', [None, 'logits', 'probability'])
-def test_compressed_prefill_preserves_prefill_hooks_and_budget(budget, score_mode):
+def test_compressed_prefill_preserves_prefill_hooks_and_budget(budget, score_mode, scratch):
     from sparseengine.operators.mla_attention import MlaSglFa3Provider
     from sparseengine.engine.cache_manager.base import PrefillScoreRequest
     attention = _attention(budget=budget)
+    attention.provider._compressed_prefill = object()
+    attention.provider.compressed_prefill_workspace_bytes = Mock(return_value=scratch)
     attention._use_compressed_prefill = MlaSglFa3Provider.use_compressed_prefill.__get__(attention.provider)
     view = _view(torch.empty(2, 1, 512, dtype=torch.bfloat16),
                  torch.empty(2, 1, 64, dtype=torch.bfloat16),
@@ -431,7 +433,7 @@ def test_compressed_prefill_preserves_prefill_hooks_and_budget(budget, score_mod
             absorb_query=Mock(return_value=torch.ones(1, 5, 512)),
             reconstruct_values=Mock(return_value=output))
     try:
-        if budget == 1:
+        if budget == 1 or scratch >= budget:
             with pytest.raises(MemoryError, match='compressed prefill workspace'):
                 run()
             attention.provider.run_compressed_prefill.assert_not_called()

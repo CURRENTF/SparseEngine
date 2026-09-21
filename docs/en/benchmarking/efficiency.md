@@ -122,6 +122,10 @@ instead of assuming that enabling caching eliminates all but one prefill.
 This mode supports SparseEngine/vLLM request probes (vLLM DP1), without prefill
 waves or continuous decode windows. TPOT and decode event windows remain distinct
 from execution-stage timing.
+Add `--prime-shared-prompt` to build each iteration's prefix with a one-token
+generation before timing its requests. Raw records retain `prefix_prime` time
+and hits separately; request workload time excludes priming and must not be
+presented as cold-cache E2E.
 
 | Metric | Definition and boundary |
 | --- | --- |

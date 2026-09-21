@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 import torch
@@ -22,6 +22,7 @@ from sparseengine.operators.mla_attention import (
     MlaSglFa3Provider,
     MlaTritonProvider,
 )
+from sparseengine.operators.attention_capabilities import AttentionScoreKind
 from sparseengine.operators.registry import OpResolver
 from sparseengine.platforms import DeviceCaps, PlatformEnum
 
@@ -395,6 +396,61 @@ def test_atomic_sgl_provider_rejects_late_score_request() -> None:
 
     with pytest.raises(RuntimeError, match="score-free operation"):
         provider.run(None, None, view, None)
+
+
+@pytest.mark.parametrize(
+    "score_output",
+    [AttentionScoreKind.RAW_QK_PER_HEAD, AttentionScoreKind.RAW_QK_REDUCED],
+)
+def test_score_producing_triton_decode_keeps_independent_compressed_prefill(
+    score_output,
+) -> None:
+    spec = _spec(score_output=score_output)
+    workspace = _cpu_workspace(batch_size=4, head_count=5)
+    with patch(
+        "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
+        return_value=workspace,
+    ):
+        provider = MlaTritonProvider(
+            op_spec=spec,
+            device="cpu",
+            max_batch_size=4,
+        )
+    compressed = Mock()
+    compressed.kernel_path = "triton_mla_prefill_latent"
+    provider._compressed_prefill = compressed
+    provider._compressed_prefill_support_reason = "test provider"
+    plan = SimpleNamespace(
+        query_starts=(0, 16, 32, 48, 64),
+        cu_q=torch.tensor([0, 16, 32, 48, 64], dtype=torch.int32),
+        scope=object(),
+        meta=SimpleNamespace(is_sparse=False),
+    )
+    assert provider.use_compressed_prefill(plan, None)
+
+    q_latent = torch.empty(64, 5, 512, dtype=torch.bfloat16)
+    q_rope = torch.empty(64, 5, 64, dtype=torch.bfloat16)
+    output = torch.empty_like(q_latent)
+    lse = torch.empty(5, 64)
+    compressed.run.return_value = (output, lse)
+    view = SimpleNamespace(
+        payload=SimpleNamespace(
+            rope_cache=torch.empty(1, 1, 64, dtype=torch.bfloat16),
+            latent_cache=torch.empty(1, 1, 512, dtype=torch.bfloat16),
+        ),
+        meta=SimpleNamespace(
+            active_slots=torch.zeros(4, 1, dtype=torch.int32),
+            req_indices=torch.arange(4, dtype=torch.int32),
+            context_lens=torch.ones(4, dtype=torch.int32),
+        ),
+    )
+    actual, actual_lse = provider.run_compressed_prefill(
+        q_latent, q_rope, view, plan,
+    )
+
+    assert actual is output
+    assert actual_lse is lse
+    compressed.run.assert_called_once_with(q_latent, q_rope, view, plan)
 
 
 def test_mla_provider_run_does_not_resolve_or_allocate() -> None:

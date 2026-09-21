@@ -103,6 +103,9 @@ sink/recent/selected/full layers，同名预算不保证相同工作量或质量
 逐请求 `num_cached_tokens` 记录实际复用量，不能只凭开关断言仅执行了一次 prefill。
 该模式仅支持 SparseEngine/vLLM 请求模式、DP1（vLLM），不支持 prefill wave 或
 连续 decode 窗口。TPOT 和 decode 事件窗口仍不是纯执行阶段耗时。
+若需让所有实测请求命中已建立的前缀，另加 `--prime-shared-prompt`：每轮先以
+相同输入生成 1 token，再计时该轮请求；原始记录的 `prefix_prime` 单独保留建立
+前缀的耗时和命中量，不计入请求 workload。此结果不能直接当作冷缓存 E2E。
 
 | 指标 | 定义与边界 |
 | --- | --- |
