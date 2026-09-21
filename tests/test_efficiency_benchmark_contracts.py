@@ -46,6 +46,28 @@ def test_zero_jitter_keeps_every_request_at_the_requested_length():
     assert all(trace.prompt_len == 101 and trace.output_len == 17 for trace in traces)
 
 
+def test_shared_prompt_reuses_only_within_workload(monkeypatch, tmp_path):
+    """Prevent a cache benchmark's warmup or prior repeat from priming its measured prefix."""
+    monkeypatch.setattr(sys, "argv", ["probe", "--model-path", "model", "--output-dir", str(tmp_path),
+                                     "--shared-prompt", "--prompt-length-jitter", "0"])
+    args = bench_probe.parse_args()
+    specs = SimpleNamespace(vocab_size=1000)
+    def trace(phase, iteration):
+        return bench_probe._trace_for_iteration(args, specs, scenario="fixed_batch", phase=phase,
+            prompt_len=101, output_len=17, concurrency=4, iteration=iteration,
+            request_count=4, vary_output_lengths=False)
+    measured = trace("measure", 0)
+    assert len({r.prompt_digest for r in measured}) == 1
+    assert len({r.request_index for r in measured}) == 4
+    assert measured == trace("measure", 0)
+    assert measured[0].prompt_digest != trace("warmup", 0)[0].prompt_digest
+    assert measured[0].prompt_digest != trace("measure", 1)[0].prompt_digest
+    from benchmark.efficiency.workload import trace_metadata
+    with pytest.raises(RuntimeError, match="duplicate"):
+        trace_metadata(measured)
+    assert trace_metadata(measured, allow_duplicate_prompts=True)["request_count"] == 4
+
+
 def test_fork_constructor_options_cannot_change_matched_workload(monkeypatch, tmp_path):
     """Catch a fork config silently enabling prefix hits or changing concurrency."""
     monkeypatch.setattr(sys, "argv", ["probe", "--model-path", "model",

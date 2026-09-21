@@ -33,7 +33,7 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$PWD:$PWD/src" python3 \
 完整参数用 `python3 benchmark/efficiency/bench_probe.py --help` 查询。
 `--monitor-gpus` 是物理 GPU ID，须与 `CUDA_VISIBLE_DEVICES` 对齐。
 Probe 默认每个 scheduler 的 `max_num_batched_tokens=65536`。
-SparseEngine 独立默认 `engine_prefill_chunk_size=8192`，可通过
+Probe 为 SparseEngine 显式设置 `engine_prefill_chunk_size=8192`，可通过
 `--hyper-params` 覆盖；调度 token 总预算与 prefill chunk size 是两个独立参数。
 当前 vLLM 适配器没有对应的独立 chunk size 参数，其切块受可用调度 token 预算约束。
 跨拓扑比较须记录这一差异，以及每 replica 和全局的预算。
@@ -96,6 +96,13 @@ sink/recent/selected/full layers，同名预算不保证相同工作量或质量
 默认 synthetic probe 使用确定性的随机 token trace，各 iteration 更新 trace，
 同 seed/case 的系统匹配；默认有长度 jitter，churn 包含超额请求及替换。
 连续 decode 入口使用其 manifest 记录的固定 trace，不能与默认 probe 假定同源。
+
+固定请求模式可显式加 `--enable-prefix-caching --shared-prompt
+--prompt-length-jitter 0` 测组内完整前缀复用。每轮使用新前缀，预热不预先填充
+实测前缀；所有请求一起提交，由原生调度器决定缓存命中和入场。
+逐请求 `num_cached_tokens` 记录实际复用量，不能只凭开关断言仅执行了一次 prefill。
+该模式仅支持 SparseEngine/vLLM 请求模式、DP1（vLLM），不支持 prefill wave 或
+连续 decode 窗口。TPOT 和 decode 事件窗口仍不是纯执行阶段耗时。
 
 | 指标 | 定义与边界 |
 | --- | --- |

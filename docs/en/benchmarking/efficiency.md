@@ -35,7 +35,7 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH="$PWD:$PWD/src" python3 \
 See `python3 benchmark/efficiency/bench_probe.py --help` for all arguments.
 `--monitor-gpus` uses physical IDs aligned with `CUDA_VISIBLE_DEVICES`.
 The probe defaults to `max_num_batched_tokens=65536` per scheduler.
-SparseEngine independently defaults to `engine_prefill_chunk_size=8192`; override
+The probe explicitly sets SparseEngine's `engine_prefill_chunk_size=8192`; override
 it through `--hyper-params`. The scheduler token budget and prefill chunk size
 are separate controls. vLLM has no equivalent independent chunk-size option in
 these adapters; its chunking follows the available scheduler token budget.
@@ -113,6 +113,15 @@ The default synthetic probe uses deterministic random traces, refreshed per
 iteration and matched by seed/case across systems. Default jitter varies lengths;
 churn includes oversubscription and turnover. Continuous decode uses the fixed
 trace recorded in its manifest; do not assume it matches the default probe trace.
+
+Fixed request mode accepts `--enable-prefix-caching --shared-prompt
+--prompt-length-jitter 0` for identical prompts within each workload. Each repeat
+uses a fresh prefix, separate from warmup. All requests are submitted together;
+the engine decides admission and reuse. Inspect per-request `num_cached_tokens`
+instead of assuming that enabling caching eliminates all but one prefill.
+This mode supports SparseEngine/vLLM request probes (vLLM DP1), without prefill
+waves or continuous decode windows. TPOT and decode event windows remain distinct
+from execution-stage timing.
 
 | Metric | Definition and boundary |
 | --- | --- |

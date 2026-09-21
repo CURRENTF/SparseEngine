@@ -14,6 +14,7 @@ import sys
 import time
 import traceback
 from datetime import datetime
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -263,7 +264,7 @@ def _trace_for_iteration(
         concurrency=concurrency,
         iteration=iteration,
     )
-    return build_request_trace(
+    trace = build_request_trace(
         seed=seed,
         request_count=request_count,
         nominal_prompt_len=prompt_len,
@@ -273,6 +274,12 @@ def _trace_for_iteration(
         output_jitter_fraction=args.output_length_jitter,
         vary_output_lengths=vary_output_lengths,
     )
+    if getattr(args, "shared_prompt", False):
+        first = trace[0]
+        trace = [replace(request, prompt_token_ids=list(first.prompt_token_ids),
+                         prompt_digest=first.prompt_digest, trace_seed=first.trace_seed)
+                 for request in trace]
+    return trace
 
 
 def _attach_churn_comparisons(rows: list[dict[str, Any]]) -> None:
@@ -660,7 +667,7 @@ def run_sparseengine_probe(
     engine_kwargs = {
         **hyper_params,
         "max_model_len": max_len_needed,
-        "enable_prefix_caching": False,
+        "enable_prefix_caching": getattr(args, "enable_prefix_caching", False),
         **sparse_kwargs,
         "max_num_seqs_in_batch": _replica_concurrency(
             min(wave_size, max_concurrency) if wave_size else max_concurrency, hyper_params
@@ -744,6 +751,7 @@ def run_sparseengine_probe(
                         first_token_times: dict[int, float] = {}
                         finished_times: dict[int, float] = {}
                         generated_counts: dict[int, int] = {}
+                        cached_tokens: dict[int, int] = {}
                         next_request = 0
                         wave_events = []
                         current_wave = set()
@@ -777,6 +785,9 @@ def run_sparseengine_probe(
                         while not llm.is_finished():
                             finished_outputs, _num_tokens = llm.step()
                             now = time.perf_counter()
+                            for seq_id, hit_tokens in llm.last_step_prompt_cache_hits:
+                                cached_tokens[int(seq_id)] = max(
+                                    cached_tokens.get(int(seq_id), 0), int(hit_tokens))
                             for seq_id, token_ids in getattr(
                                 llm, "last_step_token_outputs", []
                             ):
@@ -806,6 +817,12 @@ def run_sparseengine_probe(
 
                         elapsed_s = time.perf_counter() - t_start
                         graph_after = llm.debug_sparse_state_summaries()[0]["decode_graph"]
+                        if getattr(args, "enable_prefix_caching", False):
+                            if set(cached_tokens) != set(seq_to_request):
+                                raise RuntimeError("Missing native prefix-cache hit observations")
+                            for seq_id, hits in cached_tokens.items():
+                                if not 0 <= hits < seq_to_request[seq_id].prompt_len:
+                                    raise RuntimeError(f"Invalid native prefix-cache hit count: {hits}")
                         timing_metrics = _request_phase_metrics_from_timestamps(
                             arrival_times=arrival_times,
                             first_token_times=first_token_times,
@@ -838,6 +855,7 @@ def run_sparseengine_probe(
                                     **seq_to_request[seq_id].metadata(),
                                     **timing,
                                     "seq_id": seq_id,
+                                    "num_cached_tokens": cached_tokens.get(seq_id, 0),
                                     "timing_source": (
                                         "sparseengine_wave_workload_arrival_step_publication_v1" if wave_size
                                         else "sparseengine_step_token_publication_no_extra_sync_v1"),
@@ -877,7 +895,7 @@ def run_sparseengine_probe(
                             "peak_decode_free_slot_stats": peak_decode_free_slot_stats,
                             "protocol_label": protocol_label,
                             "decode_metric_status": "success" if tpot_ms is not None else "skipped_by_policy",
-                            "trace": trace_metadata(trace),
+                            "trace": trace_metadata(trace, allow_duplicate_prompts=getattr(args, "shared_prompt", False)),
                             "request_results": request_results,
                             "decode_cuda_graph_before": graph_before,
                             "decode_cuda_graph_after": graph_after,
@@ -1287,7 +1305,7 @@ def _vllm_engine_kwargs(args: argparse.Namespace) -> dict[str, Any]:
         "max_model_len": max(args.prompt_lens) + max(args.output_lens) + 128,
         "max_num_batched_tokens": args.max_num_batched_tokens,
         "max_num_seqs": max(args.batch_sizes),
-        "enable_prefix_caching": False,
+        "enable_prefix_caching": getattr(args, "enable_prefix_caching", False),
         "disable_log_stats": False,
         "trust_remote_code": True,
         "seed": args.seed,
@@ -1446,6 +1464,11 @@ def _run_vllm_fixed_probe(args, model_specs, llm, dp_size):
                                     "vLLM fixed-batch request timing requires one timed candidate."
                                 )
                             generated = len(output.outputs[0].token_ids)
+                            cached = getattr(output, "num_cached_tokens", None)
+                            if args.enable_prefix_caching and cached is None:
+                                raise RuntimeError("vLLM did not report prefix-cache hit tokens")
+                            if cached is not None and not 0 <= cached < request.prompt_len:
+                                raise RuntimeError(f"Invalid vLLM prefix-cache hit count: {cached}")
                             ttft_s, decode_s, timing_source = _vllm_request_phase_seconds(
                                 metrics
                             )
@@ -1453,6 +1476,7 @@ def _run_vllm_fixed_probe(args, model_specs, llm, dp_size):
                                 {
                                     **request.metadata(),
                                     "request_id": str(output.request_id),
+                                    "num_cached_tokens": cached,
                                     **request_metrics(ttft_s, decode_s, generated),
                                     "timing_source": timing_source,
                                 }
@@ -1493,7 +1517,7 @@ def _run_vllm_fixed_probe(args, model_specs, llm, dp_size):
                             **phase_metrics,
                             "decode_metric_status": "success" if tpot_ms is not None else "skipped_by_policy",
                             "protocol_label": getattr(args, "backend_label", None) or f"vllm-{args.sparse_method}",
-                            "trace": trace_metadata(trace),
+                            "trace": trace_metadata(trace, allow_duplicate_prompts=getattr(args, "shared_prompt", False)),
                             "request_results": request_results,
                         }
                         iter_records.append(rec)
@@ -1836,6 +1860,10 @@ def parse_args():
         help="fixed measures one variable-length batch; churn oversubscribes the scheduler.",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--enable-prefix-caching", action="store_true",
+                        help="Enable prefix caching in fixed request-mode probes.")
+    parser.add_argument("--shared-prompt", action="store_true",
+                        help="Use identical prompts within each fixed workload; fresh prompts each iteration.")
     parser.add_argument(
         "--prompt-length-jitter",
         type=float,
@@ -1916,6 +1944,13 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.enable_prefix_caching or args.shared_prompt:
+        if args.scenario != "fixed" or args.decode_only_steps or args.engine not in {"sparseengine", "vllm"}:
+            raise ValueError("Prefix reuse probes require native/vLLM fixed request mode")
+        if args.prompt_length_jitter or args.prefill_wave_size:
+            raise ValueError("Prefix reuse probes require zero prompt jitter and no prefill waves")
+        if args.engine == "vllm" and int(_parse_json_arg(args.engine_kwargs).get("data_parallel_size", 1)) > 1:
+            raise ValueError("Prefix reuse probes currently require DP1")
     if args.decode_only_steps:
         if args.engine == "vllm" and int(
             _parse_json_arg(args.engine_kwargs).get("data_parallel_size", 1)
@@ -2047,7 +2082,8 @@ def main():
             "request_metric_contract": REQUEST_METRIC_CONTRACT,
             "stage_metrics_status": "not_measured",
             "trace_generator_version": TRACE_GENERATOR_VERSION,
-            "prefix_caching_enabled": False,
+            "prefix_caching_enabled": args.enable_prefix_caching,
+            "shared_prompt_within_workload": args.shared_prompt,
             "cross_engine_trace_contract": "same seed, token IDs, and per-request lengths",
             "iteration_prompt_reuse_allowed": False,
             "phase_throughput_contract": (

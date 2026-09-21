@@ -177,11 +177,11 @@ def build_request_trace(
     return traces
 
 
-def trace_metadata(traces: list[RequestTrace]) -> dict[str, Any]:
+def trace_metadata(traces: list[RequestTrace], *, allow_duplicate_prompts: bool = False) -> dict[str, Any]:
     prompt_lengths = [trace.prompt_len for trace in traces]
     output_lengths = [trace.output_len for trace in traces]
     digests = [trace.prompt_digest for trace in traces]
-    if len(digests) != len(set(digests)):
+    if not allow_duplicate_prompts and len(digests) != len(set(digests)):
         raise RuntimeError("Trace metadata contains duplicate prompt digests.")
     return {
         "generator_version": TRACE_GENERATOR_VERSION,
