@@ -33,6 +33,7 @@ def _score(
     CEND,
     SCALE: tl.constexpr,
     MODE: tl.constexpr,
+    LATENT: tl.constexpr,
     NK,
     M: tl.constexpr = 32,
     N: tl.constexpr = 64,
@@ -42,10 +43,10 @@ def _score(
     ki = kb * N + tl.arange(0, N)
     d = tl.arange(0, D)
     q = tl.load(Q + qi[:, None] * q0 + head * q1 + d[None, :], qi[:, None] < QN, 0)
-    kh = head if MODE == 0 else 0
+    kh = 0 if LATENT else head
     k = tl.load(K + ki[None, :] * k0 + kh * k1 + d[:, None], ki[None, :] < KN, 0)
     z = tl.dot(q, k)
-    if MODE != 0:
+    if LATENT:
         r = tl.arange(0, 64)
         qr = tl.load(
             QR + qi[:, None] * qr0 + head * qr1 + r[None, :], qi[:, None] < QN, 0
@@ -121,13 +122,17 @@ def score_block(
     mode,
     rope_q=None,
     rope_k=None,
+    latent=None,
 ):
-    """Score expanded K logits, or latent probabilities with accumulated LSE."""
+    """Score raw logits or probabilities, independently of key representation."""
     qn, heads, dim = q.shape
     kn = k.shape[0]
     if not qn or not kn:
         return
-    latent = mode != "logits"
+    if latent is None:
+        latent = mode != "logits"
+    if mode != "logits" and not latent:
+        raise ValueError("Probability scoring requires latent keys.")
     if latent and (
         dim != 512
         or rope_q is None
@@ -172,6 +177,7 @@ def score_block(
         candidate_end,
         scale,
         {"logits": 0, "stats": 1, "probability": 2}[mode],
+        latent,
         nk,
         num_warps=4,
     )

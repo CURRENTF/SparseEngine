@@ -81,6 +81,29 @@ def estimate_mla_prefill_workspace_bytes(
     )
 
 
+def estimate_mla_compressed_prefill_workspace_bytes(
+    *, plan, spec, chunk_size, hidden_size, projection_chunk_size, score_request=None,
+):
+    """Live latent attention/projection tensors plus bounded score scratch."""
+    tokens = plan.query_starts[-1]
+    heads = spec.local_q_heads
+    element = spec.activation_dtype.itemsize
+    required = tokens * heads * (4 * spec.kv_lora_rank + 2 * spec.value_head_dim) * element
+    required += tokens * heads * 4  # Main attention LSE.
+    required += min(tokens, projection_chunk_size) * hidden_size * element
+    if score_request is not None:
+        observed = sum(end - start for start, end in score_request.query_ranges)
+        block = min(chunk_size, max(plan.contexts))
+        required += len(plan.contexts) * max(plan.contexts) * 4
+        required += observed * heads * (spec.kv_lora_rank * element + 8)
+        required += block * (spec.kv_lora_rank + spec.rope_dim) * spec.cache_dtype.itemsize
+        if score_request.mode == "probability":
+            max_observed = max(end - start for start, end in score_request.query_ranges)
+            required += heads * block * 4
+            required += heads * ((block + 63) // 64) * max_observed * 4
+    return required
+
+
 class ChunkedMlaPrefill:
     def __init__(self, spec, provider, chunk_size):
         if int(chunk_size) <= 0:
@@ -224,6 +247,17 @@ class ChunkedMlaPrefill:
             mode="logits",
         )
 
+    def score_compressed(self, q, view, plan, absorb, request, attention_lse):
+        if request is None:
+            return None
+        scorer = MlaPrefillScores(
+            self, q, plan, request, absorb, output=view.meta.attn_score,
+            latent_logits=True,
+        )
+        with profiler.record("prefill_token_score"):
+            scorer.finish_latent(view, attention_lse)
+        return scorer.output
+
     def run(self, q, view, cu_q, scope, project, absorb, score_request=None):
         plan = self.prepare(view, cu_q, scope)
         if plan.query_starts[-1] != q.shape[0]:
@@ -291,20 +325,21 @@ class ChunkedMlaPrefill:
             del latent, rope, k, v, partial, partial_lse
         if scorer is not None and scorer.is_probability:
             with profiler.record("prefill_token_score"):
-                scorer.finish_probability(view, lse)
+                scorer.finish_latent(view, lse)
         with profiler.trace("mla.prefill.output_cast"):
             output = output.to(q.dtype)
         return output, lse, None if scorer is None else scorer.output
 
 
 class MlaPrefillScores:
-    def __init__(self, owner, q, plan, request, absorb, *, output=None):
+    def __init__(self, owner, q, plan, request, absorb, *, output=None, latent_logits=False):
         if request.mode not in {"logits", "probability"}:
             raise ValueError("Unsupported MLA prefill score mode.")
         if len(request.query_ranges) != len(plan.contexts):
             raise ValueError("MLA score ranges must cover the prefill batch.")
         self.owner, self.plan, self.request = owner, plan, request
         self.is_probability = request.mode == "probability"
+        self.latent = self.is_probability or latent_logits
         self.full_normalizer = (
             request.candidate_ranges is None
             and request.candidate_start == 0 and request.recent_keep_tokens == 0
@@ -338,11 +373,11 @@ class MlaPrefillScores:
             )
             self.queries.append(
                 absorb(observed[..., :nope])
-                if self.is_probability and end > start
+                if self.latent and end > start
                 else observed
             )
             self.rope_queries.append(
-                observed[..., nope:] if self.is_probability else None
+                observed[..., nope:] if self.latent else None
             )
             self.lse.append(
                 torch.full(
@@ -376,10 +411,11 @@ class MlaPrefillScores:
             mode=mode,
             rope_q=self.rope_queries[i],
             rope_k=rope,
+            latent=self.latent,
         )
 
-    def finish_probability(self, view, attention_lse):
-        if self.full_normalizer:
+    def finish_latent(self, view, attention_lse):
+        if self.is_probability and self.full_normalizer:
             for i, (start, end) in enumerate(self.request.query_ranges):
                 a, b = self.plan.query_starts[i : i + 2]
                 cached = self.plan.contexts[i] - (b - a)
@@ -389,7 +425,10 @@ class MlaPrefillScores:
                     ].contiguous()
         # Candidate-only softmax needs its own denominator; full-key scoring
         # reuses the main attention LSE. Both scans stay in latent space.
-        modes = ("probability",) if self.full_normalizer else ("stats", "probability")
+        if not self.is_probability:
+            modes = ("logits",)
+        else:
+            modes = ("probability",) if self.full_normalizer else ("stats", "probability")
         for mode in modes:
             for i, (start, end) in enumerate(self.request.query_ranges):
                 if end <= start:

@@ -655,10 +655,11 @@ class MlaSglFa3Provider(MlaTritonProvider):
 
     def use_compressed_prefill(self, plan, score_request) -> bool:
         # A runtime route between two prepared algorithms, not a decode step.
-        # The expanded route retains sparse scoring and long-query efficiency.
+        # Scores are produced separately in latent space for the short route.
+        # The expanded route retains sparse views and long-query efficiency.
         # Keep the conservative query crossover separate from FA3 eligibility.
         return (
-            score_request is None
+            (score_request is None or score_request.mode in {"logits", "probability"})
             and not plan.meta.is_sparse
             and max(b - a for a, b in zip(plan.query_starts, plan.query_starts[1:])) <= 384
         )

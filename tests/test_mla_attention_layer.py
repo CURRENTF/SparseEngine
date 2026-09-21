@@ -396,8 +396,10 @@ def test_chunked_prefill_budget_fails_before_projection(split_scratch):
 
 
 @pytest.mark.parametrize('budget', [1, 1024 * 1024])
-def test_compressed_prefill_preserves_prefill_hooks_and_budget(budget):
+@pytest.mark.parametrize('score_mode', [None, 'logits', 'probability'])
+def test_compressed_prefill_preserves_prefill_hooks_and_budget(budget, score_mode):
     from sparseengine.operators.mla_attention import MlaSglFa3Provider
+    from sparseengine.engine.cache_manager.base import PrefillScoreRequest
     attention = _attention(budget=budget)
     attention._use_compressed_prefill = MlaSglFa3Provider.use_compressed_prefill.__get__(attention.provider)
     view = _view(torch.empty(2, 1, 512, dtype=torch.bfloat16),
@@ -411,7 +413,10 @@ def test_compressed_prefill_preserves_prefill_hooks_and_budget(budget):
         'collect_prefill_attention_score', 'record_prefill_query',
         'record_decode_query', 'on_layer_attention_end')})
     manager.build_prefill_compute_view = Mock(return_value=view)
-    manager.prefill_score_request = Mock(return_value=None)
+    request = PrefillScoreRequest(((1, 2),), score_mode) if score_mode else None
+    manager.prefill_score_request = Mock(return_value=request)
+    scores = torch.ones(1, 2) if score_mode else None
+    attention.chunked_prefill.score_compressed = Mock(return_value=scores)
     controller = SimpleNamespace(get_prefill_selection=Mock(return_value=None), on_layer_attention_end=Mock())
     set_context(True, torch.tensor([0, 1], dtype=torch.int32), manager, seqs=[])
     get_context().sparse_controller = controller
@@ -430,12 +435,15 @@ def test_compressed_prefill_preserves_prefill_hooks_and_budget(budget):
             with pytest.raises(MemoryError, match='compressed prefill workspace'):
                 run()
             attention.provider.run_compressed_prefill.assert_not_called()
+            attention.chunked_prefill.score_compressed.assert_not_called()
         else:
             assert run() is output
             assert get_context().is_prefill
             assert not attention.chunked_prefill.plan.history_prepared
             manager.record_prefill_query.assert_called_once()
             manager.collect_prefill_attention_score.assert_called_once()
+            assert manager.collect_prefill_attention_score.call_args.args[2].token_scores is scores
+            assert attention.chunked_prefill.score_compressed.call_args.args[4] is request
             manager.record_decode_query.assert_not_called()
             manager.on_layer_attention_end.assert_called_once()
             controller.on_layer_attention_end.assert_called_once()

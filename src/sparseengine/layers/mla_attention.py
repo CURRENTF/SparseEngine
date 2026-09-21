@@ -19,6 +19,7 @@ from sparseengine.operators.mla_attention import (
 )
 from sparseengine.operators.mla_prefill import (
     ChunkedMlaPrefill,
+    estimate_mla_compressed_prefill_workspace_bytes,
     estimate_mla_prefill_workspace_bytes,
 )
 from sparseengine.utils.profiler import profiler
@@ -327,10 +328,13 @@ class MLAAttention:
                     # Explicit live tensors, including query absorption, latent
                     # output and value reconstruction. FA3's opaque workspace
                     # is measured by the existing startup memory profile.
-                    required = q.shape[0] * self.spec.local_q_heads * (
-                        4 * self.spec.kv_lora_rank + 2 * self.spec.value_head_dim
-                    ) * q.element_size()
-                    required += min(q.shape[0], self.projection_chunk_size) * self.hidden_size * q.element_size()
+                    required = estimate_mla_compressed_prefill_workspace_bytes(
+                        plan=plan, spec=self.spec,
+                        chunk_size=self.chunked_prefill.chunk_size,
+                        hidden_size=self.hidden_size,
+                        projection_chunk_size=self.projection_chunk_size,
+                        score_request=request,
+                    )
                     if required > self.prefill_workspace_bytes:
                         raise MemoryError(
                             f"MLA compressed prefill workspace exceeds budget: required={required} "
@@ -341,7 +345,9 @@ class MLAAttention:
                             absorb_query(q_nope), q_rope, view, plan,
                         )
                         output = reconstruct_values(latent_output)
-                    scores = None
+                    scores = self.chunked_prefill.score_compressed(
+                        q, view, plan, absorb_query, request, attention_lse,
+                    )
                 else:
                     self.chunked_prefill.prepare(
                         view, context.cu_seqlens_q, context.attention_validation_scope,

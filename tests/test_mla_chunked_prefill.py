@@ -417,9 +417,15 @@ def test_compressed_prefill_preserves_score_and_sparse_routes():
     provider = object.__new__(MlaSglFa3Provider)
     plan = SimpleNamespace(query_starts=(0, 2, 65), meta=SimpleNamespace(is_sparse=False))
     assert provider.use_compressed_prefill(plan, None)
-    assert not provider.use_compressed_prefill(plan, object())
+    for mode in ("logits", "probability"):
+        assert provider.use_compressed_prefill(plan, PrefillScoreRequest(((0, 2), (0, 63)), mode))
+    assert not provider.use_compressed_prefill(plan, SimpleNamespace(mode="unsupported"))
     plan.meta.is_sparse = True
     assert not provider.use_compressed_prefill(plan, None)
+    assert not provider.use_compressed_prefill(plan, PrefillScoreRequest(((0, 2), (0, 63)), "logits"))
+    plan.meta.is_sparse = False
+    plan.query_starts = (0, 4096)
+    assert not provider.use_compressed_prefill(plan, PrefillScoreRequest(((0, 4096),), "probability"))
 
 
 
@@ -441,3 +447,72 @@ def test_host_prefill_layout_avoids_readback_and_defers_history(monkeypatch):
         assert plan.history_prepared
     assert plan.current_slots.tolist() == [21, 22, 23, 7, 8]
     assert sum(n for _, _, n, _ in plan.history_chunks) == 16
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+@pytest.mark.parametrize("mode,candidate,recent", [
+    ("logits", 0, 0), ("logits", 130, 3),
+    ("probability", 0, 0), ("probability", 130, 3),
+])
+def test_compressed_prefill_independent_scores_match_expanded_oracle(mode, candidate, recent):
+    # Ragged/permuted physical rows, multiple query tiles, empty candidate rows,
+    # noncontiguous absorbed queries and repeated output reset.
+    spec, q, view, cu, project, absorb = make_case((239, 29, 65), (137, 17, 1), heads=5)
+    provider = partial_provider("fa3", spec, q.device, 3)
+    runner = ChunkedMlaPrefill(spec, provider, 53)
+    if mode == "logits":
+        view = replace(view, meta=replace(view.meta, attn_score=torch.empty(3, 239, device=q.device)))
+    plan = runner.prepare(view, cu, object(), prepare_history=False)
+    ranges = ((102, 239), (17, 29), (64, 65))
+    request = PrefillScoreRequest(ranges, mode, candidate, recent)
+    for query in (q, -q):
+        if view.meta.attn_score is not None:
+            view.meta.attn_score.fill_(1e6)
+        _, lse = provider.run_compressed_prefill(absorb(query[..., :192]), query[..., 192:], view, plan)
+        scores = runner.score_compressed(query, view, plan, absorb, request, lse)
+        assert not plan.history_prepared
+        if mode == "logits":
+            assert scores is view.meta.attn_score
+        for i, n in enumerate(plan.contexts):
+            a, b = plan.query_starts[i:i + 2]
+            start, end = ranges[i]
+            slots = view.meta.active_slots[plan.rows[i], :n].long()
+            expanded = project(view.payload.latent_cache[slots, 0]).view(n, spec.local_q_heads, 448)
+            keys = torch.cat((expanded[..., :192], view.payload.rope_cache[slots, 0, None].expand(-1, spec.local_q_heads, -1)), -1)
+            cached = n - (b - a)
+            observed = query[a + start - cached:a + end - cached]
+            raw = torch.einsum("qhd,khd->hqk", observed.float(), keys.float())
+            ki = torch.arange(n, device=q.device)
+            valid = ((torch.arange(start, end, device=q.device)[:, None] >= ki)
+                     & (ki >= candidate) & (ki < n - recent))
+            if mode == "logits":
+                reference = raw.masked_fill(~valid[None], -torch.inf).amax((0, 1))
+                atol = .015  # BF16 query absorption vs BF16 expanded keys.
+            else:
+                reference = (raw * spec.softmax_scale).masked_fill(~valid[None], -torch.inf)
+                reference = reference.softmax(-1).nan_to_num(0).mean(1).amax(0)
+                atol = .0002
+            torch.testing.assert_close(scores[i, :n], reference, atol=atol, rtol=.015)
+            if mode == "logits":
+                assert torch.isneginf(scores[i, n:]).all()
+            else:
+                assert (scores[i, n:] == 0).all()
+
+
+def test_compressed_score_workspace_accounts_for_modes_and_bounded_gather():
+    from sparseengine.operators.mla_prefill import estimate_mla_compressed_prefill_workspace_bytes
+
+    spec = MlaAttentionOpSpec(num_q_heads=20, kv_lora_rank=512, rope_dim=64,
+                            qk_head_dim=256, value_head_dim=256,
+                            activation_dtype=torch.bfloat16, cache_dtype=torch.bfloat16,
+                            tp_size=1, cuda_graph=False)
+    plan = SimpleNamespace(query_starts=(0, 17), contexts=(1000,))
+    kwargs = dict(plan=plan, spec=spec, chunk_size=128, hidden_size=2048, projection_chunk_size=16)
+    plain = estimate_mla_compressed_prefill_workspace_bytes(**kwargs)
+    logits = estimate_mla_compressed_prefill_workspace_bytes(**kwargs, score_request=PrefillScoreRequest(((983, 1000),), "logits"))
+    prob = estimate_mla_compressed_prefill_workspace_bytes(**kwargs, score_request=PrefillScoreRequest(((983, 1000),), "probability"))
+    assert plain < logits < prob
+    plan.contexts = (10000,)
+    long = estimate_mla_compressed_prefill_workspace_bytes(**kwargs, score_request=PrefillScoreRequest(((9983, 10000),), "probability"))
+    # Only the token score output grows; history gather/scratch stays bounded.
+    assert long - prob == (10000 - 1000) * 4
