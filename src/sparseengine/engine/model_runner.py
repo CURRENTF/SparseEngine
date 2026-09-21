@@ -895,14 +895,15 @@ class ModelRunner:
                 if method_name != "refresh_prefix_cache_hits":
                     raise
                 seqs = args[0]
+                first, last = args[1] if len(args) > 1 else (True, True)
                 if len(seqs) == 1:
-                    return [self.call("refresh_prefix_cache_hit", seqs[0])]
+                    return [self.call("refresh_prefix_cache_hit", seqs[0], (first, last))]
                 if not seqs:
                     raise
                 midpoint = len(seqs) // 2
                 return (
-                    self.call(method_name, seqs[:midpoint])
-                    + self.call(method_name, seqs[midpoint:])
+                    self.call(method_name, seqs[:midpoint], (first, False))
+                    + self.call(method_name, seqs[midpoint:], (False, last))
                 )
         method = getattr(self, method_name, None)
         # Ensure *all* runner-side ops (including sparse post-processing like DeltaKV eviction)
@@ -1167,8 +1168,19 @@ class ModelRunner:
             )
         warmup_moe(num_tokens=int(num_tokens))
 
+    def _assert_cache_release(self, seq_ids) -> None:
+        # Terminal/control path only; never add a synchronization to decode.
+        from sparseengine.platforms import device_runtime
+
+        if device_runtime.is_stream_capturing():
+            raise RuntimeError("Cache ownership cannot change during graph capture.")
+        asynchronous = getattr(self, "_async_execution", None)
+        if asynchronous is not None:
+            asynchronous.assert_releasable(seq_ids)
+
     def free_slots(self, seq_id: int):
         """通知 CacheManager 释放该序列占用的物理显存位子"""
+        self._assert_cache_release((seq_id,))
         with profiler.record("model_free_slots"):
             if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1":
                 before = self.cache_manager.free_slot_stats()
@@ -1187,6 +1199,7 @@ class ModelRunner:
             seq_ids = [int(seq_id) for seq_id in seq_ids]
             if not seq_ids:
                 return
+            self._assert_cache_release(seq_ids)
             if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1":
                 before = self.cache_manager.free_slot_stats()
                 logger.info("model_runner.free_slots_batch seq_ids={} before={}", seq_ids, before)
@@ -1235,6 +1248,12 @@ class ModelRunner:
         self,
         plan: ChainAdmissionPlan,
     ) -> dict[str, object]:
+        coordinator = self.runtime_state.chain_cache_coordinator
+        seq_ids = [plan.seq_id]
+        if coordinator is not None:
+            seq_ids.extend(coordinator.index.lookup(cid).seq_id
+                           for cid in (*plan.victim_chain_ids, *plan.demote_chain_ids))
+        self._assert_cache_release(seq_ids)
         return self.runtime_state.chain_apply_admission(plan)
 
     def chain_validate_admission_plan(
@@ -1252,6 +1271,7 @@ class ModelRunner:
     def chain_reclaim_idle(
         self, chain_id: str, expected_seq_id: int, demote: bool,
     ) -> dict[str, object]:
+        self._assert_cache_release((expected_seq_id,))
         return self.runtime_state.chain_reclaim_idle(chain_id, expected_seq_id, demote)
 
     def chain_finish(
@@ -1261,6 +1281,7 @@ class ModelRunner:
         processed_token_digest: bytes,
         processed_token_count: int,
     ) -> dict[str, object]:
+        self._assert_cache_release((seq_id,))
         return self.runtime_state.chain_finish(
             chain_id,
             seq_id,
@@ -1273,6 +1294,9 @@ class ModelRunner:
         chain_id: str,
         expected_seq_id: int | None = None,
     ) -> dict[str, object]:
+        coordinator = self.runtime_state.chain_cache_coordinator
+        if coordinator is not None:
+            self._assert_cache_release((coordinator.index.lookup(str(chain_id)).seq_id,))
         return self.runtime_state.chain_invalidate(
             chain_id,
             expected_seq_id=expected_seq_id,
@@ -1340,7 +1364,13 @@ class ModelRunner:
             include_subtree=bool(include_subtree),
         )
 
-    def refresh_prefix_cache_hit(self, seq: Sequence) -> dict[str, object]:
+    def refresh_prefix_cache_hit(
+        self, seq: Sequence, lookup_batch: tuple[bool, bool] | None = None,
+    ) -> dict[str, object]:
+        if lookup_batch is not None:
+            first, last = lookup_batch
+            with self.runtime_state.prefix_cache_lookup_batch(first=first, last=last):
+                return self.refresh_prefix_cache_hit(seq)
         self.runtime_state.refresh_prefix_cache_hit(seq)
         return {
             "enabled": bool(seq.prefix_cache_enabled),
@@ -1351,8 +1381,12 @@ class ModelRunner:
             "method": str(seq.prefix_cache_method),
         }
 
-    def refresh_prefix_cache_hits(self, seqs: list[Sequence]) -> list[dict[str, object]]:
-        return [self.refresh_prefix_cache_hit(seq) for seq in seqs]
+    def refresh_prefix_cache_hits(
+        self, seqs: list[Sequence], lookup_batch: tuple[bool, bool] = (True, True),
+    ) -> list[dict[str, object]]:
+        first, last = lookup_batch
+        with self.runtime_state.prefix_cache_lookup_batch(first=first, last=last):
+            return [self.refresh_prefix_cache_hit(seq) for seq in seqs]
 
     def prefix_cache_match(self, token_ids: list[int]) -> dict[str, object]:
         return self.runtime_state.prefix_cache_match(

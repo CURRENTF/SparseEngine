@@ -366,7 +366,7 @@ def test_chain_lru_tie_break_is_chain_id_and_active_capacity_fails():
     index.apply_admission(plan, fingerprint=FINGERPRINT)
     for chain_id in list(index.records):
         record = index.records[chain_id]
-        record.state = ChainState.ACTIVE
+        index._set_record_state(record, ChainState.ACTIVE)
     with pytest.raises(ChainCapacityError):
         index.plan_admission(
             chain_id="another",
@@ -1147,6 +1147,10 @@ def test_engine_chain_admission_reuses_resident_seq_and_logical_boundary():
     class CacheManager:
         def __init__(self):
             self.finished_turns = []
+            self.freed_seqs = []
+
+        def free_seq(self, seq_id):
+            self.freed_seqs.append(seq_id)
 
         def chain_capacity_deficits(self, **_kwargs):
             return (), 0, (), 0
@@ -1295,6 +1299,7 @@ def test_engine_chain_admission_reuses_resident_seq_and_logical_boundary():
     assert recreated.chain_status == "recreated"
     assert recreated.reused_tokens == 0
     assert recreated.prefilled_tokens == 3
+    assert cache_manager.freed_seqs == [resumed.seq_id]
     recreated_seq = engine.scheduler.added[-1]
     assert recreated_seq.token_ids == [1, 2, 99]
     assert recreated_seq.num_prefilled_tokens == 0
@@ -1303,6 +1308,7 @@ def test_engine_chain_admission_reuses_resident_seq_and_logical_boundary():
 
     engine.abort_request(recreated.seq_id)
     engine.abort_request(recreated.seq_id)
+    assert cache_manager.freed_seqs == [resumed.seq_id, recreated.seq_id]
     with pytest.raises(ChainGoneError):
         coordinator.index.lookup(recreated.chain_id)
 
@@ -1364,6 +1370,7 @@ def test_prepared_chain_history_is_owned_validated_and_immutable():
     coordinator.index = ChainCacheIndex(max_token_history_tokens=8)
     record = ChainRecord("prepared", 7, FINGERPRINT, ChainState.ACTIVE)
     coordinator.index.records[record.chain_id] = record
+    coordinator.index._set_record_state(record, ChainState.ACTIVE)
     tokens = [1, 2, 3, 9]
     prepared = coordinator.prepare_processed_tokens(
         chain_id=record.chain_id, seq_id=7, token_ids=tokens, processed_token_count=3,

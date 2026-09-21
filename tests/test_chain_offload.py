@@ -122,6 +122,45 @@ def test_resume_waits_for_copy_then_invalidates_snapshot(cpu_transfers):
     assert c.used_bytes == 0
 
 
+def test_poll_and_targeted_wait_preserve_pending_snapshot_lifetimes(cpu_transfers, monkeypatch):
+    m = make_manager(rows=3)
+    c = ChainOffloadController(m, 8192)
+    for seq_id in (1, 2, 3):
+        populate(m, seq_id, (1, 1))
+        c.save(seq_id, m.snapshot_chain_method_state(seq_id))
+    completed = set()
+    queries = []
+    def ready(event):
+        queries.append(event)
+        return event in completed
+    monkeypatch.setattr(chain_offload.device_runtime, 'is_event_complete', ready)
+    c.poll()
+    assert queries == [c.snapshots[1].completion]
+    assert all(not snapshot.valid and snapshot.keepalive for snapshot in c.snapshots.values())
+    completed.add(c.snapshots[1].completion)
+    c.poll()
+    assert c.snapshots[1].valid and not c.snapshots[1].keepalive
+    assert not c.snapshots[2].valid and not c.snapshots[3].valid
+    # Waiting/dropping a non-head entry must remove its pending transfer too.
+    c.wait(3)
+    c.drop(2)
+    c.invalidate(1)
+    queries.clear()
+    c.poll()
+    assert not queries
+    assert not c.snapshots[1].valid and c.snapshots[3].valid
+    c.save(3, m.snapshot_chain_method_state(3))
+    replacement = c.snapshots[3]
+    c.poll()
+    assert not replacement.valid and replacement.keepalive
+    completed.add(replacement.completion)
+    c.poll()
+    assert replacement.valid and not replacement.keepalive
+    assert not c.snapshots[1].valid
+    c.reset()
+    assert not c.snapshots and c.used_bytes == 0
+
+
 def round_trip(m):
     expected = populate(m)
     original = m.snapshot_chain_method_state(1)
@@ -164,6 +203,46 @@ def test_method_state_and_slot_remapping(cpu_transfers, cls):
     round_trip(make_manager(cls))
 
 
+@pytest.mark.parametrize('dtype', [torch.int32, torch.int64])
+def test_transfer_indices_do_not_alias_reusable_allocator_storage(cpu_transfers, monkeypatch, dtype):
+    m = make_manager()
+    m.buffer_req_to_token_slots = [table.to(dtype) for table in m.buffer_req_to_token_slots]
+    m.free_slots_stack = [stack.to(dtype) for stack in m.free_slots_stack]
+    populate(m)
+    c = ChainOffloadController(m, 4096)
+    captured = []
+    transfer = c._transfer
+    def capture(src, dst, source_indices, destination_indices):
+        captured.append((source_indices, destination_indices))
+        transfer(src, dst, source_indices, destination_indices)
+    monkeypatch.setattr(c, '_transfer', capture)
+    c.save(1, m.snapshot_chain_method_state(1))
+    for layer, (indices, _) in enumerate(captured):
+        source = m.chain_token_slots(layer, 1)
+        expected = source.clone()
+        source.fill_(-1)
+        torch.testing.assert_close(indices, expected.to(torch.int64))
+        source.copy_(expected)
+    c.wait(1)
+    m.free_seq(1)
+    allocated_views = {}
+    allocate = m.allocate_chain_restore
+    def capture_allocation(*args):
+        result = allocate(*args)
+        allocated_views.update(result)
+        return result
+    monkeypatch.setattr(m, 'allocate_chain_restore', capture_allocation)
+    captured.clear()
+    c.restore(1)
+    for layer, (_, indices) in enumerate(captured):
+        expected = allocated_views[layer].clone()
+        allocated_views[layer].fill_(-1)
+        torch.testing.assert_close(indices, expected.to(torch.int64))
+    m.free_seq(1)
+    assert m._num_free_slots == [16, 16]
+
+
+@pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="actual pinned-memory transfer requires CUDA")
 @pytest.mark.parametrize("cls", [SnapKVCacheManager, H2OCacheManager, RKVCacheManager, SkipKVCacheManager])
 def test_cuda_whole_chain_round_trip(cls):
@@ -185,6 +264,7 @@ def test_mla_latent_and_rope_use_their_own_token_width(cpu_transfers):
     round_trip(mla_manager("cpu"))
 
 
+@pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="actual latent transfer requires CUDA")
 def test_cuda_mla_whole_chain_round_trip():
     round_trip(mla_manager("cuda:0"))
@@ -383,7 +463,7 @@ def test_failed_turn_snapshot_cannot_publish_a_stale_logical_history(cpu_transfe
     m, c, r = make_runtime(cpu_transfers)
     finish_chain(m, c, r, 1, "a")
     record = c.index.lookup("a")
-    record.state = ChainState.ACTIVE
+    c.index._set_record_state(record, ChainState.ACTIVE)
     c.offload.capacity_bytes = 255
     with pytest.raises(ChainCapacityError, match="host budget"):
         r.chain_finish("a", 1, record.processed_token_digest, 5)

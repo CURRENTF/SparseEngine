@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import torch
 
 from sparseengine.engine.prefix_cache import PrefixCacheBlock, RadixPrefixIndex
@@ -38,11 +40,11 @@ def _payload_device_slots(block: PrefixCacheBlock, block_size: int) -> torch.Ten
     return slots.reshape(-1)
 
 
-def _payload_retained_offsets(block: PrefixCacheBlock, block_size: int) -> tuple[int, ...]:
+def _payload_retained_offsets(block: PrefixCacheBlock, block_size: int) -> tuple[int, ...] | None:
     payload = getattr(block.payload, "kv_payload", block.payload)
     offsets = getattr(payload, "retained_offsets", None)
     if offsets is None:
-        return tuple(range(int(block_size)))
+        return None
     normalized = tuple(int(offset) for offset in offsets)
     if any(offset < 0 or offset >= int(block_size) for offset in normalized):
         raise RuntimeError("Prefix block contains invalid retained token offsets.")
@@ -115,27 +117,30 @@ class PinnedPrefixBlockPool:
             self._free_indices.append(index)
 
     def token_indices(self, block_indices: list[int], device: torch.device) -> torch.Tensor:
-        indices = [
-            int(block_index) * self.block_size + offset
-            for block_index in block_indices
-            for offset in range(self.block_size)
-        ]
-        return torch.tensor(indices, dtype=torch.long, device=device)
+        # Transfer one ID per block; expand full-page offsets on the device.
+        bases = torch.tensor(block_indices, dtype=torch.long, device=device) * self.block_size
+        offsets = torch.arange(self.block_size, dtype=torch.long, device=device)
+        return (bases[:, None] + offsets[None, :]).reshape(-1)
 
     def retained_token_indices(
         self,
         block_indices: list[int],
-        retained_offsets: list[tuple[int, ...]],
+        retained_offsets: list[tuple[int, ...] | None],
         device: torch.device,
     ) -> torch.Tensor:
         if len(block_indices) != len(retained_offsets):
             raise ValueError("Host block indices and retained offsets must have equal length.")
-        indices = [
-            int(block_index) * self.block_size + int(offset)
+        if all(offsets is None for offsets in retained_offsets):
+            return self.token_indices(block_indices, device)
+        # Ragged compacted blocks retain their explicit offset order. Expand
+        # full blocks in native CPU loops and transfer the packed vector once.
+        full_offsets = np.arange(self.block_size, dtype=np.int64)
+        parts = [
+            int(block_index) * self.block_size
+            + (full_offsets if offsets is None else np.asarray(offsets, dtype=np.int64))
             for block_index, offsets in zip(block_indices, retained_offsets)
-            for offset in offsets
         ]
-        return torch.tensor(indices, dtype=torch.long, device=device)
+        return torch.from_numpy(np.concatenate(parts)).to(device=device)
 
     def reset(self) -> None:
         self._allocated.clear()
@@ -245,8 +250,8 @@ class PrefixOffloadController:
             raise RuntimeError(
                 f"Prefix cache offload could not create transfer streams for device={device}."
             )
-        self.d2h_operations: list[PrefixD2HOperation] = []
-        self.h2d_operations: list[PrefixH2DOperation] = []
+        self.d2h_operations: deque[PrefixD2HOperation] = deque()
+        self.h2d_operations: deque[PrefixH2DOperation] = deque()
         self._h2d_by_block_id: dict[bytes, PrefixH2DOperation] = {}
         self.d2h_bytes = 0
         self.h2d_bytes = 0
@@ -287,30 +292,35 @@ class PrefixOffloadController:
             return
         if device_runtime.is_stream_capturing():
             raise RuntimeError("Prefix D2H submission is forbidden during graph capture.")
-        empty_blocks = [
-            block
-            for block in blocks
-            if int(_payload_device_slots(block, self.block_size).numel()) == 0
-        ]
-        if empty_blocks:
-            empty_ids = {block.stable_block_id for block in empty_blocks}
-            empty_host_indices = self.host_pool.allocate(len(empty_blocks))
-            for block, host_index in zip(empty_blocks, empty_host_indices):
-                self.prefix_cache.begin_d2h(block)
-                setattr(block.payload, "host_block_index", int(host_index))
-                self.prefix_cache.finish_d2h(block)
-            blocks = [block for block in blocks if block.stable_block_id not in empty_ids]
-            if not blocks:
-                return
+        transfer_positions = []
+        slot_parts = []
+        for position, block in enumerate(blocks):
+            slots = _payload_device_slots(block, self.block_size)
+            if slots.numel():
+                transfer_positions.append(position)
+                slot_parts.append(slots)
         host_indices = self.host_pool.allocate(len(blocks))
         begun: list[PrefixCacheBlock] = []
+        if not slot_parts:
+            try:
+                for block in blocks:
+                    self.prefix_cache.begin_d2h(block)
+                    begun.append(block)
+            except Exception:
+                for block in reversed(begun):
+                    self.prefix_cache.abort_d2h(block)
+                self.host_pool.free(host_indices)
+                raise
+            for block, host_index in zip(blocks, host_indices):
+                setattr(block.payload, "host_block_index", int(host_index))
+                self.prefix_cache.finish_d2h(block)
+            return
         try:
-            device_slots = torch.cat(
-                [_payload_device_slots(block, self.block_size) for block in blocks],
-                dim=0,
-            ).to(device=self.device, dtype=torch.long)
-            host_token_indices = self._host_token_indices(blocks, host_indices)
-            auxiliary_tensors = self._prepare_d2h_auxiliary(blocks, host_indices)
+            device_slots = torch.cat(slot_parts, dim=0).to(device=self.device, dtype=torch.long)
+            transfer_blocks = [blocks[i] for i in transfer_positions]
+            transfer_host_indices = [host_indices[i] for i in transfer_positions]
+            host_token_indices = self._host_token_indices(transfer_blocks, transfer_host_indices)
+            auxiliary_tensors = self._prepare_d2h_auxiliary(transfer_blocks, transfer_host_indices)
             producer_event = self._new_event(self.device, "D2H producer")
             completion_event = self._new_event(self.device, "D2H completion")
             for block in blocks:
@@ -348,7 +358,7 @@ class PrefixOffloadController:
         )
         self.d2h_bytes += byte_count
         self.d2h_submitted_operations += 1
-        self.d2h_merged_blocks += len(blocks)
+        self.d2h_merged_blocks += len(transfer_positions)
 
     def _finish_d2h(self, operation: PrefixD2HOperation) -> None:
         for block, host_index in zip(operation.blocks, operation.host_indices):
@@ -362,7 +372,7 @@ class PrefixOffloadController:
             operation = self.d2h_operations[0]
             if not device_runtime.is_event_complete(operation.completion_event):
                 break
-            self.d2h_operations.pop(0)
+            self.d2h_operations.popleft()
             self._finish_d2h(operation)
             completed += 1
         return completed
@@ -380,26 +390,36 @@ class PrefixOffloadController:
             raise ValueError("Prefix H2D submission requires at least one block.")
         if device_runtime.is_stream_capturing():
             raise RuntimeError("Prefix H2D submission is forbidden during graph capture.")
-        empty_blocks = [
-            block
-            for block in blocks
-            if int(_payload_device_slots(block, self.block_size).numel()) == 0
-        ]
-        empty_ids = {block.stable_block_id for block in empty_blocks}
-        for block in empty_blocks:
-            self.prefix_cache.begin_h2d(block)
-            self.prefix_cache.finish_h2d(block)
-        blocks = [block for block in blocks if block.stable_block_id not in empty_ids]
+        promotion_blocks = blocks
+        empty_blocks = []
+        blocks = []
+        slot_parts = []
+        for block in promotion_blocks:
+            slots = _payload_device_slots(block, self.block_size)
+            if slots.numel() == 0:
+                empty_blocks.append(block)
+            else:
+                blocks.append(block)
+                slot_parts.append(slots)
+        begun: list[PrefixCacheBlock] = []
         if not blocks:
+            try:
+                for block in promotion_blocks:
+                    self.prefix_cache.begin_h2d(block)
+                    begun.append(block)
+            except Exception:
+                for block in reversed(begun):
+                    self.prefix_cache.abort_h2d(block)
+                raise
+            for block in empty_blocks:
+                self.prefix_cache.finish_h2d(block)
             return None
+        # Zero-token blocks still participate in the root-to-leaf residency
+        # transaction; only their physical payload is omitted from the transfer.
         host_indices = [_payload_host_index(block) for block in blocks]
         host_token_indices = self._host_token_indices(blocks, host_indices)
-        device_slots = torch.cat(
-            [_payload_device_slots(block, self.block_size) for block in blocks],
-            dim=0,
-        ).to(device=self.device, dtype=torch.long)
+        device_slots = torch.cat(slot_parts, dim=0).to(device=self.device, dtype=torch.long)
         auxiliary_tensors = self._prepare_h2d_auxiliary(blocks, host_indices)
-        begun: list[PrefixCacheBlock] = []
         try:
             layer_events = [
                 self._new_event(self.device, f"H2D layer {layer_index}")
@@ -407,7 +427,7 @@ class PrefixOffloadController:
             ]
             producer_event = self._new_event(self.device, "H2D producer")
             completion_event = self._new_event(self.device, "H2D completion")
-            for block in blocks:
+            for block in promotion_blocks:
                 self.prefix_cache.begin_h2d(block)
                 begun.append(block)
             device_runtime.record_event(producer_event, device=self.device)
@@ -461,6 +481,8 @@ class PrefixOffloadController:
         self.h2d_bytes += byte_count
         self.h2d_submitted_operations += 1
         self.h2d_merged_blocks += len(blocks)
+        for block in empty_blocks:
+            self.prefix_cache.finish_h2d(block)
         return operation
 
     def _prepare_d2h_auxiliary(
@@ -521,17 +543,18 @@ class PrefixOffloadController:
 
     def poll_h2d(self) -> int:
         completed = 0
-        remaining: list[PrefixH2DOperation] = []
-        for operation in self.h2d_operations:
+        # Every completion event is recorded on the same H2D stream. A pending
+        # head also bounds the readiness of every later operation.
+        while self.h2d_operations:
+            operation = self.h2d_operations[0]
             if not device_runtime.is_event_complete(operation.completion_event):
-                remaining.append(operation)
-                continue
+                break
+            self.h2d_operations.popleft()
             for block in operation.blocks:
                 self.prefix_cache.finish_h2d(block)
                 self._h2d_by_block_id.pop(block.stable_block_id, None)
             self.h2d_completed_operations += 1
             completed += 1
-        self.h2d_operations = remaining
         return completed
 
     def poll(self) -> tuple[int, int]:

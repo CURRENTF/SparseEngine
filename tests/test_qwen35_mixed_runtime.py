@@ -1862,8 +1862,8 @@ def test_mixed_cpu_only_hit_reclaims_other_device_block_before_promotion():
             for payload in payloads:
                 self.allocate_prefix_kv_payload_device(payload)
 
-        def attach_prefix_kv_payload(self, seq, payload):
-            self.attachments.append((seq.seq_id, payload))
+        def attach_prefix_kv_payloads(self, seq, payloads):
+            self.attachments.extend((seq.seq_id, payload) for payload in payloads)
 
         def validate_prefix_kv_attach(self, seq):
             assert seq.seq_id not in {attached_seq for attached_seq, _ in self.attachments}
@@ -1907,7 +1907,7 @@ def test_mixed_cpu_only_hit_reclaims_other_device_block_before_promotion():
     )
     coordinator.offload_controller = FakeController()
     coordinator.seq_id_to_prefix_blocks = {}
-    coordinator._step_h2d_operations = []
+    coordinator._step_h2d_operations = {}
     seq = SimpleNamespace(
         seq_id=7,
         prefix_cache_hit_len=4,
@@ -2002,7 +2002,7 @@ def test_mixed_recurrent_attach_failure_rolls_back_kv_row_and_prefix_ref(
     )
     coordinator.offload_controller = None
     coordinator.seq_id_to_prefix_blocks = {}
-    coordinator._step_h2d_operations = []
+    coordinator._step_h2d_operations = {}
     seq = SimpleNamespace(
         seq_id=7,
         prefix_cache_hit_len=4,
@@ -2015,7 +2015,7 @@ def test_mixed_recurrent_attach_failure_rolls_back_kv_row_and_prefix_ref(
 
     assert block.ref_count == 0
     assert coordinator.seq_id_to_prefix_blocks == {}
-    assert coordinator._step_h2d_operations == []
+    assert not coordinator._step_h2d_operations
     assert manager.seq_id_to_row == ({7: 0} if row_preexisted else {})
     assert list(manager.free_rows) == ([1] if row_preexisted else [0, 1])
     assert manager.row_seq_lens == [0, 0]
@@ -2044,7 +2044,7 @@ def test_mixed_runtime_uses_prefix_hit_as_virtual_prefill_boundary():
 def test_mixed_runtime_drops_step_h2d_references_after_forward():
     coordinator = object.__new__(PrefixCacheCoordinator)
     operation = SimpleNamespace(auxiliary_tensors=(torch.ones(2),))
-    coordinator._step_h2d_operations = [operation]
+    coordinator._step_h2d_operations = {id(operation): operation}
     coordinator.record_step_tokens = lambda seqs, is_prefill: None
     coordinator.commit_pending_blocks = lambda seqs: None
     cache_manager = SimpleNamespace(on_forward_end=lambda seqs, is_prefill: None)
@@ -2056,7 +2056,7 @@ def test_mixed_runtime_drops_step_h2d_references_after_forward():
 
     runtime_state.on_forward_end([], is_prefill=True)
 
-    assert coordinator._step_h2d_operations == []
+    assert not coordinator._step_h2d_operations
 
 
 def test_mixed_prefix_rejects_prefill_chunk_crossing_recurrent_snapshot_boundary():
@@ -2330,7 +2330,7 @@ def test_mixed_offload_release_demotes_both_payloads_then_host_evicts():
         free_prefix_recurrent_payload=lambda payload: None
     )
     coordinator.seq_id_to_prefix_blocks = {}
-    coordinator.seq_id_to_materialized_blocks = {7: [block]}
+    coordinator.seq_id_to_materialized_blocks = {7: {block.stable_block_id: block}}
     coordinator.prefix_lookup_cache = PrefixLookupCache()
     coordinator.runtime_states = {}
     coordinator.pending_blocks = {}
@@ -2595,7 +2595,7 @@ def test_mixed_prefix_mark_failure_rolls_back_radix_ref_and_allocator_ownership(
         coordinator.commit_pending_blocks([seq])
 
     assert len(coordinator.prefix_cache) == 0
-    assert coordinator.seq_id_to_materialized_blocks.get(seq.seq_id, []) == []
+    assert not coordinator.seq_id_to_materialized_blocks.get(seq.seq_id)
     assert coordinator.pending_recurrent_bytes == 0
     assert coordinator.pending_block_ids == set()
     assert allocator.cached_ranges == set()
@@ -2792,7 +2792,7 @@ def test_quest_mixed_prefix_payload_spans_multiple_pages():
 
     payload = manager.build_prefix_kv_payload(SimpleNamespace(seq_id=7), 0, 4)
     manager.seq_id_to_row.pop(7)
-    manager.attach_prefix_kv_payload(SimpleNamespace(seq_id=8), payload)
+    manager.attach_prefix_kv_payloads(SimpleNamespace(seq_id=8), [payload])
 
     assert payload.block_slot is None
     assert payload.block_slots.tolist() == [0, 2]

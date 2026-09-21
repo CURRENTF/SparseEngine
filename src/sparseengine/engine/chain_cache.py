@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import secrets
 import sys
@@ -376,6 +377,8 @@ class ChainCacheIndex:
         self.max_token_history_tokens = max_token_history_tokens
         self._token_history_tokens = 0
         self.records: dict[str, ChainRecord] = {}
+        self.active_records: dict[str, ChainRecord] = {}
+        self._routing_snapshot_cache: ChainRoutingSnapshot | None = None
         self.seq_id_to_chain_id: dict[int, str] = {}
         self.tombstones: OrderedDict[str, int] = OrderedDict()
         self._clock = 0
@@ -397,7 +400,16 @@ class ChainCacheIndex:
         self._clock += 1
         return self._clock
 
+    def _set_record_state(self, record: ChainRecord, state: ChainState) -> None:
+        self._routing_snapshot_cache = None
+        record.state = state
+        if state is ChainState.ACTIVE:
+            self.active_records[record.chain_id] = record
+        else:
+            self.active_records.pop(record.chain_id, None)
+
     def _add_tombstone(self, chain_id: str) -> None:
+        self._routing_snapshot_cache = None
         self.tombstones.pop(chain_id, None)
         self.tombstones[chain_id] = self._tick()
         while len(self.tombstones) > self.max_tombstones:
@@ -656,7 +668,10 @@ class ChainCacheIndex:
         remaining_row_deficit = max(0, int(row_deficit))
         victims: list[str] = []
         candidates = (
-            candidate for candidate in self.idle_resident_lru()
+            candidate for candidate in (
+                self.idle_resident_lru()
+                if remaining_row_deficit > 0 or any(slot_deficits) else ()
+            )
             if candidate.chain_id != chain_id
         )
         for victim in candidates:
@@ -723,6 +738,7 @@ class ChainCacheIndex:
                 last_access=self._tick(),
             )
             self.records[plan.chain_id] = record
+            self._set_record_state(record, ChainState.ACTIVE)
             self.seq_id_to_chain_id[int(plan.seq_id)] = plan.chain_id
             record.reserved_slots_by_layer = tuple(
                 int(value) for value in plan.reserved_slots_by_layer
@@ -736,7 +752,7 @@ class ChainCacheIndex:
                 f"Chain {plan.chain_id!r} is not IDLE during admission.",
                 chain_id=plan.chain_id,
             )
-        record.state = ChainState.ACTIVE
+        self._set_record_state(record, ChainState.ACTIVE)
         record.last_input_token_count = int(plan.input_token_count)
         record.last_access = self._tick()
         record.reserved_slots_by_layer = tuple(
@@ -811,7 +827,7 @@ class ChainCacheIndex:
         record.resident_rows = int(resident_rows)
         record.reserved_slots_by_layer = ()
         record.reserved_rows = 0
-        record.state = ChainState.IDLE
+        self._set_record_state(record, ChainState.IDLE)
         record.last_access = self._tick()
         self._stats["chain_cache_finished"] += 1
         return record
@@ -820,17 +836,23 @@ class ChainCacheIndex:
         record = self.lookup(chain_id)
         self._drop_token_history(record)
         self.records.pop(chain_id, None)
+        self.active_records.pop(chain_id, None)
         self.seq_id_to_chain_id.pop(int(record.seq_id), None)
         self._add_tombstone(chain_id)
         self._stats["chain_cache_invalidated"] += 1
         return record
 
-    def idle_resident_lru(self) -> list[ChainRecord]:
-        return sorted(
-            (record for record in self.records.values()
-             if record.state is ChainState.IDLE and record.resident_rows > 0),
-            key=lambda record: (record.last_access, record.chain_id),
-        )
+    def idle_resident_lru(self) -> Iterable[ChainRecord]:
+        # Most pressure events need only a few victims. Heapify once and order
+        # only the consumed prefix, preserving the same LRU and chain-ID ties.
+        candidates = [
+            (record.last_access, record.chain_id, record)
+            for record in self.records.values()
+            if record.state is ChainState.IDLE and record.resident_rows > 0
+        ]
+        heapq.heapify(candidates)
+        while candidates:
+            yield heapq.heappop(candidates)[2]
 
     def evict(self, chain_id: str) -> ChainRecord:
         record = self.lookup(chain_id)
@@ -841,6 +863,7 @@ class ChainCacheIndex:
             )
         self._drop_token_history(record)
         self.records.pop(chain_id, None)
+        self.active_records.pop(chain_id, None)
         self.seq_id_to_chain_id.pop(int(record.seq_id), None)
         self._add_tombstone(chain_id)
         self._stats["chain_cache_evicted"] += 1
@@ -867,7 +890,11 @@ class ChainCacheIndex:
         }
 
     def routing_snapshot(self) -> ChainRoutingSnapshot:
-        return ChainRoutingSnapshot(
+        # Dispatcher refreshes before and after every step. Decode, offload
+        # completion and residency changes do not change logical chain routing.
+        if self._routing_snapshot_cache is not None:
+            return self._routing_snapshot_cache
+        snapshot = ChainRoutingSnapshot(
             enabled=True,
             active_chain_ids=frozenset(
                 record.chain_id
@@ -881,19 +908,15 @@ class ChainCacheIndex:
             ),
             tombstone_chain_ids=frozenset(self.tombstones),
         )
+        self._routing_snapshot_cache = snapshot
+        return snapshot
 
     def stats(self) -> dict[str, int]:
         return {
             **self._stats,
             "chain_cache_entries": len(self.records),
-            "chain_cache_active": sum(
-                record.state is ChainState.ACTIVE
-                for record in self.records.values()
-            ),
-            "chain_cache_idle": sum(
-                record.state is ChainState.IDLE
-                for record in self.records.values()
-            ),
+            "chain_cache_active": len(self.active_records),
+            "chain_cache_idle": len(self.records) - len(self.active_records),
             "chain_cache_tombstones": len(self.tombstones),
             "chain_cache_tombstone_capacity": self.max_tombstones,
             "chain_cache_token_history_tokens": self._token_history_tokens,
@@ -913,7 +936,9 @@ class ChainCacheIndex:
         }
 
     def reset(self) -> None:
+        self._routing_snapshot_cache = None
         self.records.clear()
+        self.active_records.clear()
         self.seq_id_to_chain_id.clear()
         self.tombstones.clear()
         self._clock = 0
@@ -1001,8 +1026,8 @@ class ChainCacheCoordinator:
             diagnostics.update(
                 kv_layer_indices=tuple(self.cache_manager.kv_transformer_layer_indices()),
                 resident_sequence_capacity=getattr(self.config, "max_num_seqs_in_gpu", None),
-                active_chains=sum(r.state is ChainState.ACTIVE for r in self.index.records.values()),
-                idle_chains=sum(r.state is ChainState.IDLE for r in self.index.records.values()),
+                active_chains=len(self.index.active_records),
+                idle_chains=len(self.index.records) - len(self.index.active_records),
                 input_tokens=int(token_count),
                 reused_tokens=reused,
                 suffix_tokens=suffix_tokens,
@@ -1037,10 +1062,12 @@ class ChainCacheCoordinator:
         )
         outstanding: list[int] = []
         outstanding_rows = 0
-        for record in self.index.records.values():
-            if record.state is not ChainState.ACTIVE:
-                continue
+        for record in self.index.active_records.values():
             if exclude_seq_ids is not None and int(record.seq_id) in exclude_seq_ids:
+                continue
+            # Final prefill clears these promises. Decoding chains then owe
+            # nothing here, so their per-layer physical rows need no query.
+            if not record.reserved_slots_by_layer and int(record.reserved_rows) <= 0:
                 continue
             reserved = tuple(
                 int(value) for value in record.reserved_slots_by_layer
@@ -1139,10 +1166,13 @@ class ChainCacheCoordinator:
     def _offload_plan(self, plan: ChainAdmissionPlan) -> ChainAdmissionPlan:
         if self.offload is None:
             return plan
-        demote = tuple(chain_id for chain_id in plan.victim_chain_ids
-                       if self.index.records[chain_id].seq_id in self.offload.snapshots)
-        return replace(plan, demote_chain_ids=demote,
-                       victim_chain_ids=tuple(c for c in plan.victim_chain_ids if c not in demote))
+        demote: list[str] = []
+        evict: list[str] = []
+        for chain_id in plan.victim_chain_ids:
+            target = (demote if self.index.records[chain_id].seq_id in self.offload.snapshots
+                      else evict)
+            target.append(chain_id)
+        return replace(plan, demote_chain_ids=tuple(demote), victim_chain_ids=tuple(evict))
 
     def validate_admission_plan(
         self,
@@ -1222,16 +1252,16 @@ class ChainCacheCoordinator:
                 chain_id=record.chain_id,
             )
         old_bytes = getattr(self.offload.snapshots.get(record.seq_id), "nbytes", 0)
-        candidates = sorted(
-            (r for r in self.index.records.values() if r.chain_id != record.chain_id
-             and r.seq_id in self.offload.snapshots),
+        candidates = [
             # ACTIVE snapshots are obsolete allocations retained only for reuse.
             # Their validity does not depend on rank-local event completion.
-            key=lambda r: (r.state is not ChainState.ACTIVE, r.last_access, r.chain_id),
-        )
-        for victim in candidates:
-            if self.offload.used_bytes - old_bytes + required <= self.offload.capacity_bytes:
-                break
+            (r.state is not ChainState.ACTIVE, r.last_access, r.chain_id, r)
+            for r in self.index.records.values() if r.chain_id != record.chain_id
+            and r.seq_id in self.offload.snapshots
+        ] if self.offload.used_bytes - old_bytes + required > self.offload.capacity_bytes else []
+        heapq.heapify(candidates)
+        while candidates and self.offload.used_bytes - old_bytes + required > self.offload.capacity_bytes:
+            victim = heapq.heappop(candidates)[3]
             self.offload.drop(victim.seq_id)
             if victim.resident_rows == 0:
                 self.index.evict(victim.chain_id)

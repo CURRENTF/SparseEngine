@@ -96,7 +96,9 @@ def build_prefix_cache_fingerprint(config: Any, block_size: int) -> bytes:
 
 
 def _pack_token_ids(token_ids: list[int] | tuple[int, ...]) -> bytes:
-    return b"".join(struct.pack("<q", int(token_id)) for token_id in token_ids)
+    # One native pack preserves signed-int64 little-endian IDs without a
+    # separate Python call and temporary bytes object for every token.
+    return struct.pack(f"<{len(token_ids)}q", *map(int, token_ids))
 
 
 def _stable_prefix_block_id(
@@ -1425,6 +1427,27 @@ class RadixPrefixIndex:
         demoted_weight = 0
         candidate_heap: list[tuple[int, int, bytes]] = []
         queued: set[bytes] = set()
+        # Each edge is counted once. Recounting a parent's resident children
+        # after every demotion makes a wide branch quadratic in its fanout.
+        device_children = {
+            block_id: 0 for block_id, block in self.blocks.items()
+            if block.residency.device_present
+        }
+        for block_id in device_children:
+            parent_id = self.blocks[block_id].parent_block_id
+            if parent_id is not None:
+                device_children[parent_id] += 1
+
+        def demotable(block: PrefixCacheBlock) -> bool:
+            residency = block.residency
+            return (
+                int(block.ref_count) == 0
+                and int(block.eviction_priority) >= 0
+                and residency.device_present
+                and residency.host_present
+                and residency.transfer is None
+                and device_children[block.stable_block_id] == 0
+            )
 
         def queue_if_demotable(
             block_id: bytes | None,
@@ -1434,7 +1457,7 @@ class RadixPrefixIndex:
             if block_id is None or block_id in queued:
                 return
             block = self.blocks.get(block_id)
-            if block is None or not self.can_demote_device(block):
+            if block is None or not demotable(block):
                 return
             candidate = (
                 -int(block.eviction_priority),
@@ -1447,8 +1470,8 @@ class RadixPrefixIndex:
                 candidate_heap.append(candidate)
             queued.add(block_id)
 
-        for block_id, block in self.blocks.items():
-            if block.residency.device_present and self.device_child_count(block_id) == 0:
+        for block_id, child_count in device_children.items():
+            if child_count == 0:
                 queue_if_demotable(block_id, heap_ready=False)
         heapq.heapify(candidate_heap)
 
@@ -1457,7 +1480,7 @@ class RadixPrefixIndex:
                 _, _, block_id = heapq.heappop(candidate_heap)
                 queued.discard(block_id)
                 block = self.blocks.get(block_id)
-                if block is not None and self.can_demote_device(block):
+                if block is not None and demotable(block):
                     break
             else:
                 break
@@ -1473,7 +1496,11 @@ class RadixPrefixIndex:
             demoted_weight += weight
             self.device_demoted_blocks += 1
             self._mark_capacity_mutated()
-            queue_if_demotable(block.parent_block_id)
+            parent_id = block.parent_block_id
+            if parent_id is not None:
+                device_children[parent_id] -= 1
+                if device_children[parent_id] == 0:
+                    queue_if_demotable(parent_id)
         return demoted
 
     def can_evict_host(self, block: PrefixCacheBlock) -> bool:
@@ -1489,27 +1516,40 @@ class RadixPrefixIndex:
         return self.child_count(block.stable_block_id) == 0
 
     def evict_host_until_freeable(self, needed_blocks: int) -> list[PrefixCacheBlock]:
+        return self.evict_host_until_weight(needed_blocks, lambda _block: 1)
+
+    def evict_host_until_weight(
+        self,
+        needed_weight: int,
+        block_weight: Callable[[PrefixCacheBlock], int],
+    ) -> list[PrefixCacheBlock]:
+        """Evict host leaves once per batch, including variable-size payloads."""
         evicted: list[PrefixCacheBlock] = []
-        needed_blocks = int(needed_blocks)
+        needed_weight = int(needed_weight)
+        if needed_weight <= 0:
+            return evicted
+        evicted_weight = 0
         candidate_heap: list[tuple[int, int, bytes]] = []
         queued: set[bytes] = set()
 
-        def queue_if_evictable(block_id: bytes | None) -> None:
+        def queue_if_evictable(block_id: bytes | None, *, heap_ready: bool = True) -> None:
             if block_id is None or block_id in queued:
                 return
             block = self.blocks.get(block_id)
             if block is None or not self.can_evict_host(block):
                 return
-            heapq.heappush(
-                candidate_heap,
-                (-int(block.eviction_priority), int(block.last_access), block_id),
-            )
+            candidate = (-int(block.eviction_priority), int(block.last_access), block_id)
+            if heap_ready:
+                heapq.heappush(candidate_heap, candidate)
+            else:
+                candidate_heap.append(candidate)
             queued.add(block_id)
 
         for block_id in self.backend.leaf_block_ids():
-            queue_if_evictable(block_id)
+            queue_if_evictable(block_id, heap_ready=False)
+        heapq.heapify(candidate_heap)
 
-        while len(evicted) < needed_blocks:
+        while evicted_weight < needed_weight:
             while candidate_heap:
                 _, _, block_id = heapq.heappop(candidate_heap)
                 queued.discard(block_id)
@@ -1518,8 +1558,15 @@ class RadixPrefixIndex:
                     break
             else:
                 break
+            weight = int(block_weight(block))
+            if weight < 0:
+                raise ValueError(
+                    "Prefix cache host eviction weight must be non-negative: "
+                    f"block={block.stable_block_id.hex()[:16]} weight={weight}."
+                )
             parent_id = block.parent_block_id
             evicted.append(self._remove_block_from_index(block.stable_block_id))
+            evicted_weight += weight
             self.host_evicted_blocks += 1
             queue_if_evictable(parent_id)
         return evicted

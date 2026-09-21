@@ -364,7 +364,16 @@ class Sequence:
         # 优化 IPC：不发送 slot_mapping，只发送元数据和必要的 token
         if self.num_completion_tokens == 0 or self.is_recompute_prefill:
             chunk_size = self.current_chunk_size if self.current_chunk_size is not None else self.num_prompt_tokens
-            data = self.token_ids[self.num_prefilled_tokens : self.num_prefilled_tokens + chunk_size]
+            if (
+                self.num_prefilled_tokens == 0
+                and chunk_size == self.num_prompt_tokens
+                and self._prompt_token_ids is not None
+            ):
+                data = self._prompt_token_ids
+            else:
+                data = self.token_ids[
+                    self.num_prefilled_tokens : self.num_prefilled_tokens + chunk_size
+                ]
         elif self.is_recompute_decode:
             data = self.decode_input_token
         else:
@@ -426,14 +435,17 @@ class Sequence:
         self._repetition_penalty_tokens = None
 
         if self.num_completion_tokens == 0 or self.is_recompute_prefill:
-            self.token_ids = data
+            self.token_ids = list(data) if isinstance(data, tuple) else data
             self.last_token = self.token_ids[-1] if self.token_ids else None
-            self._prompt_token_ids = (
-                tuple(int(token_id) for token_id in data)
-                if self.num_prefilled_tokens == 0
+            if (
+                self.num_prefilled_tokens == 0
                 and len(data) == self.num_prompt_tokens
-                else None
-            )
+            ):
+                self._prompt_token_ids = (
+                    data if isinstance(data, tuple) else tuple(data)
+                )
+            else:
+                self._prompt_token_ids = None
         else:
             self.last_token = data
             self.token_ids = []

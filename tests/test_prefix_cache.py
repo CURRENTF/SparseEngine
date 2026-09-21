@@ -133,7 +133,7 @@ def _make_standard_manager_for_prefix(block_size=2, method=""):
     manager._scheduler_freeable_block_ids = None
     manager._scheduler_reclaimable_slots = None
     manager.prefix_offload_controller = None
-    manager._prefix_offload_step_h2d_operations = []
+    manager._prefix_offload_step_h2d_operations = {}
     manager._init_prefix_cache_runtime()
     return manager
 
@@ -416,7 +416,7 @@ def _make_quest_manager_for_prefix(page_size=2):
     manager.seq_id_to_prefix_blocks = {}
     manager.seq_id_to_cached_pages = {}
     manager.prefix_offload_controller = None
-    manager._prefix_offload_step_h2d_operations = []
+    manager._prefix_offload_step_h2d_operations = {}
     manager._init_prefix_cache_runtime()
     return manager
 
@@ -2331,7 +2331,7 @@ def test_h2d_transfer_stream_waits_for_index_producer_event(monkeypatch):
     controller._transfer_per_layer = lambda **kwargs: trace.append(
         ("transfer", int(kwargs["dst_k"].data_ptr()))
     )
-    controller.h2d_operations = []
+    controller.h2d_operations = deque()
     controller._h2d_by_block_id = {}
     controller.h2d_bytes = 0
     controller.h2d_submitted_operations = 0
@@ -2817,7 +2817,7 @@ def test_standard_duplicate_materialization_holds_parent_until_sequence_free():
     assert block.ref_count == 1
     assert not manager.prefix_cache.can_evict(block)
     assert manager.prefix_cache.evict_until_freeable(1) == []
-    assert manager.seq_id_to_materialized_blocks[replay.seq_id] == [block]
+    assert list(manager.seq_id_to_materialized_blocks[replay.seq_id].values()) == [block]
     assert manager.seq_id_to_cached_ranges.get(replay.seq_id, []) == []
 
     manager._record_prefix_materialization(replay, [3, 4], replay_slots[2:])
@@ -3694,7 +3694,10 @@ def test_quest_admission_counts_cascade_freeable_prefix_pages():
     assert manager.prompt_admission_free_slots() == 6
 
 
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", [
+    "cpu",
+    pytest.param("cuda", marks=pytest.mark.cuda),
+])
 def test_prefill_inputs_keep_values_across_inflight_chunks(device):
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("requires CUDA")
@@ -3722,7 +3725,16 @@ def test_prefill_inputs_keep_values_across_inflight_chunks(device):
 @pytest.mark.parametrize("block_size,method,device,keep", [
     (1, "", "cpu", [1, 4]), (2, "omnikv", "cpu", [1, 4]),
     (1, "omnikv", "cpu", []),
-    pytest.param(1, "omnikv", "cuda", [1, 4], marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")),
+    pytest.param(
+        1,
+        "omnikv",
+        "cuda",
+        [1, 4],
+        marks=(
+            pytest.mark.cuda,
+            pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required"),
+        ),
+    ),
 ])
 def test_multi_range_prune_preserves_gaps_empty_blocks_and_logical_positions(block_size, method, device, keep):
     # A global budget can empty an entire selected block; gap KV must survive.
@@ -4074,7 +4086,7 @@ def test_single_allocation_overflow_preserves_rows_and_pool(method, existing):
             allocate = lambda: manager._allocate_deltakv_full(10, size)
             free_count = lambda: manager._num_free_slots_deltakv_full
     before = (dict(mapping), list(rows), lengths.copy(), free_count(), slots.clone(), free_stack.clone())
-    with pytest.raises(RuntimeError, match='max_model_len'):
+    with pytest.raises(RuntimeError, match='max_model_len|row capacity'):
         allocate()
     assert mapping == before[0]
     assert list(rows) == before[1]

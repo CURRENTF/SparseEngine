@@ -112,10 +112,14 @@ def stranded_rank(*, full=False):
 def engine(ranks):
     state = ranks[0][2]
     calls = []
+    runners = []
+    for rank in ranks:
+        runner = object.__new__(ModelRunner)
+        runner.runtime_state = rank[2]
+        runners.append(runner)
     def call(method, *args):
         calls.append((method, args))
-        results = [getattr(ModelRunner, method)(SimpleNamespace(runtime_state=rank[2]), *args)
-                   for rank in ranks]
+        results = [getattr(runner, method)(*args) for runner in runners]
         assert all(result == results[0] for result in results)
         return results[0]
     result = object.__new__(LLMEngine)
@@ -166,7 +170,7 @@ def test_no_idle_victim_keeps_explicit_failure_and_active_ownership():
     # An ACTIVE owner must never be discarded just to satisfy another prompt.
     from sparseengine.engine.chain_cache import ChainState
     for name in ("old", "keep"):
-        coordinator.index.lookup(name).state = ChainState.ACTIVE
+        coordinator.index._set_record_state(coordinator.index.lookup(name), ChainState.ACTIVE)
     with pytest.raises(RuntimeError, match="All prompt admissions were deferred"):
         instance.scheduler.schedule()
     assert not calls

@@ -776,6 +776,42 @@ class SnapKVCacheManager(CacheManager):
     def create_chain_offload(self, capacity_bytes: int) -> ChainOffloadController:
         return ChainOffloadController(self, capacity_bytes)
 
+    def chain_token_slots(self, layer: int, seq_id: int) -> torch.Tensor:
+        row = self.seq_id_to_row[layer][int(seq_id)]
+        length = int(self.row_seq_lens[layer][row])
+        return self.buffer_req_to_token_slots[layer][row, :length]
+
+    def allocate_chain_restore(
+        self, seq_id: int, lengths_by_layer: tuple[int, ...],
+    ) -> dict[int, torch.Tensor]:
+        """All-layer restore allocation; payload transfer belongs to offload.
+
+        Preflight uses CPU mirrors only. A partial allocation failure is cleaned
+        by the ordinary method-specific free_seq, including sidecars and rows.
+        The six chain methods inherit this physical allocator, not an algorithm.
+        """
+        seq_id = int(seq_id)
+        layers = tuple(self.kv_transformer_layer_indices())
+        if len(lengths_by_layer) != len(layers):
+            raise ValueError("Chain restore lengths must cover every KV layer.")
+        if self.chain_has_residency(seq_id):
+            raise RuntimeError("Cannot restore over a resident chain.")
+        for layer, length in zip(layers, lengths_by_layer):
+            if type(length) is not int or length < 0:
+                raise ValueError("Chain restore lengths must be non-negative integers.")
+            if length > self.buffer_req_to_token_slots[layer].shape[1]:
+                raise ValueError("Chain restore exceeds the cache row capacity.")
+            if not self.free_rows[layer] or self._num_free_slots[layer] < length:
+                raise RuntimeError("Chain restore has insufficient reserved GPU rows/slots.")
+        try:
+            return {
+                layer: self._allocate(layer, seq_id, length)
+                for layer, length in zip(layers, lengths_by_layer)
+            }
+        except BaseException:
+            self.free_seq(seq_id)
+            raise
+
     def chain_storage_tensors(self, layer: int) -> tuple[torch.Tensor, torch.Tensor]:
         storage = getattr(self, "attention_cache_storage", None)
         if storage is not None:
@@ -1431,26 +1467,37 @@ class SnapKVCacheManager(CacheManager):
     @torch.no_grad()
     def _allocate(self, layer_idx: int, seq_id: int, size: int) -> torch.Tensor:
         with profiler.record("cache_allocate"):
-            assert self._num_free_slots[layer_idx] >= size, (
-                f"Out of KV cache slots: need {size}, free {self._num_free_slots[layer_idx]}"
-            )
-
-            row_idx = self.seq_id_to_row[layer_idx].get(seq_id)
-            cur_len = 0 if row_idx is None else int(self.row_seq_lens[layer_idx][row_idx])
-            if int(cur_len) + int(size) > int(self.max_model_len):
+            if type(size) is not int or size < 0:
+                raise ValueError("KV allocation size must be a non-negative integer.")
+            if self._num_free_slots[layer_idx] < size:
+                raise RuntimeError(
+                    f"Out of KV cache slots: need {size}, free {self._num_free_slots[layer_idx]}"
+                )
+            existing_row = self.seq_id_to_row[layer_idx].get(seq_id)
+            cur_len = 0 if existing_row is None else int(self.row_seq_lens[layer_idx][existing_row])
+            limit = min(int(self.max_model_len), self.buffer_req_to_token_slots[layer_idx].shape[1])
+            if cur_len + size > limit:
                 raise RuntimeError(
                     "KV row length exceeds max_model_len in _allocate: "
-                    f"layer={layer_idx} seq_id={seq_id} row={row_idx} "
-                    f"cur_len={int(cur_len)} size={int(size)} max_model_len={int(self.max_model_len)}"
+                    f"layer={layer_idx} seq_id={seq_id} row={existing_row} "
+                    f"cur_len={cur_len} size={size} max_model_len={limit}"
                 )
-
             row_idx = self._get_free_row(layer_idx, seq_id)
             ptr = self._num_free_slots[layer_idx]
             select_index = self.free_slots_stack[layer_idx][ptr - size: ptr]
-            self._num_free_slots[layer_idx] -= size
-
-            self.buffer_req_to_token_slots[layer_idx][row_idx, cur_len: cur_len + size] = select_index
-            self.row_seq_lens[layer_idx][row_idx] += size
+            try:
+                # Publish ownership only after the row write succeeds. The ID
+                # view is not copied; ordinary prefill keeps its zero-copy path.
+                self.buffer_req_to_token_slots[layer_idx][row_idx, cur_len:cur_len + size] = select_index
+                self.row_seq_lens[layer_idx][row_idx] = cur_len + size
+                self._num_free_slots[layer_idx] = ptr - size
+            except BaseException:
+                self._num_free_slots[layer_idx] = ptr
+                self.row_seq_lens[layer_idx][row_idx] = cur_len
+                if existing_row is None:
+                    self.seq_id_to_row[layer_idx].pop(seq_id, None)
+                    self.free_rows[layer_idx].appendleft(row_idx)
+                raise
             return select_index
 
     def _ensure_decode_buffers(self, batch_size: int):
@@ -1611,7 +1658,9 @@ class SnapKVCacheManager(CacheManager):
             for layer_idx in self.kv_transformer_layer_indices():
                 row_idx = self.seq_id_to_row[layer_idx].pop(seq_id, None)
                 if row_idx is None:
-                    raise ValueError
+                    # A failed prepare/restore can own only a subset of layers.
+                    # Repeated terminal cleanup must still visit the other layers.
+                    continue
                 self.raw_kv_offload_buffer.release_layer(
                     layer_idx=layer_idx,
                     row_idx=int(row_idx),

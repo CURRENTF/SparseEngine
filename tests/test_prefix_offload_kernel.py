@@ -465,7 +465,7 @@ def test_mixed_prefix_d2h_bounds_recurrent_staging_and_drains_all_batches(
 
     assert all(block.residency.host_present for block in blocks)
     assert controller.pending_d2h_blocks == 0
-    assert controller.d2h_operations == []
+    assert not controller.d2h_operations
     assert controller.d2h_submitted_operations == 3
     assert controller.d2h_completed_operations == 3
     assert max(stack_block_counts) == 2
