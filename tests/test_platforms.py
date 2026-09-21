@@ -4,6 +4,17 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+
+def test_cuda_total_memory_probe_does_not_create_per_device_contexts(monkeypatch):
+    from sparseengine.platforms.cuda import CudaPlatform
+
+    def fail_memory_probe(*args, **kwargs):
+        raise AssertionError("Config must not query live memory on every worker device")
+
+    monkeypatch.setattr(torch.cuda, "mem_get_info", fail_memory_probe)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda rank: SimpleNamespace(total_memory=1000 + rank))
+    assert CudaPlatform().get_total_memory(3) == 1003
+
 def test_explicit_cpu_platform_is_lazy_and_available(monkeypatch):
     monkeypatch.setenv("SPARSEENGINE_PLATFORM", "cpu")
     platforms = importlib.import_module("sparseengine.platforms")

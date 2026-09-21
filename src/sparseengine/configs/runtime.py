@@ -33,7 +33,7 @@ from sparseengine.configs.prefix_cache import (
     finalize_prefix_cache,
     normalize_prefix_cache,
 )
-from sparseengine.configs.scheduling import normalize_scheduling
+from sparseengine.configs.scheduling import normalize_scheduling, resolve_prefill_token_budget
 from sparseengine.configs.sparse import (
     finalize_sparse_layout,
     normalize_prefill_sparse_method,
@@ -59,7 +59,8 @@ class Config(
     ObservabilityConfig,
 ):
     model: str
-    max_num_batched_tokens: int = 65536
+    max_num_batched_tokens: int | str = "auto"
+    max_num_batched_tokens_auto: bool = field(default=False, init=False)
     max_num_seqs_in_batch: int = 32  # 不能设置太大
     max_model_len: int | None = None
     max_model_len_auto: bool = field(default=False, init=False)
@@ -72,7 +73,8 @@ class Config(
     favor_min_decoding_seqs: int | None = None
     max_num_seqs_in_gpu: int | None = None
 
-    engine_prefill_chunk_size: int | None = 8192
+    engine_prefill_chunk_size: int | str | None = "auto"
+    engine_prefill_chunk_size_auto: bool = field(default=False, init=False)
     long_prefill_offload_threshold: int = 64 * 1024
     mlp_chunk_size: int = 16384
     mla_prefill_workspace_bytes: int = 6 * 1024**3
@@ -158,6 +160,7 @@ class Config(
         normalize_deltakv_storage(self)
         normalize_platform(self)
         load_and_validate_model(self)
+        resolve_prefill_token_budget(self)
         from sparseengine.configs.moe_communication import validate_moe_backend
 
         validate_moe_backend(self)

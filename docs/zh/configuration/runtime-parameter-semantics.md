@@ -24,12 +24,26 @@ Prefill 保持串行；已有的 shared expert 融合路径继续使用融合。
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `max_num_batched_tokens` | int | `65536` | 每轮调度的 token 预算。 |
+| `max_num_batched_tokens` | int / `auto` | `auto` | 每轮调度的 token 预算；启动时按模型、TP 和设备显存估算。 |
 | `max_num_seqs_in_batch` | int | `32` | 单个 batch 的最大请求数。 |
-| `engine_prefill_chunk_size` | int / None | `8192` | Prefill 分块大小，单位 token；显式设为 `None` 时按调度策略确定。 |
+| `engine_prefill_chunk_size` | int / `auto` / None | `auto` | 单请求每步的 prefill token 上限；`auto`（或 `None`）跟随最终 batch token 预算，并遵守方法约束。 |
 | `long_prefill_offload_threshold` | int | `65536` | 长请求阈值，单位 token；用于长请求整段 prefill、短请求批处理策略。 |
 | `mla_prefill_history_chunk_size` | int | `16384` | MLA prefill 每次处理的历史 KV token 上限；调小可减少历史工作区显存。 |
 | `decode_reservation_tokens` | int | `1024` | 每次为后续 decode 预留的最大 token 窗口；须为正整数，不是总输出上限。 |
+
+两个参数默认在启动时解析为整数，运行中保持固定。普通分块策略下，两个 `auto`
+使用同一预算。只显式指定 batch token 预算时，自动 chunk 跟随该值；只显式指定
+chunk 时，自动 batch 预算至少容纳该 chunk，否则启动报错。显式整数仍可分别指定。
+
+`long_bs1full_short_batch` 的自动预算必须容纳整个 `long_prefill_offload_threshold`，
+自动 chunk 不超过该阈值；两个参数都为 `auto` 时，通常都取该阈值（更大的 decode
+并发上限可能要求更大的 batch 预算）。显存估算不足时会报错，不会自动改变 offload
+阈值；可降低阈值或显式设置 batch token 预算。自动预算需要预留 activation 显存，
+因此 `gpu_memory_utilization=1.0` 时须显式设置 batch token 预算。
+
+自动选择是保守估算，不保证最优吞吐或避免所有 OOM。启动日志和 worker 信息记录
+最终整数；可复现实验应固定并记录这两个值。引擎默认值不替代 benchmark runner
+显式传入的参数。
 
 ## 异步执行
 

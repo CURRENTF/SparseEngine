@@ -1,5 +1,20 @@
 # Startup prefill memory profiling
 
+Before model construction, automatic prefill limits reuse the activation-headroom
+heuristic: `floor(total_memory * (1 - gpu_memory_utilization) /
+(intermediate_size_per_tp_rank * activation_dtype_bytes * 16))`. The smallest
+total memory among participating ranks determines the shared estimate. The
+ordinary automatic ceiling is the former 65,536-token batch default; an explicit
+chunk, decode concurrency or atomic full-prefill threshold may require a higher
+ceiling, but must still fit the estimate. Both automatic limits are equal for
+ordinary chunked scheduling. For the long/full policy, the automatic chunk is
+bounded by the unchanged offload threshold and a fully automatic budget is the
+larger of that threshold and the decode concurrency limit. CUDA device properties
+supply total memory without live memory queries on every device in the parent.
+The resolved integers are fixed before model/workspace allocation, prefix-cache
+fingerprinting and the profile below. Explicit batch budgets skip this heuristic.
+This does not search for the largest feasible workload or measure performance.
+
 Startup measures one prefill step after the small compilation warmup. The batch
 uses the maximum request count allowed by `max_num_seqs_in_batch`, resident row
 capacity and the token budget. New tokens are distributed evenly across requests,

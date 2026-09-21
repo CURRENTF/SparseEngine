@@ -549,17 +549,12 @@ class CacheManager(ABC):
 
         free, total = self.platform.get_available_memory(self.device.index or 0)
 
-        # 动态估计 max_num_batched_tokens
-        reserved_mem = total * (1 - config.gpu_memory_utilization)
-        intermediate_size = getattr(hf_config, "intermediate_size", hf_config.hidden_size * 4)
-        # Dense MLP activations are sharded only by tensor parallelism.
-        intermediate_size_per_rank = intermediate_size // self.tp_size
-        dtype_size = torch.tensor([], dtype=hf_config.dtype).element_size()
+        from sparseengine.configs.scheduling import estimate_prefill_token_capacity
 
-        # Keep this heuristic conservative: large prefill batches can still peak on
-        # MLP/linear-attention projections and allocator fragmentation after KV
-        # cache allocation.
-        estimated_max_tokens = int(reserved_mem / (intermediate_size_per_rank * dtype_size * 16))
+        estimated_max_tokens = estimate_prefill_token_capacity(
+            hf_config, total_memory_bytes=total, tensor_parallel_size=self.tp_size,
+            gpu_memory_utilization=config.gpu_memory_utilization,
+        )
         allow_large_prefill_chunk = os.getenv("SPARSEENGINE_ALLOW_LARGE_PREFILL_CHUNK", "0") == "1"
         prefill_policy = getattr(config, "prefill_schedule_policy", None)
         if estimated_max_tokens <= 0:

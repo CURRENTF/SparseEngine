@@ -36,6 +36,11 @@ class CudaPlatform(Platform):
     def get_available_memory(self, device_id: int = 0) -> tuple[int, int]:
         return torch.cuda.mem_get_info(int(device_id))
 
+    def get_total_memory(self, device_id: int = 0) -> int:
+        # Config probes every participating GPU before workers start. Avoid
+        # mem_get_info(), which creates a CUDA context on each probed device.
+        return int(torch.cuda.get_device_properties(int(device_id)).total_memory)
+
     def get_allocator_stats(self, device: torch.device | None = None) -> AllocatorStats:
         stats = torch.cuda.memory_stats(device)
         return AllocatorStats(

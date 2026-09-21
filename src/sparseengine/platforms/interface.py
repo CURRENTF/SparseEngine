@@ -74,6 +74,9 @@ class Platform:
     def get_available_memory(self, device_id: int = 0) -> tuple[int, int]:
         raise NotImplementedError(f"Platform {self.name!r} does not implement get_available_memory().")
 
+    def get_total_memory(self, device_id: int = 0) -> int:
+        return self.get_available_memory(device_id)[1]
+
     def get_allocator_stats(self, device: torch.device | None = None) -> AllocatorStats:
         return AllocatorStats()
 

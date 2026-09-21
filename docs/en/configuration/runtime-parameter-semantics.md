@@ -26,12 +26,32 @@ model's gating, normalization, and reduction order are preserved.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `max_num_batched_tokens` | int | `65536` | Token budget per scheduling step. |
+| `max_num_batched_tokens` | int / `auto` | `auto` | Token budget per scheduling step, estimated at startup from model metadata, TP and device memory. |
 | `max_num_seqs_in_batch` | int | `32` | Maximum requests per batch. |
-| `engine_prefill_chunk_size` | int / None | `8192` | Prefill chunk size in tokens. Explicit `None` selects a value based on the scheduling policy. |
+| `engine_prefill_chunk_size` | int / `auto` / None | `auto` | Per-request prefill token limit per step; `auto` (or `None`) follows the final batch token budget, subject to method constraints. |
 | `long_prefill_offload_threshold` | int | `65536` | Long-request threshold in tokens for the policy that prefills long requests in full and batches short requests. |
 | `mla_prefill_history_chunk_size` | int | `16384` | Maximum historical KV tokens processed at once during MLA prefill. Smaller values reduce history workspace memory. |
 | `decode_reservation_tokens` | int | `1024` | Maximum token window reserved for subsequent decode steps. Must be positive; this is not the total output limit. |
+
+Both parameters resolve to integers at startup and remain fixed during execution.
+For ordinary chunked scheduling, both automatic values use the same budget.
+An explicit batch token budget determines the automatic chunk. An explicit chunk
+is preserved and must fit the automatic batch budget, or startup fails. Both
+values may still be set independently as explicit integers.
+
+For `long_bs1full_short_batch`, the automatic budget must fit a complete
+`long_prefill_offload_threshold`, and the automatic chunk cannot exceed that
+threshold. With both parameters automatic, both normally equal the threshold;
+a larger decode concurrency limit can require a larger batch budget. An
+insufficient estimate fails without changing the offload threshold. Reduce the
+threshold or set the batch token budget explicitly. Automatic sizing requires
+activation headroom, so `gpu_memory_utilization=1.0` requires an explicit batch
+token budget.
+
+Automatic sizing is a conservative estimate, not an optimal-throughput or OOM
+guarantee. Startup logs and worker information expose the resolved integers;
+fix and record both values for reproducible experiments. Engine defaults do not
+replace parameters explicitly supplied by benchmark runners.
 
 ## Asynchronous Execution
 
