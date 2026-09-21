@@ -297,18 +297,226 @@ def test_standard_prefix_prune_rejects_unimplemented_recompression_without_mutat
     assert block.payload.token_slots.tolist() == [10]
 
 
-def test_quest_explicitly_rejects_physical_prefix_pruning():
-    manager = object.__new__(QuestCacheManager)
-    manager.parallel_context = SimpleNamespace(attn_tp_size=1)
-    with pytest.raises(RuntimeError, match="QuEST.*without pruning"):
-        manager.prefix_cache_prune(
-            [1, 2, 3, 4],
-            range_start=0,
-            range_end=4,
-            keep_indices=torch.tensor([0, 1]),
-            policy="snapkv_global",
-            prune_id="quest-unsupported",
+def test_quest_prefix_prune_drops_whole_pages_and_preserves_logical_positions():
+    manager = _make_quest_manager_for_prefix(page_size=2)
+    parent = None
+    blocks = []
+    for logical_idx, (tokens, page) in enumerate((([1, 2], 3), ([3, 4], 4))):
+        block_id = manager.prefix_cache.stable_block_id(tokens, parent)
+        slots = torch.tensor([page * 2, page * 2 + 1], dtype=torch.int32)
+        block = PrefixCacheBlock(
+            stable_block_id=block_id,
+            parent_block_id=parent,
+            block_size=2,
+            logical_block_idx=logical_idx,
+            payload=QuestPrefixBlockPayload(block_slot=page, token_slots=slots),
+            token_ids=tuple(tokens),
         )
+        manager.prefix_cache.insert_block(block)
+        _remove_free_page(manager, page)
+        blocks.append(block)
+        parent = block_id
+    free_before = manager.num_free_slots
+
+    result = manager.prefix_cache_prune(
+        [1, 2, 3, 4],
+        range_start=0,
+        range_end=4,
+        keep_indices=torch.tensor([2, 3]),
+        policy="kvzip_global",
+        prune_id="quest-pages",
+    )
+
+    assert result["selection_granularity"] == "quest_page"
+    assert result["freed_device_slots"] == 2
+    assert manager.num_free_slots == free_before + 2
+    assert blocks[0].payload.retained_offsets == ()
+    assert blocks[0].payload.token_slots.numel() == 0
+    assert blocks[1].payload.retained_offsets == (0, 1)
+    assert manager._prefix_evictable_slots() == 2
+    assert manager.prefix_cache_match([1, 2, 3, 4, 5])["resident_kv_tokens"] == 2
+
+    with pytest.raises(RuntimeError, match="already pruned"):
+        manager.validate_prefix_cache_prune_target(
+            [1, 2, 3, 4], ranges=[(2, 4)]
+        )
+
+    seq = Sequence([1, 2, 3, 4, 5])
+    seq.prefix_cache_enabled = True
+    seq.prefix_cache_hit_len = 4
+    seq.prefix_cache_hit_block_count = 2
+    seq.prefix_cache_hit_last_block_id = parent
+    seq.prefix_cache_block_size = 2
+    manager._attach_prefix_cache_if_needed(seq)
+    row = manager.seq_id_to_row[seq.seq_id]
+    assert manager.row_seq_lens[row] == 2
+    assert manager.row_logical_lens[row] == 4
+    assert manager.buffer_req_to_token_slots[row, :2].tolist() == [8, 9]
+
+    seq.num_prefilled_tokens = 4
+    seq.current_chunk_size = 1
+    _, positions, _ = manager._prepare_prefill([seq])
+    assert positions.tolist() == [4]
+    assert manager.layer_batch_state.context_lens.tolist() == [3]
+    assert manager.row_logical_lens[row] == 5
+    manager.begin_prefix_prune_scoring(
+        seq_id=seq.seq_id,
+        candidate_start=0,
+        query_start=4,
+        query_end=5,
+    )
+    assert manager._prefix_prune_physical_score_window() == (2, 3, 0)
+    assert manager._prefix_prune_scoring["logical_positions"].tolist() == [2, 3, 4]
+    manager.abort_prefix_prune_scoring()
+
+
+def test_quest_prefix_prune_rejects_partial_page_mask_without_mutation():
+    manager = _make_quest_manager_for_prefix(page_size=2)
+    block_id = manager.prefix_cache.stable_block_id([1, 2], None)
+    block = PrefixCacheBlock(
+        stable_block_id=block_id,
+        parent_block_id=None,
+        block_size=2,
+        logical_block_idx=0,
+        payload=QuestPrefixBlockPayload(
+            block_slot=3,
+            token_slots=torch.tensor([6, 7], dtype=torch.int32),
+        ),
+        token_ids=(1, 2),
+    )
+    manager.prefix_cache.insert_block(block)
+    _remove_free_page(manager, 3)
+    free_before = manager.num_free_slots
+
+    with pytest.raises(ValueError, match="partial page"):
+        manager.prefix_cache_prune(
+            [1, 2],
+            range_start=0,
+            range_end=2,
+            keep_indices=torch.tensor([0]),
+            policy="snapkv_global",
+            prune_id="partial",
+        )
+    assert block.payload.retained_offsets is None
+    assert block.payload.token_slots.tolist() == [6, 7]
+    assert manager.num_free_slots == free_before
+
+
+def test_quest_prefix_prune_multi_range_keeps_gap_page_unchanged():
+    manager = _make_quest_manager_for_prefix(page_size=2)
+    parent = None
+    blocks = []
+    for logical_idx in range(3):
+        tokens = [logical_idx * 2 + 1, logical_idx * 2 + 2]
+        page = logical_idx + 2
+        block_id = manager.prefix_cache.stable_block_id(tokens, parent)
+        block = PrefixCacheBlock(
+            stable_block_id=block_id,
+            parent_block_id=parent,
+            block_size=2,
+            logical_block_idx=logical_idx,
+            payload=QuestPrefixBlockPayload(
+                block_slot=page,
+                token_slots=torch.tensor([page * 2, page * 2 + 1], dtype=torch.int32),
+            ),
+            token_ids=tuple(tokens),
+        )
+        manager.prefix_cache.insert_block(block)
+        _remove_free_page(manager, page)
+        blocks.append(block)
+        parent = block_id
+
+    manager.prefix_cache_prune(
+        [1, 2, 3, 4, 5, 6],
+        ranges=[(0, 2), (4, 6)],
+        keep_indices=torch.tensor([2, 3]),
+        policy="kvzip_global",
+        prune_id="quest-ranges",
+    )
+
+    assert blocks[0].payload.retained_offsets == ()
+    assert blocks[1].payload.retained_offsets is None
+    assert blocks[1].payload.token_slots.tolist() == [6, 7]
+    assert blocks[2].payload.retained_offsets == (0, 1)
+
+
+def test_quest_capacity_cache_reuses_weights_and_invalidates_compaction():
+    manager = _make_quest_manager_for_prefix(page_size=2)
+    index = manager.prefix_cache
+    leaf_id = _insert_tokens(index, [1, 2, 3, 4])
+    chain = index.get_chain(leaf_id, 2)
+    for page, block in enumerate(chain, start=3):
+        block.payload = QuestPrefixBlockPayload(
+            block_slot=page,
+            token_slots=torch.tensor([page * 2, page * 2 + 1], dtype=torch.int32),
+        )
+
+    with patch.object(
+        manager, "_quest_payload", wraps=manager._quest_payload
+    ) as payload:
+        for _ in range(3):
+            with manager.scheduler_capacity_snapshot():
+                assert manager.prompt_admission_free_slots() == 24
+                assert manager.prefill_step_free_slots() == 24
+                assert manager.decode_step_free_slots() == 24
+        assert payload.call_count == len(chain)
+
+        leaf = chain[-1]
+        leaf.payload.retained_offsets = ()
+        leaf.payload.block_slot = None
+        leaf.payload.token_slots = torch.empty(0, dtype=torch.int32)
+        index.mark_payload_compacted([leaf])
+        assert manager.prompt_admission_free_slots() == 22
+        assert payload.call_count == len(chain) * 2
+
+
+def test_quest_prefix_hit_capacity_reuses_chain_and_invalidates_compaction():
+    manager = _make_quest_manager_for_prefix(page_size=2)
+    index = manager.prefix_cache
+    leaf_id = _insert_tokens(index, [1, 2, 3, 4])
+    chain = index.get_chain(leaf_id, 2)
+    for page, block in enumerate(chain, start=3):
+        block.payload = QuestPrefixBlockPayload(
+            block_slot=page,
+            token_slots=torch.tensor([page * 2, page * 2 + 1], dtype=torch.int32),
+        )
+    seq = Sequence([1, 2, 3, 4, 5])
+    seq.prefix_cache_hit_len = 4
+    seq.prefix_cache_hit_block_count = 2
+    seq.prefix_cache_hit_last_block_id = leaf_id
+
+    with patch.object(index, "get_chain", wraps=index.get_chain) as get_chain, patch.object(
+        manager, "_quest_payload", wraps=manager._quest_payload
+    ) as payload:
+        for _ in range(3):
+            assert manager.prompt_admission_cost(seq) == 6
+        assert get_chain.call_count == 1
+        assert payload.call_count == len(chain)
+
+        leaf = chain[-1]
+        leaf.payload.retained_offsets = ()
+        leaf.payload.block_slot = None
+        leaf.payload.token_slots = torch.empty(0, dtype=torch.int32)
+        index.mark_payload_compacted([leaf])
+        assert manager.prompt_admission_cost(seq) == 4
+        assert get_chain.call_count == 1
+        assert payload.call_count == len(chain) * 2
+
+
+def test_quest_prefill_page_reservation_returns_pages_and_rows():
+    manager = _make_quest_manager_for_prefix(page_size=2)
+    free_pages = manager._num_free_pages
+    free_rows = set(manager.free_rows)
+
+    with manager.reserve_prefill_slots([(17, 3)]) as admitted:
+        assert admitted == 1
+        slots = manager._allocate(17, 3)
+        assert slots.numel() == 3
+        assert manager.row_logical_lens[manager.seq_id_to_row[17]] == 3
+
+    assert 17 not in manager.seq_id_to_row
+    assert manager._num_free_pages == free_pages
+    assert set(manager.free_rows) == free_rows
 
 
 class _FakeHostPool:
@@ -413,10 +621,18 @@ def _make_quest_manager_for_prefix(page_size=2):
     manager.seq_id_to_row = {}
     manager.free_rows = deque([0, 1])
     manager.row_seq_lens = np.zeros((2,), dtype=np.int32)
+    manager.row_logical_lens = np.zeros((2,), dtype=np.int32)
     manager.seq_id_to_prefix_blocks = {}
     manager.seq_id_to_cached_pages = {}
+    manager._scheduler_capacity_snapshot_depth = 0
+    manager._scheduler_freeable_block_ids = None
+    manager._prefix_resident_pages_cache = None
+    manager._scheduler_reclaimable_pages = None
     manager.prefix_offload_controller = None
     manager._prefix_offload_step_h2d_operations = {}
+    manager._prefix_prune_scoring = None
+    manager._prefill_slot_reservations = None
+    manager._prefill_metadata_full_pages = False
     manager._init_prefix_cache_runtime()
     return manager
 

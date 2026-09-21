@@ -54,6 +54,7 @@ from .offload.prefix_components import (
     storage_prefix_components,
 )
 from .prefix_cache_mixin import PrefixCacheMixin
+from .prefix_prune_scoring import PrefixPruneScoringMixin
 from .prefix_offload import (
     PinnedPrefixKVPool,
     PrefixH2DOperation,
@@ -106,7 +107,7 @@ def _complement_ranges(start: int, end: int, ranges: list[tuple[int, int]]) -> l
     return result
 
 
-class StandardCacheManager(PrefixCacheMixin, CacheManager):
+class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager):
 
     def __init__(
         self,

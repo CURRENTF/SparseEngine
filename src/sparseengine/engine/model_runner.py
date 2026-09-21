@@ -55,7 +55,6 @@ from sparseengine.engine.decode_cuda_graph import DecodeCudaGraphRunner
 from sparseengine.engine.prefix_cache_coordinator import PrefixCacheCoordinator
 from sparseengine.engine.prefix_prune import (
     normalize_prefix_prune_ranges,
-    select_global_keep_indices,
     validate_prefix_prune_request,
 )
 from sparseengine.engine.chain_cache import ChainAdmissionPlan, ChainCacheCoordinator
@@ -1555,6 +1554,7 @@ class ModelRunner:
             token_count=len(token_ids), block_size=block_size, ranges=intervals,
             keep_tokens=keep_tokens, policy=policy,
         )
+        self.cache_manager.validate_prefix_prune_keep_tokens(keep_tokens)
         self.cache_manager.validate_prefix_cache_prune_target(
             token_ids, ranges=intervals, allow_recompress=allow_recompress,
         )
@@ -1582,12 +1582,11 @@ class ModelRunner:
             packed = torch.cat([score[left:right] for left, right in intervals])
             self.parallel_context.world.all_reduce(packed, op=dist.ReduceOp.MAX)
             # Sorted disjoint intervals put all protected positions at the end.
-            candidate_count = width - protected_count
-            selected = select_global_keep_indices(
-                packed[:candidate_count], keep_tokens=keep_tokens - protected_count,
+            keep_indices = self.cache_manager.select_prefix_prune_keep_indices(
+                packed,
+                keep_tokens=keep_tokens,
+                protected_suffix_tokens=protected_count,
             )
-            protected = torch.arange(candidate_count, width, dtype=torch.long, device=score.device)
-            keep_indices = torch.cat((selected, protected))
         elif policy == "kvzip_global":
             if keep_tokens == 0:
                 # The mask is known without reconstruction when everything is dropped.
@@ -1616,7 +1615,9 @@ class ModelRunner:
                         torch.maximum(aggregate, packed, out=aggregate)
                         chunk_number += 1
                 self.parallel_context.world.all_reduce(aggregate, op=dist.ReduceOp.MAX)
-                keep_indices = select_global_keep_indices(aggregate, keep_tokens=keep_tokens)
+                keep_indices = self.cache_manager.select_prefix_prune_keep_indices(
+                    aggregate, keep_tokens=keep_tokens,
+                )
         else:
             raise ValueError(f"unsupported prefix prune policy: {policy!r}.")
 
@@ -1646,6 +1647,7 @@ class ModelRunner:
                     token_count=len(job["token_ids"]), block_size=block_size,
                     ranges=intervals, keep_tokens=job["keep_tokens"], policy="kvzip_global",
                 )
+                manager.validate_prefix_prune_keep_tokens(job["keep_tokens"])
                 affected = manager.validate_prefix_cache_prune_target(
                     job["token_ids"], ranges=intervals,
                     allow_recompress=job["allow_recompress"],
@@ -1741,7 +1743,9 @@ class ModelRunner:
             aggregate = state["aggregate"]
             if job["keep_tokens"]:
                 self.parallel_context.world.all_reduce(aggregate, op=dist.ReduceOp.MAX)
-            indices = select_global_keep_indices(aggregate, keep_tokens=job["keep_tokens"])
+            indices = manager.select_prefix_prune_keep_indices(
+                aggregate, keep_tokens=job["keep_tokens"],
+            )
             try:
                 result = manager.prefix_cache_prune(
                     job["token_ids"], ranges=state["intervals"], keep_indices=indices,

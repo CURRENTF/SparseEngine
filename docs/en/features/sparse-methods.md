@@ -193,7 +193,8 @@ be equivalent. Offload restores latent/RoPE cache and page summaries together;
 the existing attention TP=1 or TP=2 offload restriction still applies.
 Existing vanilla/OmniKV radix trees can be physically compacted with the
 SnapKV- or KVzip-scored maintenance API described in
-[Prefix cache pruning](prefix-cache-pruning.md); QuEST trees reject pruning.
+[Prefix cache pruning](prefix-cache-pruning.md). QuEST uses whole-page scoring
+and selection, while Vanilla and OmniKV use token-granular selection.
 
 The chain layout keeps one owner `seq_id` across turns and never branches.
 Callers send the complete logical context plus the returned `chain_id`; only

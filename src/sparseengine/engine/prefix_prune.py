@@ -194,3 +194,58 @@ def select_global_keep_indices(
     candidates.sort(key=lambda index: (-host_scores[index], index))
     selected = sorted(protected | set(candidates[: keep_tokens - len(protected)]))
     return torch.tensor(selected, dtype=torch.long, device=scores.device)
+
+
+def select_global_keep_block_indices(
+    scores: torch.Tensor,
+    *,
+    keep_tokens: int,
+    block_size: int,
+    protected_suffix_tokens: int = 0,
+) -> torch.Tensor:
+    """Select whole blocks by summed token score and return token indices."""
+    scores = scores.detach().float().reshape(-1)
+    keep_tokens = int(keep_tokens)
+    block_size = int(block_size)
+    protected_suffix_tokens = int(protected_suffix_tokens)
+    if block_size <= 0:
+        raise ValueError(f"prefix prune block_size must be positive, got {block_size}.")
+    for name, value in (
+        ("candidate tokens", int(scores.numel())),
+        ("keep_tokens", keep_tokens),
+        ("protected_suffix_tokens", protected_suffix_tokens),
+    ):
+        if value < 0 or value % block_size:
+            raise ValueError(
+                f"QuEST block pruning requires {name} to be a non-negative multiple "
+                f"of block_size={block_size}, got {value}."
+            )
+    if keep_tokens > int(scores.numel()):
+        raise ValueError(
+            f"invalid global keep budget: keep={keep_tokens} candidates={scores.numel()}."
+        )
+    if protected_suffix_tokens > keep_tokens:
+        raise ValueError(
+            "protected prefix-prune tokens exceed keep budget: "
+            f"protected={protected_suffix_tokens} keep_tokens={keep_tokens}."
+        )
+    block_scores = scores.reshape(-1, block_size).sum(dim=1)
+    protected_blocks = protected_suffix_tokens // block_size
+    candidate_blocks = int(block_scores.numel()) - protected_blocks
+    keep_blocks = keep_tokens // block_size
+    selected = select_global_keep_indices(
+        block_scores[:candidate_blocks],
+        keep_tokens=keep_blocks - protected_blocks,
+    )
+    if protected_blocks:
+        protected = torch.arange(
+            candidate_blocks,
+            int(block_scores.numel()),
+            dtype=torch.long,
+            device=scores.device,
+        )
+        selected = torch.cat((selected, protected))
+    if selected.numel() == 0:
+        return torch.empty(0, dtype=torch.long, device=scores.device)
+    offsets = torch.arange(block_size, dtype=torch.long, device=scores.device)
+    return (selected[:, None] * block_size + offsets[None, :]).reshape(-1).sort().values

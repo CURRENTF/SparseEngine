@@ -1413,8 +1413,7 @@ class CacheManager(ABC):
             allow_recompress,
         )
         raise RuntimeError(
-            "physical prefix-cache pruning is unsupported by this cache manager; "
-            "QuEST prefix cache remains available without pruning."
+            "physical prefix-cache pruning is unsupported by this cache manager."
         )
 
     def validate_prefix_cache_prune_target(
@@ -1428,9 +1427,36 @@ class CacheManager(ABC):
     ) -> list[object]:
         del token_ids, range_start, range_end, ranges, allow_recompress
         raise RuntimeError(
-            "physical prefix-cache pruning is unsupported by this cache manager; "
-            "QuEST prefix cache remains available without pruning."
+            "physical prefix-cache pruning is unsupported by this cache manager."
         )
+
+    def validate_prefix_prune_keep_tokens(self, keep_tokens: int) -> None:
+        del keep_tokens
+
+    def select_prefix_prune_keep_indices(
+        self,
+        scores: torch.Tensor,
+        *,
+        keep_tokens: int,
+        protected_suffix_tokens: int = 0,
+    ) -> torch.Tensor:
+        from sparseengine.engine.prefix_prune import select_global_keep_indices
+
+        protected_suffix_tokens = int(protected_suffix_tokens)
+        candidate_count = int(scores.numel()) - protected_suffix_tokens
+        selected = select_global_keep_indices(
+            scores[:candidate_count],
+            keep_tokens=int(keep_tokens) - protected_suffix_tokens,
+        )
+        if protected_suffix_tokens:
+            protected = torch.arange(
+                candidate_count,
+                int(scores.numel()),
+                dtype=torch.long,
+                device=scores.device,
+            )
+            selected = torch.cat((selected, protected))
+        return selected
 
     def has_prefill_staging_view(self, layer_idx: int) -> bool:
         """Whether the current prefill layer should read from a temporary staging KV view."""

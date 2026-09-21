@@ -161,7 +161,7 @@ Graph 组合，prefix block 大小须等于 `quest_chunk_size`。页选择保持
 沿用 attention TP=1 或 TP=2 的 offload 限制。
 已有 vanilla/OmniKV radix tree 可通过
 [Prefix cache 修剪](prefix-cache-pruning.md)中的 SnapKV 或 KVzip 打分维护接口
-进行物理压紧；QuEST tree 会明确拒绝修剪。
+进行物理压紧。QuEST 按整页打分和选择，Vanilla 与 OmniKV 按 token 选择。
 
 Chain 布局跨 turn 保留同一个 owner `seq_id`，且永不分支。调用方发送完整逻辑
 上下文和服务端返回的 `chain_id`；服务端验证 processed boundary 后只转发新增

@@ -7,7 +7,12 @@ import torch
 
 from sparseengine.engine.llm_engine import LLMEngine
 from sparseengine.engine.model_runner import ModelRunner
-from sparseengine.engine.prefix_prune import normalize_prefix_prune_ranges, validate_prefix_prune_request
+from sparseengine.engine.prefix_prune import (
+    normalize_prefix_prune_ranges,
+    select_global_keep_block_indices,
+    select_global_keep_indices,
+    validate_prefix_prune_request,
+)
 from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCachePruneRequest
 
 
@@ -45,6 +50,27 @@ def test_union_budget_excludes_gaps_and_normalizes_arbitrary_length():
     ) == [(0, 8)]
 
 
+def test_quest_job_rejects_non_page_aligned_keep_budget_before_enqueue():
+    engine = SimpleNamespace(
+        config=SimpleNamespace(
+            sparse_method="quest",
+            prefix_cache_block_size=2,
+            enable_prefix_caching=True,
+        ),
+        _prefix_prune_jobs={},
+        _pending_prefix_prune_ids=deque(),
+    )
+    with pytest.raises(ValueError, match="page aligned"):
+        LLMEngine.prefix_cache_prune_start(
+            engine,
+            list(range(8)),
+            ranges=[(0, 4)],
+            keep_tokens=1,
+            policy="kvzip_global",
+        )
+    assert not engine._prefix_prune_jobs and not engine._pending_prefix_prune_ids
+
+
 @pytest.mark.parametrize("kwargs", [
     {}, {"ranges": []}, {"range_start": 0},
     {"ranges": [[0, 2]], "range_start": 0, "range_end": 2},
@@ -71,13 +97,48 @@ def _runner(fail_at=None):
         return kwargs
     def reduce(scores, **kwargs):
         events.append(("reduce", scores.clone()))
+    def select(scores, *, keep_tokens, protected_suffix_tokens=0):
+        candidate_count = scores.numel() - protected_suffix_tokens
+        selected = select_global_keep_indices(
+            scores[:candidate_count],
+            keep_tokens=keep_tokens - protected_suffix_tokens,
+        )
+        if protected_suffix_tokens:
+            selected = torch.cat((selected, torch.arange(candidate_count, scores.numel())))
+        return selected
     runner = SimpleNamespace(
         config=SimpleNamespace(prefix_cache_block_size=1), device=torch.device("cpu"),
-        cache_manager=SimpleNamespace(validate_prefix_cache_prune_target=validate, prefix_cache_prune=commit),
+        cache_manager=SimpleNamespace(
+            validate_prefix_cache_prune_target=validate,
+            validate_prefix_prune_keep_tokens=lambda _: None,
+            select_prefix_prune_keep_indices=select,
+            prefix_cache_prune=commit,
+        ),
         parallel_context=SimpleNamespace(world=SimpleNamespace(all_reduce=reduce)),
         _prefix_prune_score_forward=forward,
     )
     return runner, events
+
+
+def test_block_selection_sums_token_scores_and_expands_whole_blocks():
+    scores = torch.tensor([5.0, 0.0, 3.0, 3.0, 1.0, 1.0])
+    selected = select_global_keep_block_indices(
+        scores, keep_tokens=2, block_size=2,
+    )
+    assert selected.tolist() == [2, 3]
+
+
+def test_block_selection_preserves_aligned_protected_suffix():
+    scores = torch.tensor([9.0, 9.0, 1.0, 1.0, 0.0, 0.0])
+    selected = select_global_keep_block_indices(
+        scores,
+        keep_tokens=4,
+        block_size=2,
+        protected_suffix_tokens=2,
+    )
+    assert selected.tolist() == [0, 1, 4, 5]
+    with pytest.raises(ValueError, match="multiple"):
+        select_global_keep_block_indices(scores, keep_tokens=3, block_size=2)
 
 
 def test_kvzip_scores_all_ranges_before_one_shared_selection_and_commit():
@@ -226,7 +287,11 @@ def test_batched_reconstruction_round_robin_preserves_independent_budgets(rows, 
                                max_num_batched_tokens=100, engine_prefill_chunk_size=100,
                                max_num_seqs_in_batch=3), device=torch.device('cpu'),
         cache_manager=SimpleNamespace(prefix_cache=cache, reserve_prefill_slots=reserve,
-            validate_prefix_cache_prune_target=validate, prefix_cache_prune=commit),
+            validate_prefix_cache_prune_target=validate,
+            validate_prefix_prune_keep_tokens=lambda _: None,
+            select_prefix_prune_keep_indices=lambda scores, *, keep_tokens, **kwargs:
+                select_global_keep_indices(scores, keep_tokens=keep_tokens),
+            prefix_cache_prune=commit),
         parallel_context=SimpleNamespace(world=SimpleNamespace(all_reduce=lambda *a, **k: None)),
         _prefix_prune_score_forward_batch=forward,
     )

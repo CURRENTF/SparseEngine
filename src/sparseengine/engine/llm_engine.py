@@ -1240,11 +1240,6 @@ class LLMEngine:
         ranges: list[tuple[int, int]] | None = None,
     ) -> dict[str, object]:
         token_ids = [int(token_id) for token_id in token_ids]
-        if str(self.config.sparse_method or "") == "quest":
-            raise RuntimeError(
-                "QuEST prefix cache/offload remains supported, but physical prefix "
-                "pruning is intentionally unsupported."
-            )
         intervals = normalize_prefix_prune_ranges(
             token_count=len(token_ids), block_size=int(self.config.prefix_cache_block_size),
             range_start=range_start, range_end=range_end, ranges=ranges,
@@ -1256,6 +1251,15 @@ class LLMEngine:
             block_size=int(self.config.prefix_cache_block_size),
             policy=str(policy),
         )
+        if (
+            str(self.config.sparse_method or "") == "quest"
+            and int(keep_tokens) % int(self.config.prefix_cache_block_size)
+        ):
+            raise ValueError(
+                "QuEST prefix pruning requires keep_tokens to be page aligned: "
+                f"keep_tokens={keep_tokens} "
+                f"page_size={self.config.prefix_cache_block_size}."
+            )
         if not bool(self.config.enable_prefix_caching):
             raise RuntimeError("prefix cache must be enabled before a prune job can start.")
         if int(observation_tokens) <= 0:

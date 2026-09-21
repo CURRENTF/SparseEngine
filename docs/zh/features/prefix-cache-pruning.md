@@ -1,8 +1,10 @@
 # Prefix cache 修剪
 
-Vanilla 和 OmniKV 的 radix prefix cache 支持在不改变逻辑 token 路由和
-stable block ID 的前提下，压紧已有空闲树路径的物理 KV payload。QuEST 的
-prefix cache 与 offload 继续可用，但 QuEST page 不支持物理修剪。
+Vanilla、OmniKV 和 QuEST 的 radix prefix cache 支持在不改变逻辑 token 路由和
+stable block ID 的前提下，压紧已有空闲树路径的物理 KV payload。Vanilla 和
+OmniKV 按 token 选择；QuEST 先对每个 page 内的 token 分数求和，再做全局整页
+选择。因此 QuEST 的 `keep_tokens` 必须是 `quest_chunk_size` 的整数倍；该值也必须
+等于 prefix-cache block size。
 
 通过块对齐的半开区间 `[L, R)` 启动维护任务：
 
@@ -22,12 +24,13 @@ Content-Type: application/json
 接口返回 HTTP 202 和 `prune_id`。随后查询
 `GET /v1/prefix_cache/prune/{prune_id}`，直到状态变成 `completed`、
 `blocked` 或 `failed`。`snapkv_global` 与 `kvzip_global` 会跨层、跨 head、
-跨 TP rank 汇总分数，得到一个确定性的统一 token mask。
+跨 TP rank 汇总分数，得到一个确定性的统一 mask。QuEST 会先完成 rank 间归并，
+再聚合 page 分数并选择 page。
 
 只有 `[L, R)` 内所有块均无引用且不存在传输时才会提交修剪。提交后会在
 `[L, L + block_size)` 对应的子树根写入可继承的 `quality_degraded` 记录。
-设备分配、容量和删除回收均按实际保留 token 槽计量。offload 仍由逻辑块
-持有固定 host page，但 D2H/H2D 只传输保留的块内 offset。
+设备分配、容量和删除回收均按实际保留 token 槽或 page 计量。offload 仍由逻辑块
+持有固定 host page，但 D2H/H2D 不传输已删除的 payload。
 
 请求也可用 `text` 或完整 OpenAI `chat` 请求代替 `token_ids`；`chat` 会复用
 服务端的 chat template 和 reasoning 参数渲染逻辑，适合 agent 在每轮结束后精确
@@ -54,7 +57,8 @@ Content-Type: application/json
 这里从区间并集的六个 token 中**总共保留三个**。空隙中的 token 保持不变，
 不占用预算。区间会排序，相邻区间会合并；重叠、空区间、越界及未对齐输入会报错。
 两种区间输入格式不能混用，旧单区间请求继续兼容。KVzip 的预算为零时直接释放
-并集内全部物理 KV，无需重建打分，但逻辑 radix 路径仍保留。
+并集内全部物理 KV，无需重建打分，但逻辑 radix 路径仍保留。QuEST 要求每个
+区间边界和共享预算都按 page 对齐，区间之间的空隙不受影响。
 
 所有区间基于截至最大右端点的同一份未剪枝前缀打分。KVzip 在每个区间内分段
 重建；SnapKV 使用一个尾部观察窗口，其中属于区间并集的 token 必须保留且计入

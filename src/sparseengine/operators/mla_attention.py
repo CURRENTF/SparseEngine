@@ -225,7 +225,9 @@ class MlaTritonProvider(MlaAttentionProvider):
             self.device.type == "cuda"
             and type(self).run_prefill_chunk is MlaTritonProvider.run_prefill_chunk
         ):
-            from sparseengine.operators.mla_prefill_attention import resolve_mla_prefill
+            from sparseengine.operators.mla_prefill_attention import (
+                resolve_mla_prefill,
+            )
 
             caps = platforms.current_platform.get_device_caps(self.device.index)
             self._prefill = resolve_mla_prefill(self.spec, caps)
@@ -612,7 +614,10 @@ class MlaSglFa3Provider(MlaTritonProvider):
             max_batch_size=max_batch_size,
             launch_config=launch_config,
         )
-        if self._compressed_prefill is not None and self._compressed_prefill.name == "sgl_fa3_latent":
+        if (
+            self._compressed_prefill is not None
+            and self._compressed_prefill.name == "sgl_fa3_latent"
+        ):
             self.fa3 = self._compressed_prefill.kernel
         else:
             self.fa3 = SglFa3DecodeKernel(
@@ -694,7 +699,11 @@ class MlaSglFa3Provider(MlaTritonProvider):
 
     @torch.no_grad()
     def run_prefill_chunk(self, q, k, v, cu_q, cu_k, max_q, max_k, *, causal):
-        output = torch.empty((*q.shape[:2], v.shape[-1]), dtype=q.dtype, device=q.device)
+        output = torch.empty(
+            (*q.shape[:2], v.shape[-1]),
+            dtype=q.dtype,
+            device=q.device,
+        )
         self._record_runtime_kernel_path("sgl_fa3_prefill_contiguous")
         return self.fa3.run_contiguous_explicit_varlen(
             q,

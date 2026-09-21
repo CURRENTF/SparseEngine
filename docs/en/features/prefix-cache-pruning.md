@@ -1,9 +1,11 @@
 # Prefix cache pruning
 
-Vanilla and OmniKV radix prefix caches can compact the physical KV payload of
-an existing, idle tree path without changing its logical token route or stable
-block IDs. QuEST prefix caching and offload remain supported, but QuEST pages
-cannot be physically pruned.
+Vanilla, OmniKV, and QuEST radix prefix caches can compact the physical KV
+payload of an existing, idle tree path without changing its logical token route
+or stable block IDs. Vanilla and OmniKV select individual tokens. QuEST sums
+the token scores within each page and selects whole pages globally; its
+`keep_tokens` budget must therefore be a multiple of `quest_chunk_size` (which
+must equal the prefix-cache block size).
 
 Start a maintenance job with a block-aligned half-open interval `[L, R)`:
 
@@ -23,14 +25,15 @@ Content-Type: application/json
 The endpoint returns HTTP 202 with a `prune_id`. Query
 `GET /v1/prefix_cache/prune/{prune_id}` until the status is `completed`,
 `blocked`, or `failed`. `snapkv_global` and `kvzip_global` reduce scores across
-layers, heads, and tensor-parallel ranks into one deterministic token mask.
+layers, heads, and tensor-parallel ranks into one deterministic mask. For
+QuEST, rank reduction happens before page scores are summed and selected.
 
 Pruning is committed only when every affected block is unreferenced and has no
 in-flight transfer. A completed prune adds an inherited `quality_degraded`
 record at the `[L, L + block_size)` subtree root. Device allocation and
-eviction accounting use retained token slots. Offload continues to own one
-fixed host page per logical block, while D2H/H2D transfers include only retained
-block offsets.
+eviction accounting use retained token slots/pages. Offload continues to own
+one fixed host page per logical block, while D2H/H2D transfers omit dropped
+payloads.
 
 The request also accepts `text` or a complete OpenAI `chat` request instead of
 `token_ids`. The `chat` selector reuses the server's chat-template and reasoning
@@ -60,6 +63,8 @@ adjacent intervals are merged; overlapping, empty, out-of-bounds or unaligned
 intervals are rejected. Do not combine the two selector formats. The old
 single-interval request remains supported. A zero KVzip budget removes all KV
 in the union without reconstruction scoring, retaining logical radix routing.
+QuEST requires every range boundary and the shared budget to be page aligned;
+gaps remain untouched.
 
 All intervals are scored against the same unpruned prefix ending at the largest
 right endpoint. KVzip reconstructs chunks within each interval; SnapKV uses one
