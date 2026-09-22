@@ -444,6 +444,14 @@ def render_mini_config(
     preserve_thinking: bool,
     api_base: str | None,
 ) -> str:
+    # MiniSWE checks its wall-time limit only between agent steps.  Leave room
+    # for an in-flight model/tool call and cleanup so Docker's sleep process
+    # cannot expire first and erase an --rm container before we record it.
+    container_timeout_seconds = (
+        max(4 * 60 * 60, wall_time_limit_seconds + 2 * 60 * 60)
+        if wall_time_limit_seconds > 0
+        else 24 * 60 * 60
+    )
     lines = [
         "agent:",
         f"  step_limit: {step_limit}",
@@ -466,7 +474,14 @@ def render_mini_config(
     ]
     if api_base:
         lines.append(f"    api_base: {json.dumps(api_base)}")
-    lines.extend(["environment:", "  pull_timeout: 30", ""])
+    lines.extend(
+        [
+            "environment:",
+            "  pull_timeout: 30",
+            f'  container_timeout: "{container_timeout_seconds}s"',
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 

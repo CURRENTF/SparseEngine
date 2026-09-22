@@ -314,10 +314,10 @@ Add these arguments to the smoke command above:
 --prefix-prune-keep-ratio 0.5
 ```
 
-The server must enable Vanilla or OmniKV radix prefix caching and multi-range
-pruning. Supply a local fast tokenizer matching the server, including its chat
-template; the harness does not download it. Its environment needs Transformers
-and the shared chat renderer's dependencies.
+The server must enable Vanilla, OmniKV, or QuEST radix prefix caching and
+multi-range pruning. Supply a local fast tokenizer matching the server,
+including its chat template; the harness does not download it. Its environment
+needs Transformers and the shared chat renderer's dependencies.
 
 The harness locates only `role=tool` bodies in the complete rendered prompt,
 protecting user input, assistant reasoning, call arguments and template markers.
@@ -327,9 +327,11 @@ pruning. A mismatch fails explicitly. The engine receives only token IDs, ranges
 and a total keep budget, with no tool-specific metadata.
 
 The ratio retains `floor(total_eligible_tool_tokens * ratio)` tokens across all
-ranges together; it is not a per-result quota. Use `0 <= ratio < 1`; omit the
-prune policy for a no-pruning baseline. Static range and keep-token options are
-ignored in this mode. Tool bodies accumulate until `--prefix-prune-trigger-tokens`
+ranges together; it is not a per-result quota. QuEST rounds that budget down to
+a whole number of pages, so its realized ratio can be lower for short tool
+results. Use `0 <= ratio < 1`; omit the prune policy for a no-pruning baseline.
+Static range and keep-token options are ignored in this mode. Tool bodies
+accumulate until `--prefix-prune-trigger-tokens`
 (default 8192) aligned, previously unpruned tool tokens are available. All pending
 ranges then share one retention budget. Earlier pruned ranges are never
 recompressed. Set the threshold to 1 to prune each eligible turn. Below-threshold

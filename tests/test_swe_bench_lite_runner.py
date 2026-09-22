@@ -148,6 +148,7 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
         self.assertIn("enable_thinking: true", config)
         self.assertIn("preserve_thinking: true", config)
         self.assertIn("clear_thinking: false", config)
+        self.assertIn('container_timeout: "14400s"', config)
 
     def test_zero_wall_time_disables_agent_timeout(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -178,6 +179,7 @@ class SweBenchLiteRunnerTest(unittest.TestCase):
             api_base="http://127.0.0.1:18000/v1",
         )
         self.assertIn("wall_time_limit_seconds: 0", config)
+        self.assertIn('container_timeout: "86400s"', config)
 
     def test_negative_wall_time_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

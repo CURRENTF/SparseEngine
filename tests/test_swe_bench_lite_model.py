@@ -773,3 +773,116 @@ def test_tool_threshold_accumulates_until_commit_without_recompressing(monkeypat
     messages[-1]['content'] = 'rewritten pending body'
     with pytest.raises(RuntimeError, match='not append-only'):
         client._maybe_prune(dict(messages=messages))
+
+
+def test_tool_prune_resumes_pending_job_after_poll_disconnect(monkeypatch, tmp_path):
+    from benchmark.swe_bench_lite.prefix_prune_client import PrefixPruneClient
+
+    client = PrefixPruneClient(
+        api_base="http://unused",
+        tokenizer_path=str(tmp_path),
+        keep_ratio=0.2,
+        trigger_tokens=1,
+        events_path=tmp_path / "events.jsonl",
+    )
+    client._prune_tool_selector = SimpleNamespace(select=lambda *args, **kwargs: {
+        "token_ids": list(range(100)),
+        "ranges": [(10, 20)],
+        "eligible_tokens": 10,
+        "tool_tokens": 10,
+    })
+    state = {"dropped": 0, "posts": 0, "polls": 0}
+
+    def match(*args):
+        return {
+            "block_size": 1,
+            "prompt_tokens": 100,
+            "usable_tokens": 100,
+            "matched_tokens": 100,
+            "resident_kv_tokens": 100 - state["dropped"],
+            "last_block_id": "path",
+        }
+
+    def request(method, path, body=None):
+        if path.endswith("/match"):
+            return match()
+        if method == "POST":
+            state["posts"] += 1
+            return {"prune_id": "job"}
+        state["polls"] += 1
+        if state["polls"] == 1:
+            state["dropped"] = 8
+            raise ConnectionError("poll response was lost after server commit")
+        return {
+            "status": "completed",
+            "result": {"freed_device_slots": 8, "quality_degraded": True},
+        }
+
+    monkeypatch.setattr(client, "_match_prefix", match)
+    monkeypatch.setattr(client, "_prefix_cache_request", request)
+    chat = {"messages": [{"role": "tool", "content": "result"}]}
+
+    with pytest.raises(ConnectionError, match="response was lost"):
+        client._maybe_prune(chat)
+    assert state["posts"] == 1
+    assert client._prune_pending is not None
+    assert client._prune_pending["prune_id"] == "job"
+    assert client._prune_pending["before_resident"] == 100
+
+    client._maybe_prune(chat)
+
+    assert state["posts"] == 1
+    assert state["polls"] == 2
+    assert client._prune_pending is None
+    assert len(client._prune_processed_messages) == 1
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert [event["event"] for event in events] == ["prune_completed"]
+
+
+def test_tool_prune_aligns_quest_keep_budget_to_whole_pages(monkeypatch, tmp_path):
+    from benchmark.swe_bench_lite.prefix_prune_client import PrefixPruneClient
+
+    client = PrefixPruneClient(
+        api_base="http://unused",
+        tokenizer_path=str(tmp_path),
+        keep_ratio=0.2,
+        trigger_tokens=1,
+        events_path=tmp_path / "events.jsonl",
+    )
+    client._prune_tool_selector = SimpleNamespace(select=lambda *args, **kwargs: {
+        "token_ids": list(range(96)),
+        "ranges": [(0, 96)],
+        "eligible_tokens": 96,
+        "tool_tokens": 96,
+    })
+    state = {"dropped": 0}
+    jobs = []
+
+    def match(*args):
+        return {
+            "method": "quest",
+            "block_size": 16,
+            "prompt_tokens": 96,
+            "usable_tokens": 96,
+            "matched_tokens": 96,
+            "resident_kv_tokens": 96 - state["dropped"],
+            "last_block_id": "path",
+        }
+
+    def request(method, path, body=None):
+        if path.endswith("/match"):
+            return match()
+        if method == "POST":
+            jobs.append(body)
+            state["dropped"] = 80
+            return {"prune_id": "job"}
+        return {
+            "status": "completed",
+            "result": {"freed_device_slots": 80, "quality_degraded": True},
+        }
+
+    monkeypatch.setattr(client, "_match_prefix", match)
+    monkeypatch.setattr(client, "_prefix_cache_request", request)
+    client._maybe_prune({"messages": [{"role": "tool", "content": "result"}]})
+
+    assert jobs[0]["keep_tokens"] == 16

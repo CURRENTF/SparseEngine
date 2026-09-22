@@ -31,6 +31,7 @@ class PrefixPruneClient:
         self._prune_freed_slots = 0
         self._prune_processed_messages = []
         self._prune_tool_selector = None
+        self._prune_pending = None
 
     @staticmethod
     def _value_digest(value: Any) -> str:
@@ -223,6 +224,9 @@ class PrefixPruneClient:
             ):
                 raise RuntimeError("Tool-range tokenizer/template does not match the server's cached path.")
             keep_tokens = math.floor(selection["eligible_tokens"] * self._prune_keep_ratio)
+            if str(match_before.get("method") or "") == "quest":
+                block_size = int(match_before["block_size"])
+                keep_tokens = (keep_tokens // block_size) * block_size
             selector = {"token_ids": selection["token_ids"], "ranges": ranges}
         else:
             ranges = [(self._prune_range_start, self._prune_range_end)]
@@ -231,17 +235,35 @@ class PrefixPruneClient:
                 "chat": chat, "range_start": self._prune_range_start,
                 "range_end": self._prune_range_end,
             }
-        queued = self._prefix_cache_request(
-            "POST", "/prefix_cache/prune",
-            {
-                **selector, "keep_tokens": keep_tokens, "policy": self._prune_policy,
-                "observation_tokens": 64, "score_chunk_size": 1024, "prev_postfix_size": 32,
-            },
-        )
-        prune_id = str(queued.get("prune_id") or "")
-        if not prune_id:
-            raise RuntimeError(f"Prefix prune returned no prune_id: {queued}.")
-        status = queued
+        prune_body = {
+            **selector, "keep_tokens": keep_tokens, "policy": self._prune_policy,
+            "observation_tokens": 64, "score_chunk_size": 1024, "prev_postfix_size": 32,
+        }
+        request_digest = self._value_digest(prune_body)
+        pending = getattr(self, "_prune_pending", None)
+        if pending is not None:
+            if pending["request_digest"] != request_digest:
+                raise RuntimeError(
+                    "A different prefix-prune request arrived while the previous job "
+                    "still requires status recovery."
+                )
+            prune_id = str(pending["prune_id"])
+            before_resident = int(pending["before_resident"])
+            status = {"status": "queued"}
+        else:
+            queued = self._prefix_cache_request(
+                "POST", "/prefix_cache/prune", prune_body,
+            )
+            prune_id = str(queued.get("prune_id") or "")
+            if not prune_id:
+                raise RuntimeError(f"Prefix prune returned no prune_id: {queued}.")
+            before_resident = int(match_before.get("resident_kv_tokens") or 0)
+            self._prune_pending = {
+                "request_digest": request_digest,
+                "prune_id": prune_id,
+                "before_resident": before_resident,
+            }
+            status = queued
         for _ in range(9000):
             status = self._prefix_cache_request(
                 "GET",
@@ -251,6 +273,8 @@ class PrefixPruneClient:
                 break
             time.sleep(0.1)
         if status.get("status") != "completed":
+            if status.get("status") in {"blocked", "failed"}:
+                self._prune_pending = None
             raise RuntimeError(f"Prefix prune did not complete: {status}.")
         result = status.get("result") or {}
         freed = int(result.get("freed_device_slots") or 0)
@@ -266,7 +290,6 @@ class PrefixPruneClient:
         )
         after_matched = int(match_after.get("matched_tokens") or 0)
         after_resident = int(match_after.get("resident_kv_tokens") or 0)
-        before_resident = int(match_before.get("resident_kv_tokens") or 0)
         if after_matched != usable or before_resident - after_resident != freed:
             raise RuntimeError(
                 "Prefix prune did not preserve the logical route or compact resident KV: "
@@ -275,6 +298,7 @@ class PrefixPruneClient:
         self._prune_finished = True
         self._prune_reuse_verified = False
         self._prune_freed_slots = after_matched - after_resident
+        self._prune_pending = None
         if tool_mode:
             self._prune_processed_messages.extend(self._prune_seen_messages[cursor:])
         self._record_prune_event(
