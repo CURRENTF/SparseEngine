@@ -303,6 +303,7 @@ class ModelRunner:
         trtllm_cache_root: str | None = None,
     ):
         self.config = config
+        self._slot_release_states: dict[int, str] = {}
         # Inference-only engine: disable autograd graph construction globally in this process.
         # (This is process-local; must be set inside every spawned TP worker.)
         torch.set_grad_enabled(False)
@@ -919,6 +920,13 @@ class ModelRunner:
                 self._sync_tp_host_status(method_name, local_error, synchronize=False)
                 if local_error is not None:
                     raise local_error
+                if (
+                    method_name == "retire_async"
+                    and self.parallel_context.attn_tp_rank == 0
+                ):
+                    # Host-status workers only know their local outcome. Commit
+                    # release idempotency state after rank 0 observes all ranks.
+                    self.call("commit_slot_releases", args[0])
                 return result
             if method_name == "refresh_prefix_cache_hits":
                 self._sync_prefix_cache_batch_result(result, local_error)
@@ -938,6 +946,9 @@ class ModelRunner:
                 self._sync_prefix_cache_lookup_result(result)
             elif method_name.startswith("chain_"):
                 self._sync_chain_cache_result(method_name, result)
+            if method_name in {"free_slots", "free_slots_batch", "finish_slots_batch"}:
+                seq_ids = [int(args[0])] if method_name == "free_slots" else [int(v) for v in args[0]]
+                self.commit_slot_releases(seq_ids)
             return result
         with torch.inference_mode():
             return method(*args)
@@ -1184,7 +1195,7 @@ class ModelRunner:
             if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1":
                 before = self.cache_manager.free_slot_stats()
                 logger.info("model_runner.free_slots seq_id={} before={}", seq_id, before)
-            self.runtime_state.free_seq(seq_id)
+            self._release_runtime_slots_once(seq_id)
             if hasattr(self, "_async_execution"):
                 self._async_execution.forget([seq_id])
             self.multimodal_runtime.free(seq_id)
@@ -1203,7 +1214,7 @@ class ModelRunner:
                 before = self.cache_manager.free_slot_stats()
                 logger.info("model_runner.free_slots_batch seq_ids={} before={}", seq_ids, before)
             for seq_id in seq_ids:
-                self.runtime_state.free_seq(seq_id)
+                self._release_runtime_slots_once(seq_id)
             if hasattr(self, "_async_execution"):
                 self._async_execution.forget(seq_ids)
             if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1":
@@ -1213,6 +1224,33 @@ class ModelRunner:
     def finish_slots_batch(self, seq_ids: list[int]):
         self.free_slots_batch(seq_ids)
         self.multimodal_runtime.free_batch(seq_ids)
+
+    def _release_runtime_slots_once(self, seq_id: int) -> None:
+        states = getattr(self, "_slot_release_states", None)
+        if states is None:
+            states = {}
+            self._slot_release_states = states
+        state = states.get(int(seq_id))
+        if state == "released":
+            return
+        if state == "failed":
+            raise RuntimeError(
+                "Cache release previously failed on this worker after its mutation "
+                f"boundary became unknown; restart the worker before reusing seq_id={seq_id}."
+            )
+        try:
+            self.runtime_state.free_seq(int(seq_id))
+        except BaseException:
+            states[int(seq_id)] = "failed"
+            raise
+        states[int(seq_id)] = "released"
+
+    def commit_slot_releases(self, seq_ids: list[int]) -> None:
+        states = getattr(self, "_slot_release_states", None)
+        if states is None:
+            return
+        for seq_id in seq_ids:
+            states.pop(int(seq_id), None)
 
     def free_multimodal(self, seq_id: int):
         self.multimodal_runtime.free(seq_id)

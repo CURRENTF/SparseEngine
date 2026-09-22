@@ -350,6 +350,30 @@ class PrefixCacheCoordinator:
         )
         return int((reclaimable_blocks + promotion_blocks) * self.block_size)
 
+    def prefix_hit_shared_costs(self, seq: Sequence) -> dict[object, int]:
+        if self.prefix_cache is None or int(getattr(seq, "prefix_cache_hit_len", 0) or 0) <= 0:
+            return {}
+        hit_blocks = int(getattr(seq, "prefix_cache_hit_block_count", 0) or 0)
+        last_block_id = getattr(seq, "prefix_cache_hit_last_block_id", None)
+        if hit_blocks <= 0:
+            return {}
+        if last_block_id is None:
+            raise RuntimeError(
+                f"seq_id={seq.seq_id} has mixed prefix hit blocks but no last block id."
+            )
+        reclaimable_ids = (
+            self.prefix_cache.device_reclaimable_block_ids()
+            if self._offload_enabled()
+            else self.prefix_cache.freeable_block_ids()
+        )
+        costs: dict[object, int] = {}
+        for block in self.prefix_cache.get_chain(last_block_id, hit_blocks):
+            if block.stable_block_id in reclaimable_ids or (
+                self._offload_enabled() and not block.residency.device_present
+            ):
+                costs[block.stable_block_id] = int(self.block_size)
+        return costs
+
     def refresh_prefix_cache_hit(self, seq: Sequence) -> None:
         self._poll_offload()
         seq.clear_prefix_cache_hit()

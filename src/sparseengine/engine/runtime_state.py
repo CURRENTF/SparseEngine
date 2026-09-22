@@ -58,6 +58,7 @@ class MemoryOracle(Protocol):
     def prompt_admission_free_slots(self) -> int: ...
     def prompt_admission_budgets(self, waiting_seqs: deque[Sequence], engine_prefill_chunk_size: int) -> dict[str, int]: ...
     def prompt_admission_costs(self, seq: Sequence) -> dict[str, int]: ...
+    def prompt_admission_shared_costs(self, seq: Sequence) -> dict[str, dict[object, int]]: ...
     def prompt_logical_reservation_cost(self, seq: Sequence) -> int: ...
     def prompt_admission_failure_action(self) -> str: ...
     def on_prompt_admitted(self, seq: Sequence, costs: dict[str, int]) -> None: ...
@@ -780,6 +781,38 @@ class RuntimeState:
                 f"multi-budget cache manager costs={costs}."
             )
         return costs
+
+    def prompt_admission_shared_costs(
+        self, seq: Sequence
+    ) -> dict[str, dict[object, int]]:
+        cache_shared_costs = getattr(
+            self.cache_manager, "prompt_admission_shared_costs", None
+        )
+        cache_shared = (
+            cache_shared_costs(seq) if callable(cache_shared_costs) else {}
+        )
+        shared = {
+            name: {("cache", resource_id): int(cost) for resource_id, cost in resources.items()}
+            for name, resources in cache_shared.items()
+        }
+        if self.prefix_cache_coordinator is None:
+            return shared
+        resources = self.prefix_cache_coordinator.prefix_hit_shared_costs(seq)
+        if not resources:
+            return shared
+        if "slots" in self.prompt_admission_costs(seq):
+            budget = "slots"
+        else:
+            budgets = [name for name in self.prompt_admission_costs(seq) if name != "resident_seqs"]
+            if len(budgets) != 1:
+                raise RuntimeError(
+                    "Mixed prefix admission sharing requires one physical cache budget."
+                )
+            budget = budgets[0]
+        shared.setdefault(budget, {}).update(
+            {("mixed", resource_id): int(cost) for resource_id, cost in resources.items()}
+        )
+        return shared
 
     def prefix_cache_inspect(self, token_ids: list[int], *, include_subtree: bool = False) -> dict[str, object]:
         if self.prefix_cache_coordinator is not None:

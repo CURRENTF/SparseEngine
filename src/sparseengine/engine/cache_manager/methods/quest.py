@@ -726,6 +726,34 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             + (promotion_blocks + reclaimable_blocks) * self.page_size
         )
 
+    def prompt_admission_shared_costs(
+        self, seq: Sequence
+    ) -> dict[str, dict[object, int]]:
+        if self.prefix_cache is None or int(getattr(seq, "prefix_cache_hit_len", 0) or 0) <= 0:
+            return {}
+        self._prefix_hit_capacity_counts(seq)
+        entry = self.prefix_hit_capacity_cache.get(seq)
+        chain = tuple(self._prefix_hit_chain(seq)) if entry is None else entry.chain
+        offload_enabled = self._prefix_offload_enabled()
+        reclaimable_ids = (
+            self.prefix_cache.device_reclaimable_block_ids()
+            if offload_enabled
+            else self.prefix_cache.freeable_block_ids()
+        )
+        costs: dict[object, int] = {}
+        for block in chain:
+            reclaimable = (
+                block.stable_block_id in reclaimable_ids
+                and block.residency.device_present
+            )
+            promotion = offload_enabled and not block.residency.device_present
+            if not reclaimable and not promotion:
+                continue
+            resident_tokens = self._quest_payload(block).resident_tokens(self.page_size)
+            if resident_tokens > 0:
+                costs[block.stable_block_id] = int(resident_tokens)
+        return {"slots": costs} if costs else {}
+
     def _prefix_hit_chain(self, seq: Sequence) -> list[PrefixCacheBlock]:
         if self.prefix_cache is None or seq.prefix_cache_hit_last_block_id is None:
             return []
@@ -968,27 +996,30 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             raise ValueError("prefix prune keep mask contains an out-of-range token index.")
         if len(selected) != int(keep_indices.numel()):
             raise ValueError("prefix prune keep mask contains duplicate token indices.")
-        selected_set = set(selected)
+        selected_page_counts: dict[int, int] = {}
+        for index in selected:
+            page_index = index // self.page_size
+            selected_page_counts[page_index] = selected_page_counts.get(page_index, 0) + 1
+        partial_pages = [
+            (page_index, count)
+            for page_index, count in selected_page_counts.items()
+            if count != self.page_size
+        ]
+        if partial_pages:
+            page_index, count = partial_pages[0]
+            raise ValueError(
+                "QuEST prefix pruning cannot retain a partial page: "
+                f"block_index={page_index} retained={count} "
+                f"page_size={self.page_size}."
+            )
+        kept_page_indices = set(selected_page_counts)
         keep_blocks: list[PrefixCacheBlock] = []
         drop_blocks: list[PrefixCacheBlock] = []
         for block_index, block in enumerate(affected):
-            block_selection = {
-                index - block_index * self.page_size
-                for index in selected_set
-                if block_index * self.page_size
-                <= index
-                < (block_index + 1) * self.page_size
-            }
-            if not block_selection:
-                drop_blocks.append(block)
-            elif block_selection == set(range(self.page_size)):
+            if block_index in kept_page_indices:
                 keep_blocks.append(block)
             else:
-                raise ValueError(
-                    "QuEST prefix pruning cannot retain a partial page: "
-                    f"block_index={block_index} retained={len(block_selection)} "
-                    f"page_size={self.page_size}."
-                )
+                drop_blocks.append(block)
 
         dropped_pages: list[int] = []
         for block in drop_blocks:
@@ -998,8 +1029,11 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
                     raise RuntimeError("QuEST prune found an inconsistent device page payload.")
                 self._validate_page_slots(payload.token_slots, payload.block_slot)
                 dropped_pages.append(int(payload.block_slot))
+        if len(set(dropped_pages)) != len(dropped_pages):
+            raise RuntimeError("QuEST prune found duplicate device page ownership.")
+        if self._num_free_pages + len(dropped_pages) > int(self.free_pages_stack.numel()):
+            raise RuntimeError("QuEST prefix page free stack would overflow during pruning.")
 
-        kept_block_ids = {id(block) for block in keep_blocks}
         records = []
         block_cursor = 0
         created_at = time.time()
@@ -1007,8 +1041,8 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             block_count = (right - left) // self.page_size
             retained = sum(
                 self.page_size
-                for block in affected[block_cursor : block_cursor + block_count]
-                if id(block) in kept_block_ids
+                for page_index in range(block_cursor, block_cursor + block_count)
+                if page_index in kept_page_indices
             )
             records.append((affected[block_cursor], PrefixPruneRecord(
                 prune_id=prune_id,
@@ -2025,6 +2059,8 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         pages = pages.to(device=self.device, dtype=torch.int32).reshape(-1)
         count = int(pages.numel())
         ptr = self._num_free_pages
+        if ptr + count > int(self.free_pages_stack.numel()):
+            raise RuntimeError("QuEST prefix page free stack overflow.")
         self.free_pages_stack[ptr:ptr + count] = pages
         self._num_free_pages += count
 

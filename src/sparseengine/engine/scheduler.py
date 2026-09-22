@@ -202,6 +202,17 @@ class Scheduler:
                 return may_own_slots
         return False
 
+    def request_may_own_slots(self, seq_id: int) -> bool:
+        for queue in (self.waiting, self.decoding):
+            for seq in queue:
+                if seq.seq_id == seq_id:
+                    return bool(
+                        seq.status == SequenceStatus.RUNNING
+                        or seq.num_prefilled_tokens > 0
+                        or queue is self.decoding
+                    )
+        return False
+
     def _reserved_prefill_tokens(self) -> int:
         return int(self.memory_oracle.reserved_prefill_slots(self.waiting, self.engine_prefill_chunk_size))
 
@@ -225,8 +236,7 @@ class Scheduler:
         if target_mode == PREFILL_EXECUTION_RAW_OFFLOAD:
             return not scheduled_seqs and step_free_count > 0
         return (
-            (step_free_count > 0 or any(self.memory_oracle.prefill_private_slots_for(seq) > 0 for seq in self.waiting))
-            and num_batched_tokens <= self.max_num_batched_tokens - margin_batched_tokens
+            num_batched_tokens <= self.max_num_batched_tokens - margin_batched_tokens
             and num_batched_seqs < self.max_num_seqs_in_batch
         )
 
@@ -521,6 +531,7 @@ class Scheduler:
         deferred_prompt_failure: tuple[Sequence, str, int, int] | None = None
         blocked_prefill_step_failure: tuple[Sequence, int, int] | None = None
         blocked_prefill_capacity_failure: tuple[Sequence, int, int, int] | None = None
+        charged_shared_resources: dict[str, set[object]] = {}
 
         if overdue:
             # Preserve admission accounting order before prioritizing old work.
@@ -623,7 +634,26 @@ class Scheduler:
                     # 采用保守策略：预先逻辑占位整个 Prompt，即使后续可能会有稀疏逐出。
                     # 只要我想尽可能地持续生成某个序列，那就应该提前都申请出来
                     if seq.num_prefilled_tokens == 0:
-                        costs = self.memory_oracle.prompt_admission_costs(seq)
+                        raw_costs = self.memory_oracle.prompt_admission_costs(seq)
+                        shared_costs_fn = getattr(
+                            self.memory_oracle, "prompt_admission_shared_costs", None
+                        )
+                        shared_costs = (
+                            shared_costs_fn(seq) if callable(shared_costs_fn) else {}
+                        )
+                        costs = dict(raw_costs)
+                        for name, resources in shared_costs.items():
+                            already_charged = charged_shared_resources.get(name, set())
+                            costs[name] = int(costs.get(name, 0)) - sum(
+                                int(cost)
+                                for resource_id, cost in resources.items()
+                                if resource_id in already_charged
+                            )
+                            if costs[name] < 0:
+                                raise RuntimeError(
+                                    "Shared prompt admission costs exceed the raw budget cost: "
+                                    f"budget={name} raw={raw_costs.get(name, 0)} adjusted={costs[name]}."
+                                )
                         failed = None
                         for name, need in costs.items():
                             free = int(admission_budgets.get(name, 0) or 0)
@@ -699,10 +729,18 @@ class Scheduler:
                         # Admission hooks may acquire residency before raising.
                         # Keep cancellation responsible for releasing that ownership.
                         seq.status = SequenceStatus.RUNNING
-                        self.memory_oracle.on_prompt_admitted(seq, costs)
+                        self.memory_oracle.on_prompt_admitted(seq, raw_costs)
                         if int(getattr(seq, "prefix_cache_hit_len", 0) or 0) > 0:
                             seq.num_prefilled_tokens = int(seq.prefix_cache_hit_len)
-                        logical_need = self.memory_oracle.prompt_logical_reservation_cost(seq)
+                        logical_need = int(
+                            self.memory_oracle.prompt_logical_reservation_cost(seq)
+                        )
+                        logical_need -= sum(
+                            int(cost)
+                            for name, resources in shared_costs.items()
+                            for resource_id, cost in resources.items()
+                            if resource_id in charged_shared_resources.get(name, set())
+                        )
                         if prompt_logical_free_count < logical_need:
                             # Fail fast: admission budgets should already account for reserved prefill headroom.
                             # Reaching this branch usually means a cache-manager-specific budget mismatch.
@@ -714,6 +752,8 @@ class Scheduler:
                                 f"free_slots={physical_free_count} reserved_prefill={reserved_prefill}"
                             )
                         prompt_logical_free_count -= int(logical_need)
+                        for name, resources in shared_costs.items():
+                            charged_shared_resources.setdefault(name, set()).update(resources)
 
                     # 设置当前 Chunk 属性并标记状态
                     logger.debug(f'Add chunk prefill with {can_prefill_tokens} tokens.')
@@ -923,6 +963,8 @@ class Scheduler:
         is_prefill: bool,
         token_logprobs: list[float | None] | None = None,
         top_logprobs: list[dict[int, float] | None] | None = None,
+        *,
+        retain_finished: bool = False,
     ):
         """
         模型运行后的后处理工作。
@@ -966,7 +1008,8 @@ class Scheduler:
                     )
                     if (not seq.ignore_eos and token_id in request_eos) or seq.num_completion_tokens == seq.max_tokens:
                         seq.status = SequenceStatus.FINISHED
-                        self.decoding.remove(seq)
+                        if not retain_finished:
+                            self.decoding.remove(seq)
             return
 
         # 处理 Decode 步骤
@@ -990,5 +1033,5 @@ class Scheduler:
             )
             if (not seq.ignore_eos and token_id in request_eos) or seq.num_completion_tokens == seq.max_tokens:
                 seq.status = SequenceStatus.FINISHED
-                if seq in self.decoding:
+                if not retain_finished and seq in self.decoding:
                     self.decoding.remove(seq)

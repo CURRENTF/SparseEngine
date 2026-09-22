@@ -41,6 +41,21 @@ def test_failed_append_is_atomic_and_release_reuses_pages():
     assert not pool.free
 
 
+def test_single_token_append_returns_only_touched_history_page():
+    pool = QuantizedPagePool(5000, 16, 100000)
+    pool.append(8, 65535)
+    assert pool.append(8, 0).pages == ()
+    plan = pool.append(8, 1)
+    assert plan.start == 65535 and plan.end == 65536
+    assert len(pool.pages[8]) == 4096
+    assert plan.pages == (pool.pages[8][-1],)
+
+    other = QuantizedPagePool(5000, 16, 100000)
+    other.append(9, 65535)
+    crossing = other.append(9, 2)
+    assert crossing.pages == tuple(other.pages[9][-2:])
+
+
 def test_rotation_is_orthogonal_and_does_not_change_global_rng():
     state = torch.random.get_rng_state().clone()
     rotation = orthogonal_rotation(64, 19)

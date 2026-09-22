@@ -472,6 +472,93 @@ def test_run_rpc_keeps_collective_status_without_decode_graph():
     assert calls == [("collective", "run", None)]
 
 
+def test_partial_batch_release_is_not_blindly_replayed():
+    runner = _runner()
+    calls = []
+
+    def free_seq(seq_id):
+        calls.append(seq_id)
+        if seq_id == 2:
+            raise RuntimeError("injected ambiguous release failure")
+
+    runner.runtime_state = SimpleNamespace(free_seq=free_seq)
+    runner._assert_cache_release = lambda seq_ids: None
+
+    with pytest.raises(RuntimeError, match="ambiguous"):
+        ModelRunner.free_slots_batch(runner, [1, 2, 3])
+    assert calls == [1, 2]
+
+    with pytest.raises(RuntimeError, match="restart the worker"):
+        ModelRunner.free_slots_batch(runner, [1, 2, 3])
+    assert calls == [1, 2]
+
+
+def test_successful_release_rpc_clears_rank_local_retry_state():
+    runner = _runner()
+    runner._slot_release_states = {7: "released"}
+    runner.free_slots = lambda seq_id: None
+
+    ModelRunner.call(runner, "free_slots", 7)
+
+    assert not runner._slot_release_states
+
+
+def test_successful_async_retirement_commits_rank_local_retry_state():
+    runner = _runner()
+    runner._slot_release_states = {7: "released"}
+    runner.retire_async = lambda seq_ids: None
+
+    ModelRunner.call(runner, "retire_async", [7])
+
+    assert not runner._slot_release_states
+
+
+def test_tp_async_retirement_commits_only_after_rank_zero_observes_success():
+    runner = _runner()
+    runner.parallel_context = SimpleNamespace(
+        attn_tp_size=2,
+        attn_tp_rank=0,
+        attn_dp_size=1,
+    )
+    calls = []
+    runner.write_shm = lambda method, *args, **kwargs: calls.append(
+        ("write", method, args, kwargs)
+    )
+    runner._sync_tp_host_status = lambda method, error, **kwargs: calls.append(
+        ("sync", method, error)
+    )
+    runner.retire_async = lambda seq_ids: calls.append(("retire", tuple(seq_ids)))
+    runner.commit_slot_releases = lambda seq_ids: calls.append(
+        ("commit", tuple(seq_ids))
+    )
+
+    ModelRunner.call(runner, "retire_async", [7])
+
+    assert calls == [
+        ("write", "retire_async", ([7],), {"wait_for_read": False}),
+        ("retire", (7,)),
+        ("sync", "retire_async", None),
+        ("write", "commit_slot_releases", ([7],), {"wait_for_read": True}),
+        ("commit", (7,)),
+    ]
+
+
+def test_tp_async_worker_waits_for_rank_zero_release_commit():
+    runner = _runner()
+    runner.parallel_context = SimpleNamespace(
+        attn_tp_size=2,
+        attn_tp_rank=1,
+        attn_dp_size=1,
+    )
+    runner._slot_release_states = {7: "released"}
+    runner.retire_async = lambda seq_ids: None
+    runner._sync_tp_host_status = lambda method, error, **kwargs: None
+
+    ModelRunner.call(runner, "retire_async", [7])
+
+    assert runner._slot_release_states == {7: "released"}
+
+
 def test_decode_graph_lifecycle_rpc_uses_host_status():
     runner = _runner()
     runner.parallel_context.attn_tp_size = 1

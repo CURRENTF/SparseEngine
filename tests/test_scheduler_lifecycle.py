@@ -267,3 +267,81 @@ def test_forward_failure_reclaims_owned_slots_or_preserves_abort_owner(phase, cl
     # A later serving cancellation must not free already reclaimed rows twice.
     engine.abort_request(seq.seq_id)
     assert calls.count(release_method) == (2 if cleanup_fails_once else 1)
+
+
+def test_abort_release_failure_preserves_owner_and_retries():
+    manager, runtime, scheduler = make_runtime()
+    seq = request(4)
+    seq.num_prefilled_tokens = 4
+    seq.status = SequenceStatus.RUNNING
+    for layer in manager.kv_transformer_layer_indices():
+        manager._allocate(layer, seq.seq_id, 4)
+    runtime._resident_seq_ids.add(seq.seq_id)
+    scheduler.decoding.append(seq)
+    attempts = 0
+
+    def call(method, *args):
+        nonlocal attempts
+        assert method == "free_slots"
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("injected release failure before mutation")
+        runtime.free_seq(args[0])
+
+    engine = object.__new__(LLMEngine)
+    engine.scheduler = scheduler
+    engine._active_chain_sequences = {}
+    engine._pending_slot_releases = set()
+    engine.model_runner = SimpleNamespace(call=call, runtime_state=runtime)
+
+    with pytest.raises(RuntimeError, match="before mutation"):
+        engine.abort_request(seq.seq_id)
+    assert list(scheduler.decoding) == [seq]
+    assert engine._pending_slot_releases == {seq.seq_id}
+    with pytest.raises(RuntimeError, match="Cannot continue scheduling"):
+        engine.step()
+
+    engine.abort_request(seq.seq_id)
+    assert attempts == 2
+    assert scheduler.is_finished()
+    assert not engine._pending_slot_releases
+    assert manager.num_free_slots == 16
+
+
+def test_finished_sequence_keeps_release_owner_until_cleanup_succeeds():
+    manager, runtime, scheduler = make_runtime()
+    seq = request(4, output_tokens=1)
+    seq.num_prefilled_tokens = 4
+    seq.status = SequenceStatus.RUNNING
+    for layer in manager.kv_transformer_layer_indices():
+        manager._allocate(layer, seq.seq_id, 4)
+    runtime._resident_seq_ids.add(seq.seq_id)
+    scheduler.decoding.append(seq)
+    scheduler.postprocess([seq], [7], is_prefill=False, retain_finished=True)
+    assert seq.is_finished and list(scheduler.decoding) == [seq]
+
+    attempts = 0
+
+    def call(method, *args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("injected finish release failure")
+        assert method == "free_slots"
+        runtime.free_seq(args[0])
+
+    engine = object.__new__(LLMEngine)
+    engine.scheduler = scheduler
+    engine._active_chain_sequences = {}
+    engine._pending_slot_releases = set()
+    engine.model_runner = SimpleNamespace(call=call, runtime_state=runtime)
+
+    with pytest.raises(RuntimeError, match="finish release"):
+        engine._release_slots_transaction(seq.seq_id, finish=True)
+    assert list(scheduler.decoding) == [seq]
+    assert engine._pending_slot_releases == {seq.seq_id}
+
+    engine.abort_request(seq.seq_id)
+    assert scheduler.is_finished()
+    assert not engine._pending_slot_releases
+    assert manager.num_free_slots == 16

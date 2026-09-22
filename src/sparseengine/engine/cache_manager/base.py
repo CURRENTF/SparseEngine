@@ -1763,6 +1763,13 @@ class CacheManager(ABC):
         """Return persistent final-representation admission costs per budget."""
         return {"slots": int(self.prompt_admission_cost(seq))}
 
+    def prompt_admission_shared_costs(
+        self, seq: Sequence
+    ) -> dict[str, dict[object, int]]:
+        """Return reusable admission costs keyed by stable physical resource ID."""
+        del seq
+        return {}
+
     def on_prompt_admitted(self, seq: Sequence, costs: dict[str, int]):
         """Hook called when Scheduler admits a new prompt."""
         return

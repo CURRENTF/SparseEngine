@@ -278,6 +278,70 @@ def test_private_page_tail_progress_does_not_spend_another_requests_pages():
         pool.append(seq.seq_id, seq.current_chunk_size)
 
 
+def test_shared_prefix_admission_cost_is_charged_once_per_batch():
+    class SharedPrefixOracle(FakeMemoryOracle):
+        def __init__(self):
+            super().__init__(free_slots=18, step_free_slots=18)
+            self.admitted = []
+
+        def prompt_admission_costs(self, seq):
+            return {"slots": 17}
+
+        def prompt_admission_shared_costs(self, seq):
+            return {"slots": {b"shared-prefix": 16}}
+
+        def prompt_logical_reservation_cost(self, seq):
+            return 17
+
+        def on_prompt_admitted(self, seq, costs):
+            self.admitted.append((seq.seq_id, dict(costs)))
+
+    oracle = SharedPrefixOracle()
+    scheduler = make_scheduler(
+        PREFILL_POLICY_ALL_CHUNKED,
+        chunk=1,
+        max_tokens=2,
+        oracle=oracle,
+    )
+    seqs = [Sequence([1], SamplingParams(max_tokens=1)) for _ in range(2)]
+    scheduler.waiting.extend(seqs)
+
+    scheduled, is_prefill, preempted = scheduler.schedule()
+
+    assert is_prefill and not preempted
+    assert scheduled == seqs
+    assert oracle.admitted == [(seq.seq_id, {"slots": 17}) for seq in seqs]
+
+
+def test_private_tail_candidate_scan_is_linear_when_global_pool_is_full():
+    class CountingTailOracle(FakeMemoryOracle):
+        def __init__(self, tail_seq_id):
+            super().__init__(free_slots=0, step_free_slots=0)
+            self.tail_seq_id = tail_seq_id
+            self.private_queries = 0
+
+        def prefill_private_slots_for(self, seq):
+            self.private_queries += 1
+            return 1 if seq.seq_id == self.tail_seq_id else 0
+
+        def prefill_step_free_slots_for(self, seq):
+            return self.prefill_private_slots_for(seq)
+
+    seqs = [Sequence([1, 2], SamplingParams(max_tokens=1)) for _ in range(128)]
+    for seq in seqs:
+        seq.num_prefilled_tokens = 1
+    oracle = CountingTailOracle(seqs[-1].seq_id)
+    scheduler = make_scheduler(
+        PREFILL_POLICY_ALL_CHUNKED, chunk=1, max_tokens=1, oracle=oracle
+    )
+    scheduler.waiting.extend(seqs)
+
+    scheduled, is_prefill, _ = scheduler.schedule()
+
+    assert is_prefill and scheduled == [seqs[-1]]
+    assert oracle.private_queries <= 2 * len(seqs)
+
+
 def identity_runtime_layout(num_layers):
     return SimpleNamespace(
         kv_idx_to_layer_idx=tuple(range(num_layers)),

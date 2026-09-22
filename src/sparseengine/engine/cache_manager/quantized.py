@@ -62,7 +62,7 @@ class QuantizedCacheManager(StandardCacheManager):
         plan = self.page_pool.append(seq_id, int(size))
         row = self._get_free_row(seq_id)
         first_page = plan.start // self.page_size
-        pages = torch.tensor(plan.pages[first_page:], dtype=torch.int32, device=self.device)
+        pages = torch.tensor(plan.pages, dtype=torch.int32, device=self.device)
         logical = torch.arange(plan.start, plan.end, dtype=torch.int32, device=self.device)
         slots = pages[(logical // self.page_size - first_page).long()] * self.page_size + logical % self.page_size
         self.buffer_req_to_token_slots[row, plan.start:plan.end] = slots

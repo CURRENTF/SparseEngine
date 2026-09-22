@@ -70,8 +70,9 @@ class AsyncScheduler:
     def abort(self, seq_id):
         scheduler = self.engine.scheduler
         owns = scheduler.abort(seq_id)
-        self.discarded.add(seq_id)
-        if owns or any(seq_id == s.seq_id for p in self.pending for s in p.seqs):
+        referenced = any(seq_id == s.seq_id for p in self.pending for s in p.seqs)
+        if owns or referenced:
+            self.discarded.add(seq_id)
             self.retiring.add(seq_id)
         self._drain_discarded()
         self._retire_ready()
@@ -89,7 +90,13 @@ class AsyncScheduler:
         referenced = {s.seq_id for p in self.pending for s in p.seqs}
         ready = self.retiring - referenced
         if ready:
+            pending_releases = getattr(self.engine, "_pending_slot_releases", None)
+            if pending_releases is None:
+                pending_releases = set()
+                self.engine._pending_slot_releases = pending_releases
+            pending_releases.update(ready)
             self.engine.model_runner.call("retire_async", sorted(ready))
+            pending_releases.difference_update(ready)
             self.retiring.difference_update(ready)
             self.discarded.difference_update(ready)
 

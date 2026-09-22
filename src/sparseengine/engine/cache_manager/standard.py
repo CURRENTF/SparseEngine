@@ -679,6 +679,28 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
         reclaimable_slots, promotion_slots = self._prefix_hit_capacity_slots(seq)
         return suffix_len + reclaimable_slots + promotion_slots
 
+    def prompt_admission_shared_costs(
+        self, seq: Sequence
+    ) -> dict[str, dict[object, int]]:
+        if self.prefix_cache is None or int(getattr(seq, "prefix_cache_hit_len", 0) or 0) <= 0:
+            return {}
+        if "slots" not in self.prompt_admission_costs(seq):
+            return {}
+        chain = self._prefix_hit_chain(seq)
+        reclaimable_ids = (
+            self.prefix_cache.device_reclaimable_block_ids()
+            if self._prefix_offload_enabled()
+            else self.prefix_cache.freeable_block_ids()
+        )
+        costs: dict[object, int] = {}
+        for block in chain:
+            block_id = block.stable_block_id
+            if block_id in reclaimable_ids or (
+                self._prefix_offload_enabled() and not block.residency.device_present
+            ):
+                costs[block_id] = self._block_resident_tokens_or_full(block)
+        return {"slots": costs} if costs else {}
+
     def _block_resident_tokens_or_full(self, block: PrefixCacheBlock) -> int:
         payload = block.payload
         if isinstance(payload, StandardPrefixBlockPayload):
@@ -1007,8 +1029,14 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
         slots = payload.token_slots.to(device=self.device, dtype=torch.int32).reshape(-1)
         count = int(slots.numel())
         ptr = self._num_free_slots
-        self.free_slots_stack[ptr: ptr + count] = slots
+        if ptr + count > int(self.free_slots_stack.numel()):
+            raise RuntimeError(
+                "Freeing mixed prefix KV payload would overflow the slot pool: "
+                f"free={ptr} returning={count} capacity={self.free_slots_stack.numel()}."
+            )
+        self.free_slots_stack[ptr: ptr + count].copy_(slots)
         self._num_free_slots += count
+        payload.token_slots = None
 
     def allocate_prefix_kv_payload_device(self, payload: object) -> None:
         self.allocate_prefix_kv_payloads_device([payload])

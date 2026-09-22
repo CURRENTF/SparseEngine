@@ -503,6 +503,27 @@ def test_quest_prefix_hit_capacity_reuses_chain_and_invalidates_compaction():
         assert payload.call_count == len(chain) * 2
 
 
+def test_quest_shared_prefix_admission_exposes_stable_page_costs():
+    manager = _make_quest_manager_for_prefix(page_size=2)
+    index = manager.prefix_cache
+    leaf_id = _insert_tokens(index, [1, 2, 3, 4])
+    chain = index.get_chain(leaf_id, 2)
+    for page, block in enumerate(chain, start=3):
+        block.payload = QuestPrefixBlockPayload(
+            block_slot=page,
+            token_slots=torch.tensor([page * 2, page * 2 + 1], dtype=torch.int32),
+        )
+    seq = Sequence([1, 2, 3, 4, 5])
+    seq.prefix_cache_hit_len = 4
+    seq.prefix_cache_hit_block_count = 2
+    seq.prefix_cache_hit_last_block_id = leaf_id
+
+    assert manager.prompt_admission_cost(seq) == 6
+    assert manager.prompt_admission_shared_costs(seq) == {
+        "slots": {block.stable_block_id: 2 for block in chain}
+    }
+
+
 def test_quest_prefill_page_reservation_returns_pages_and_rows():
     manager = _make_quest_manager_for_prefix(page_size=2)
     free_pages = manager._num_free_pages
@@ -2679,6 +2700,49 @@ def test_standard_safe_delete_releases_payload_slots():
     assert result["deleted_block_ids"] == [stable_block_id.hex()]
     assert manager._num_free_slots == 90
     assert stable_block_id not in manager.prefix_cache.blocks
+
+
+def test_standard_prefix_payload_release_invalidates_owner():
+    manager = _make_standard_manager_for_prefix(block_size=2)
+    payload = StandardPrefixBlockPayload(
+        token_slots=torch.tensor([10, 11], dtype=torch.int32)
+    )
+    _remove_free_slots(manager, [10, 11])
+    before = manager._num_free_slots
+
+    manager.free_prefix_kv_payload(payload)
+
+    assert manager._num_free_slots == before + 2
+    assert payload.token_slots is None
+    with pytest.raises(RuntimeError, match="missing token slots|no device slots"):
+        manager.free_prefix_kv_payload(payload)
+    assert manager._num_free_slots == before + 2
+
+
+def test_standard_shared_prefix_admission_exposes_stable_block_cost():
+    manager = _make_standard_manager_for_prefix(block_size=2)
+    block_id = manager.prefix_cache.stable_block_id([1, 2], None)
+    block = PrefixCacheBlock(
+        stable_block_id=block_id,
+        parent_block_id=None,
+        block_size=2,
+        logical_block_idx=0,
+        payload=StandardPrefixBlockPayload(
+            token_slots=torch.tensor([10, 11], dtype=torch.int32)
+        ),
+        token_ids=(1, 2),
+    )
+    _remove_free_slots(manager, [10, 11])
+    manager.prefix_cache.insert_block(block)
+    seq = Sequence([1, 2, 3])
+    seq.prefix_cache_hit_len = 2
+    seq.prefix_cache_hit_block_count = 1
+    seq.prefix_cache_hit_last_block_id = block_id
+
+    assert manager.prompt_admission_cost(seq) == 3
+    assert manager.prompt_admission_shared_costs(seq) == {
+        "slots": {block_id: 2}
+    }
 
 
 def test_standard_safe_delete_partial_subtree_releases_only_deleted_child_slots():

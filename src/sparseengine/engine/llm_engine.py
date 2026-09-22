@@ -32,7 +32,7 @@ from sparseengine.method_registry import (
 )
 from sparseengine.platforms.interface import PlatformEnum
 from sparseengine.sampling_params import SamplingParams
-from sparseengine.engine.sequence import Sequence
+from sparseengine.engine.sequence import Sequence, SequenceStatus
 from sparseengine.engine.scheduler import Scheduler
 from sparseengine.engine.model_runner import ModelRunner, make_tp_shm_name, select_master_port
 from sparseengine.engine.input_processor import tokenize_text_prompt
@@ -317,6 +317,7 @@ class LLMEngine:
             tuple[int, list[float | None], list[dict[int, float] | None]]
         ] = []
         self._active_chain_sequences: dict[int, Sequence] = {}
+        self._pending_slot_releases: set[int] = set()
         self._prefix_prune_jobs: dict[str, PrefixPruneJob] = {}
         self._pending_prefix_prune_ids: deque[str] = deque()
         # 注册退出钩子，确保程序崩溃或结束时能正确释放多进程资源
@@ -846,6 +847,12 @@ class LLMEngine:
         In chain mode the returned seq_id is the resident sequence identity and
         remains stable across turns. The caller's request identity is separate.
         """
+        pending = getattr(self, "_pending_slot_releases", set())
+        if pending:
+            raise RuntimeError(
+                "Cannot admit requests while cache release responsibility is pending: "
+                f"seq_ids={sorted(pending)}. Retry abort_request or restart the worker."
+            )
         multimodal = None
         if is_multimodal_prompt(prompt):
             if self.multimodal_processor is None:
@@ -1099,14 +1106,15 @@ class LLMEngine:
             )
             for seq in queue
         )
-        should_free = self.scheduler.abort(seq_id)
+        seq_id = int(seq_id)
         if chain_seq is not None:
-            self._active_chain_sequences.pop(int(seq_id), None)
             self.model_runner.call(
                 "chain_invalidate",
                 str(chain_seq.chain_id),
                 int(chain_seq.seq_id),
             )
+            self.scheduler.abort(seq_id)
+            self._active_chain_sequences.pop(int(seq_id), None)
             return
         coordinator = (
             self.model_runner.runtime_state.chain_cache_coordinator
@@ -1121,11 +1129,46 @@ class LLMEngine:
                     str(chain_id),
                     int(seq_id),
                 )
+                self.scheduler.abort(seq_id)
                 return
+        may_own_slots = getattr(self.scheduler, "request_may_own_slots", None)
+        if callable(may_own_slots):
+            should_free = bool(may_own_slots(seq_id))
+        else:
+            should_free = any(
+                seq.seq_id == seq_id
+                and (
+                    seq.status == SequenceStatus.RUNNING
+                    or seq.num_prefilled_tokens > 0
+                    or queue is getattr(self.scheduler, "decoding", None)
+                )
+                for queue in (
+                    getattr(self.scheduler, "waiting", ()),
+                    getattr(self.scheduler, "decoding", ()),
+                )
+                for seq in queue
+            )
+        should_free = should_free or seq_id in getattr(
+            self, "_pending_slot_releases", set()
+        )
         if should_free:
-            self.model_runner.call("free_slots", seq_id)
+            self._release_slots_transaction(seq_id, finish=False)
         elif multimodal:
             self.model_runner.call("free_multimodal", seq_id)
+        self.scheduler.abort(seq_id)
+
+    def _release_slots_transaction(self, seq_id: int, *, finish: bool) -> None:
+        pending = getattr(self, "_pending_slot_releases", None)
+        if pending is None:
+            pending = set()
+            self._pending_slot_releases = pending
+        seq_id = int(seq_id)
+        pending.add(seq_id)
+        self.model_runner.call(
+            "finish_slots_batch" if finish else "free_slots",
+            [seq_id] if finish else seq_id,
+        )
+        pending.remove(seq_id)
 
     def chain_cache_routing_match(self, chain_id: str) -> dict[str, object]:
         return self.model_runner.runtime_state.chain_routing_match(
@@ -1619,10 +1662,22 @@ class LLMEngine:
         # Preemption is transient: retain the logical request and chain
         # identity, release only runtime KV/recurrent state, and let
         # scheduler-driven recompute rebuild it later.
+        pending = getattr(self, "_pending_slot_releases", None)
+        if pending is None:
+            pending = set()
+            self._pending_slot_releases = pending
+        pending.update(preempted_seq_ids)
         self.model_runner.call("free_slots_batch", preempted_seq_ids)
+        pending.difference_update(preempted_seq_ids)
 
     @cpu_timing.timed
     def step(self):
+        pending = getattr(self, "_pending_slot_releases", set())
+        if pending:
+            raise RuntimeError(
+                "Cannot continue scheduling while cache release responsibility is pending: "
+                f"seq_ids={sorted(pending)}. Retry abort_request or restart the worker."
+            )
         asynchronous = getattr(self, "_async_scheduler", None)
         return asynchronous.step() if asynchronous is not None else self._step_sync()
 
@@ -1698,7 +1753,9 @@ class LLMEngine:
                         chain_seq = self._active_chain_sequences.get(int(seq.seq_id))
                         try:
                             if chain_seq is None:
-                                self.model_runner.call("free_slots", int(seq.seq_id))
+                                self._release_slots_transaction(
+                                    int(seq.seq_id), finish=False
+                                )
                             else:
                                 self.model_runner.call(
                                     "chain_invalidate",
@@ -1747,6 +1804,7 @@ class LLMEngine:
                     is_prefill,
                     token_logprobs=token_logprobs,
                     top_logprobs=top_logprobs,
+                    retain_finished=True,
                 )
             self.last_step_token_outputs = token_outputs
             self.last_step_logprob_outputs = logprob_step_outputs
@@ -1791,6 +1849,7 @@ class LLMEngine:
                             )
                             coordinator.remember_prepared_tokens(prepared)
                             self._active_chain_sequences.pop(int(seq.seq_id), None)
+                            self.scheduler.abort(int(seq.seq_id))
                         finished_outputs.append(
                             (
                                 seq.seq_id,
@@ -1799,8 +1858,9 @@ class LLMEngine:
                                 seq.completion_top_logprobs,
                             )
                         )
-                if finished_seq_ids:
-                    self.model_runner.call("finish_slots_batch", finished_seq_ids)
+                for seq_id in finished_seq_ids:
+                    self._release_slots_transaction(seq_id, finish=True)
+                    self.scheduler.abort(seq_id)
         
         # 计算吞吐量统计数据 (正数表示 Prefill，负数表示 Decode)
         num_tokens = sum(seq.current_chunk_size for seq in seqs) if is_prefill else -len(seqs)

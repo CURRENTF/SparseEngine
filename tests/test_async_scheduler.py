@@ -6,6 +6,7 @@ import torch
 
 from sparseengine.engine.async_scheduling.execution import AsyncDrainRequired, AsyncExecution
 from sparseengine.engine.async_scheduling.scheduler import AsyncScheduler, execution_snapshot
+from sparseengine.engine.llm_engine import LLMEngine
 from sparseengine.engine.sequence import Sequence
 from sparseengine.sampling_params import SamplingParams
 from test_prefill_schedule_policy import FakeMemoryOracle, make_scheduler
@@ -98,6 +99,58 @@ def test_abort_last_request_drains_gpu_owners_without_publishing_more_tokens():
     assert not driver.pending
     assert e.scheduler.is_finished()
     assert e.model_runner.retired == {seq.seq_id}
+
+
+def test_abort_waiting_request_does_not_leave_discard_tombstone():
+    e, driver = engine(chunk=16)
+    seqs = [request(5, 2, ignore_eos=True) for _ in range(256)]
+    for seq in seqs:
+        e.scheduler.add(seq)
+        driver.abort(seq.seq_id)
+    driver.abort(-1)
+    driver.abort(seqs[0].seq_id)
+    assert not e.scheduler.waiting
+    assert not driver.pending
+    assert not driver.retiring
+    assert not driver.discarded
+
+
+def test_failed_retirement_blocks_new_submissions_until_release_is_retried():
+    e, driver = engine(depth=1, chunk=16)
+    seq = request(5, 1, ignore_eos=True)
+    e.scheduler.add(seq)
+    original_call = e.model_runner.call
+    retire_attempts = 0
+
+    def call(method, *args):
+        nonlocal retire_attempts
+        if method == "retire_async":
+            retire_attempts += 1
+            if retire_attempts == 1:
+                e.model_runner.calls.append((method, args))
+                raise RuntimeError("injected async retirement failure")
+        return original_call(method, *args)
+
+    e.model_runner.call = call
+    with pytest.raises(RuntimeError, match="retirement failure"):
+        driver.step()
+
+    assert e._pending_slot_releases == {seq.seq_id}
+    later = request(5, 1, ignore_eos=True)
+    e.scheduler.add(later)
+    submits_before = sum(
+        method == "submit_async" for method, _ in e.model_runner.calls
+    )
+    e._async_scheduler = driver
+    with pytest.raises(RuntimeError, match="Cannot continue scheduling"):
+        LLMEngine.step(e)
+    assert sum(
+        method == "submit_async" for method, _ in e.model_runner.calls
+    ) == submits_before
+
+    driver.abort(seq.seq_id)
+    assert retire_attempts == 2
+    assert not e._pending_slot_releases
 
 
 def test_new_request_can_join_while_prior_output_is_in_flight():

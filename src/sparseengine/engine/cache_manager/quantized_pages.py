@@ -40,7 +40,10 @@ class QuantizedPagePool:
         pages = self.pages.setdefault(seq_id, [])
         pages.extend(added)
         self.lengths[seq_id] = start + count
-        return PageAppend(start, start + count, tuple(pages))
+        first_page = start // self.page_size
+        last_page = (start + count + self.page_size - 1) // self.page_size
+        touched_pages = tuple(pages[first_page:last_page]) if count else ()
+        return PageAppend(start, start + count, touched_pages)
 
     def release(self, seq_id: int) -> None:
         if seq_id not in self.pages:
