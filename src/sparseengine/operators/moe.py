@@ -98,6 +98,9 @@ class MoeProvider:
     name = ""
     gate_up_order = "gate_up"
 
+    def prepare_prefill_alignment(self, spec, caps) -> None:
+        """Prepare optional eager routing outside the model forward path."""
+
     def bind_workspace_lane(self, lane: str) -> None:
         """Bind standalone shared projections; routed scratch stays on its lane."""
         for provider, _, _ in getattr(self, "_shared_projections", ()):
@@ -265,12 +268,14 @@ class MoeDispatchPlan(MoeProvider):
 
     @classmethod
     def bind(cls, spec: MoeOpSpec, caps: DeviceCaps, **kwargs) -> MoeDispatchPlan:
-        del caps
         if kwargs:
             raise TypeError(
                 f"{cls.name} does not accept provider arguments: {sorted(kwargs)}"
             )
-        return cls(spec)
+        plan = cls(spec)
+        for route in plan.routes:
+            route.provider.prepare_prefill_alignment(spec, caps)
+        return plan
 
     def _build_routes(self, spec: MoeOpSpec) -> tuple[MoeDispatchRoute, ...]:
         raise NotImplementedError
@@ -569,6 +574,21 @@ def _sgl_moe_align_block_size(
         block_size=block_size,
         num_experts=num_local_experts,
     )
+
+
+def _prefill_moe_align_block_size(topk_ids, **kwargs) -> MoeAlignment:
+    # Tiny assignments already need just one launch and no sorting. Retain
+    # that algorithm; otherwise use the maintained fused alignment adapter.
+    assignments = topk_ids.numel()
+    sharded = kwargs["local_expert_end"] - kwargs["local_expert_start"] != kwargs["num_experts"]
+    # Large sharded batches also need localization and an ignored-expert
+    # bucket. Measurements favor the original skip-remote algorithm beyond
+    # this range; unsharded batches retain the SGL path.
+    if assignments * 4 <= kwargs["num_experts"] or (sharded and assignments > 32768):
+        from sparseengine.kernels.triton.moe import _prepare_expert_assignment
+
+        return _prepare_expert_assignment(topk_ids, **kwargs)
+    return _sgl_moe_align_block_size(topk_ids, **kwargs)
 
 
 @MOE_REGISTRY.register_atomic(
@@ -1430,6 +1450,35 @@ class H20Qwen36FusedBf16MoeProfile(HopperFusedBf16MoeProfile):
 class TritonMoeProvider(MoeProvider):
     name = "triton"
     gate_up_order = "gate_up"
+    _prefill_alignment = None
+    _prefill_alignment_reason = "not prepared"
+
+    @classmethod
+    def bind(cls, spec, caps, **kwargs):
+        provider = cls(**kwargs)
+        provider.prepare_prefill_alignment(spec, caps)
+        return provider
+
+    def prepare_prefill_alignment(self, spec, caps) -> None:
+        self._prefill_alignment = None
+        if (caps.platform != PlatformEnum.CUDA
+                or spec.weight_dtype != spec.activation_dtype
+                or spec.activation_dtype not in (torch.float16, torch.bfloat16)):
+            self._prefill_alignment_reason = "requires unquantized CUDA experts"
+            return
+        from sparseengine.kernels.external.sgl.moe import sgl_moe_alignment_support
+
+        supported, reason = sgl_moe_alignment_support()
+        self._prefill_alignment_reason = reason
+        if supported:
+            self._prefill_alignment = _prefill_moe_align_block_size
+
+    def binding_metadata(self):
+        return {
+            **super().binding_metadata(),
+            "prefill_alignment": "sgl_with_naive_small_inputs" if self._prefill_alignment else "triton",
+            "prefill_alignment_reason": self._prefill_alignment_reason,
+        }
 
     @classmethod
     def supports(cls, spec: MoeOpSpec, caps: DeviceCaps) -> SupportResult:
@@ -1504,6 +1553,7 @@ class TritonMoeProvider(MoeProvider):
                 tensor_scales=spec.block_shape is None,
             )
         from sparseengine.kernels.triton.moe import fused_moe
+        from sparseengine.utils.context import get_context
 
         return fused_moe(
             hidden_states,
@@ -1513,6 +1563,7 @@ class TritonMoeProvider(MoeProvider):
             topk_weights,
             num_experts=spec.num_experts,
             local_expert_start=local_expert_start,
+            alignment_impl=self._prefill_alignment if get_context().is_prefill else None,
         )
 
 
