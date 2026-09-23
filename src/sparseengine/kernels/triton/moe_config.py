@@ -105,6 +105,25 @@ _GLM_LARGE_BATCH = MoeGemmConfig(128, 128, 64, 1, 8, 3)
 _GLM_H100_LARGE_PREFILL = MoeGemmConfig(128, 256, 64, 1, 8, 4)
 _GLM_EP2_TINY_BATCH = MoeGemmConfig(16, 64, 128, 1, 4, 3)
 _GLM_EP2_SMALL_BATCH = MoeGemmConfig(16, 64, 128, 1, 4, 4)
+_GLM_H20_PACKED_DECODE = MoeGemmConfig(16, 64, 128, 1, 4, 3)
+
+
+def _glm_h20_packed_decode_config(
+    shape: MoeGemmShape,
+    *,
+    num_tokens: int,
+    stage: str,
+) -> MoeGemmConfig | None:
+    """Measured H20 BF16 decode profile with the shared expert packed in."""
+    if (
+        shape != MoeGemmShape("h20", (9, 0), torch.bfloat16, 5, 65, 2048, 1536)
+        or stage not in {"w13", "w2"}
+        or not 1 <= num_tokens <= 16
+    ):
+        return None
+    # Use the measured interval directly: nearest-bucket lookup would also
+    # apply the decode tuning to larger, unmeasured prefill batches.
+    return _GLM_H20_PACKED_DECODE
 
 
 def _glm_h100_tp2_config(
@@ -487,7 +506,11 @@ def _resolve_moe_gemm_config(
         hidden_size=hidden_size,
         intermediate_size=intermediate_size,
     )
-    glm_config = _glm_sm90_tp2_ep2_config(
+    glm_config = _glm_h20_packed_decode_config(
+        shape,
+        num_tokens=num_tokens,
+        stage=stage,
+    ) or _glm_sm90_tp2_ep2_config(
         shape,
         num_tokens=num_tokens,
         stage=stage,
