@@ -33,6 +33,7 @@ from sparseengine.layers.linear import (
 from sparseengine.layers.mla_attention import MLAAttention
 from sparseengine.layers.packed_moe import PackedMoeExperts
 from sparseengine.layers.rotary_embedding import RotaryEmbedding, get_rope
+from sparseengine.operators.glm_rope import resolve_glm_rope_provider
 from sparseengine.method_registry import sparse_decode_attention_score_kind
 from sparseengine.models.layout import resolve_attention_qk_head_dim
 from sparseengine.models.qwen3 import Qwen3MLP
@@ -134,6 +135,11 @@ class Glm4MoeLiteAttention(nn.Module):
         self.kv_lora_rank = int(config.kv_lora_rank)
         self.qk_nope_head_dim = int(config.qk_nope_head_dim)
         self.qk_rope_head_dim = int(config.qk_rope_head_dim)
+        self.prefill_rope = resolve_glm_rope_provider(
+            activation_dtype=mla_attention.spec.activation_dtype,
+            heads=self.local_heads,
+            rotary_dim=self.qk_rope_head_dim,
+        )
         self.qk_head_dim = resolve_attention_qk_head_dim(config)
         self.v_head_dim = int(config.v_head_dim)
         self.proj_chunk_size = int(projection_chunk_size)
@@ -249,11 +255,14 @@ class Glm4MoeLiteAttention(nn.Module):
                 dim=-1,
             )
             with profiler.trace("mla.qk_rope"):
-                q_rope, k_rope = rotary_emb(
-                    positions,
-                    q_rope,
-                    k_rope.unsqueeze(1),
-                )
+                if get_context().is_prefill:
+                    q_rope, k_rope = self.prefill_rope(
+                        rotary_emb, positions, q_rope, k_rope.unsqueeze(1),
+                    )
+                else:
+                    q_rope, k_rope = rotary_emb(
+                        positions, q_rope, k_rope.unsqueeze(1),
+                    )
             k_rope = k_rope.squeeze(1)
             with profiler.trace("mla.q_assembly"):
                 # The projection owns Q; only its rotated tail changed. Reuse
