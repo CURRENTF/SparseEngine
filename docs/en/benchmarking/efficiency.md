@@ -210,14 +210,15 @@ no CUDA, JSON to stdout, no artifact overwrite; missing fields or failed samples
 raise errors. Verify missing `timing_source` boundaries rather than guessing.
 Batch-only aggregates cannot recover request quantiles.
 
-Save commands, configuration, Git commit and dirty status, dependencies, model, trace
-hash, GPU/topology, and failures. Separate raw outputs, repetitions, and aggregates.
+Save commands, configuration, Git commit, dependencies, model, trace identity,
+GPU/topology, and failures in the raw run artifacts. Separate raw outputs,
+repetitions, and aggregates.
 Unless explicitly requested, do not copy/archive source, save worktree patches,
 generate per-file source fingerprints, or require source-hash equality for
 execution, resumption, or reuse. Untracked source alone must not block a run.
 Keep configuration, input-data, model, and result validation. Experimenters decide
-whether code changes require remeasurement.
-A dirty flag does not make uncommitted source reconstructible from the commit alone.
+whether code changes require remeasurement; rerun instead of treating worktree
+recovery as part of the official result contract.
 Aggregate throughput as total tokens / total time and retain dispersion.
 Maximum concurrency requires an integer boundary and max+1 capacity failure;
 an arbitrary crash is not capacity evidence. Multi-method queues preserve
@@ -227,13 +228,14 @@ storage errors, and user interruption stop the entire queue.
 Changed contracts, hardware, or
 Graph/backend policies require new baselines, preserving the old data.
 
-Keep scripts, reusable configurations, and plotting code under
-`scripts/official_experiments/<experiment>/`. Version per-repeat measurements,
-replot JSON/CSV, resolved configurations, and raw-data checksums separately in the
-project's Research-Vault data directory. Pass data locations explicitly to the
-runner and plotter; repo code plus the data bundle must support replotting.
-Keep large raw outputs/logs on persistent data storage, indexed by the data bundle
-and Research-Vault records. Do not store the experiment in tmp or overwrite old runs.
+Keep scripts, reusable configurations, plotting code, and the compact official
+result package under `scripts/official_experiments/<experiment>/`. The committed
+package contains only the device, launch arguments, final results, and Git commit,
+plus the compact JSON/CSV needed to reproduce an official table or figure. Do not
+store working-tree state, patches, source snapshots, source hashes, or recovery
+material. Keep large raw outputs/logs on persistent data storage outside Git. A
+Research-Vault record may index private or transient evidence, but it does not
+replace the repository result package. Do not use tmp or overwrite old runs.
 
 | Symptom | Action |
 | --- | --- |

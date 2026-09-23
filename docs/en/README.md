@@ -8,7 +8,9 @@ benchmark runbooks.
 
 Keep `docs/` focused on stable project guides, contracts, and runbooks. Do not
 add local experiment ledgers here; cite concrete repo artifacts directly when a
-repo-facing result claim needs evidence.
+repo-facing result claim needs evidence. Finalized official result packages live
+under `scripts/official_experiments/<experiment>/`, not in `docs/` or only in a
+private record.
 
 ## Stable Docs
 

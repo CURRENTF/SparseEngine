@@ -2,7 +2,9 @@
 
 Use this page as the stable checklist for reproducing SparseEngine experiments.
 Keep local run ledgers out of this repo; when a repo-facing result needs
-evidence, cite the original run artifact path.
+evidence, cite the original run artifact path. Commit finalized official results
+under `scripts/official_experiments/<experiment>/`; a private record is not a
+substitute for that compact result package.
 
 ## Environment
 

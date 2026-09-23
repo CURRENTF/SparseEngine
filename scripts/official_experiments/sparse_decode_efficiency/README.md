@@ -1,13 +1,15 @@
 # Sparse decode efficiency comparison
 
-Keep scripts and reusable configs in this package. Measurements, resolved run
-configs, and plot inputs live in a separate Research-Vault project data directory.
-Set `DECODE_DATA_ROOT` to that directory and pass it explicitly to the commands
-below. Use a new subdirectory for each run/export; preserve historical results.
-Generated figures and large raw outputs belong in the persistent run directory.
-Run-specific configuration variants and plot selections live under
-`$DECODE_DATA_ROOT/configs/`; pass their full paths with `--config` or
-`--grid-config`. The current base template is `config.boundary-sync.json`.
+Keep scripts, reusable configs, and compact official result exports in this
+package. Set `DECODE_DATA_ROOT` to a versioned directory under this package's
+`results/` directory and pass it explicitly to the commands below. Commit the
+device, launch arguments, final results, Git commit, and compact JSON/CSV needed
+to reproduce official tables and figures. Use a new subdirectory for each
+run/export; preserve historical results. Generated figures and large raw outputs
+belong in the persistent run directory outside Git. Run-specific configuration
+variants and plot selections live under `$DECODE_DATA_ROOT/configs/`; pass their
+full paths with `--config` or `--grid-config`. The current base template is
+`config.boundary-sync.json`.
 The legacy `config.json`, `config.omnikv-total2048.json`, and
 `profile_ablation.json` remain here for the existing step-sync and ablation runners.
 One-off queue, point-refresh, and device-relocation wrappers are archived under
@@ -16,13 +18,12 @@ full path; reusable preparation, sweep, validation, and plotting remain here.
 
 ## README figures
 
-The repository READMEs show three figures re-rendered from the archived 128K-only
+The repository READMEs show two figures re-rendered from the archived 128K-only
 data with native methods labelled Ours, in this order:
 
 | View | Archived figure | README asset under `docs/assets/` |
 | --- | --- | --- |
 | Largest measured batch | `decode_capacity_128k_lowbs_max_batch.png` | `sparse_engine_throughput.png` |
-| Absolute throughput lines | `decode_capacity_128k_lowbs.png` | `sparse_decode_efficiency_lowbs.png` |
 | Relative throughput lines | `decode_capacity_128k_lowbs_delta_vllm.png` | `sparse_decode_efficiency_relative_vllm.png` |
 
 Ours denotes SparseEngine. The label update preserves the archived measurements,
@@ -32,9 +33,9 @@ All use H100 80GB, 128K input / 2K output and `boundary_sync_v2`: 32 warmup
 steps followed by a continuous 256-step full-residency decode window, with one
 discarded and three measured workloads. Rates pool measured decode tokens and
 window time; they are not end-to-end serving throughput. Bars select each
-method's largest measured batch, which need not be its peak throughput or a
-verified capacity maximum. Absolute lines display Qwen through BS4 and GLM
-through BS8. Relative lines show `100 * (method throughput / vLLM Vanilla
+method's largest measured batch, which need not be its peak throughput. An
+unconfirmed capacity is labelled as a lower bound. Relative lines show
+`100 * (method throughput / vLLM Vanilla
 throughput - 1)` at matching measured concurrency, with vLLM at 0%. Points without
 a matching baseline are omitted, so Qwen extends through BS3 and GLM through BS6.
 
@@ -94,9 +95,10 @@ python scripts/official_experiments/sparse_decode_efficiency/plot_decode_capacit
 The JSON retains every measured batch in the selected panels; only the line
 display is restricted. A separate 1×2 bar figure takes each method's throughput
 at its largest validated batch, not the highest throughput across batches.
-Capacity verification status is retained in the exported data, without markers
-or footnotes on the figure. Bars use the paper/whitegrid theme from
-`sparseengine_vs_vortex/plot.py`, borderless fills, shared y limits, and direct
+Capacity verification status is retained in the exported data. Confirmed maxima
+use `B=N`; unconfirmed largest measured batches use `B≥N`. Bars use a
+paper/whitegrid theme, borderless fills,
+shared y limits, and direct
 framework/method/throughput/batch labels above each bar, without a legend. This borrows visual styling only, retaining the recorded
 pooled token/time rates rather than substituting a mean or error bars.
 Bars start at zero; line panels start at their visible
@@ -105,6 +107,52 @@ linear bars, PNG/PDF/SVG files, and selected bar data are exported. Replotting t
 new `plot_data.json` preserves this layout without the presentation argument.
 
 ## Boundary-sync rerun
+
+For the repository-optimization 128K refresh, use
+`config.boundary-sync.128k-native-rerun.json`. It makes the 8192-token native prefill
+budget, SnapKV wave admission, and `favor_min_decoding_seqs=0` explicit instead
+of inheriting mutable defaults. After a fresh BS1 run, derive one capacity
+candidate from the reported KV slots. Probe the powers of two needed by the
+line figure, then the candidate and candidate+1; do not run the default binary
+search. Only a successful candidate followed by an explicit capacity failure at
+candidate+1 is a confirmed maximum. Otherwise retain the largest successful
+batch as a lower bound. Run this delta refresh with explicit native lanes
+`sengine-vanilla,sengine-snapkv,sengine-quest,sengine-omnikv`; the default
+launcher also schedules unchanged baselines and therefore is not the delta-rerun
+entrypoint.
+
+Reuse the existing vLLM, Tangram, HiSparse, and Vortex measurements after their
+raw artifacts pass the same model/topology, 128K/2K, `boundary_sync_v2`, hardware,
+runtime, and method-parameter checks. Rerun a baseline only when no valid matching
+artifact exists, or when a largest-measured lower bound must be extended to a
+confirmed capacity boundary. GLM Tangram and HiSparse remain unsupported rather
+than missing measurements.
+
+Use `run_128k_native_queue.sh RUN_ROOT GPU_A GPU_B BENCHMARK_REPO` for the native
+delta rerun after preparing `RUN_ROOT` with the native rerun config. Qwen TP1
+keeps two independent lanes active, one per GPU, and immediately fills a freed
+GPU with the next Qwen lane. After all four Qwen lanes finish, GLM TP2/EP2 runs
+one lane at a time across the same pair. Every lane has an isolated attempt,
+compiler cache, command, log, and status. A lane error, timeout, or terminated
+child is recorded and the later queue continues; the overall script exits
+nonzero after trying every lane when any lane failed. An explicit signal to the
+top-level queue remains a user stop and terminates its owned process groups.
+The queue disables binary search: full-KV methods derive a direct hint from their
+fresh BS1 slot count, while SnapKV uses the recorded conservative hints in the
+native rerun config. If the hint and hint+1 do not establish an adjacent boundary,
+the run retains a measured lower bound instead of launching more midpoint probes.
+
+The queue passes `--continue-after-contention` one lane at a time. If a foreign
+GPU process appears after reservation, the current measurement is allowed to
+finish. The guard records `guard.contention.json`; the lane is then marked
+`potentially_invalid_external_contention`, excluded from accepted capacity
+evidence, and the next queued lane waits for an idle GPU. No foreign process is
+terminated.
+
+The final README publication keeps two figures from the same validated export:
+the maximum-batch bars from the normal presentation render and the relative-vLLM
+line figure from `--line-metric relative-vllm`. The absolute line artifact may
+remain in the run directory but is not copied into the README.
 
 For a context-length scan with request metrics at each method's verified maximum,
 use `run_context_capacity.py --config CONFIG --repo CHECKOUT --gpus GPU_IDS`.
@@ -287,14 +335,15 @@ python scripts/official_experiments/sparse_decode_efficiency/plot_decode_capacit
 The exporter checks every repetition against raw completed work, full outputs,
 context progression, all-rank Graph counters, and its window clock. It saves
 `plot_data.json`, `points.csv`, palette and source provenance into the data directory.
-Source provenance records Git commit and dirty status, not per-file code hashes.
-Legacy source fingerprints are omitted on export. Raw-data checksums remain;
+Source provenance in the official result records the Git commit, not worktree
+state or per-file code hashes. Legacy source fingerprints are omitted on export. Raw-data checksums remain;
 the legacy per-repetition `source_sha256` field refers to measurement artifacts,
-not source code. A dirty commit alone cannot reconstruct uncommitted changes.
-`plot_data.json` includes per-repeat tokens/time/context windows and artifact
-hashes. Retain large raw logs/token outputs in the persistent run root; preserve
-their index in Research-Vault. Version the portable data bundle in Research-Vault
-separately from the experiment code. Replot by passing that JSON to `--plot-data`;
+not source code. Re-run from the recorded commit and launch arguments when needed.
+`plot_data.json` includes the values needed to reproduce the official figures.
+Retain large raw logs/token outputs in the persistent run root. Commit the compact
+portable result bundle under this experiment package; Research-Vault may retain a
+private run-history or raw-artifact index but is not the result source of truth.
+Replot by passing that JSON to `--plot-data`;
 no model, GPU or external artifact path is needed. Normal/log-y figures include
 PNG/PDF/SVG and preserve the existing legend, inset, font and canvas settings.
 
@@ -536,7 +585,7 @@ Use the original measured runtime with **only** the reviewed MLA runtime and
 provider-binding patch. `update_mla_profile_results.py prepare --repo
 "$BENCHMARK_REPO" --base-plot "$BASE_PLOT_DATA" --run-root "$PROFILE_RUN_ROOT"
 --scratch-root "$DECODE_SCRATCH_ROOT"`
-records Git commit/dirty status and config checksums, without copying source or
+records the Git commit, without copying source or
 checking source-file equality. `BASE_PLOT_DATA` is the full-path, raw-validated aligned-budget
 export, not its portable copy. Use a short absolute scratch path on the output
 volume (at most 65 characters) for multiprocessing Unix sockets.

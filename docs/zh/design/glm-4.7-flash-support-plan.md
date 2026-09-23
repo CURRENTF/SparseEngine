@@ -133,6 +133,6 @@ GLM parser 中加入模型特判。
 - Serving：非流式、SSE、reasoning、tool call、EOS 和 stop boundary，入口见
   `tests/test_openai_api_server.py`。
 
-验证产物应分别保存 resolved config、命令、代码 revision/dirty status、环境与
+验证产物应分别保存 resolved config、命令、Git commit、环境与
 checkpoint 信息、raw/parsed output、逐样本状态和聚合结果。公开文档只维护稳定
 契约、支持边界与自动化门禁，不记录单次运行的通过数量、设备占用或本地路径。

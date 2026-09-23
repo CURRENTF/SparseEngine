@@ -1,11 +1,13 @@
 # Radix prefix pruning by conversation region
 
-Status: experiment design with a SWE-lite tool-result harness; no measured results yet.
+Status: full300 SWE-bench Lite results are recorded in
+[`RESULTS.md`](RESULTS.md) and [`results.json`](results.json).
 
-This package studies physical radix KV pruning with `sparse_method="omnikv"`
-and `policy="kvzip_global"`. OmniKV controls decode selection; KVzip scores
-cached tokens for physical removal. This does not select `sparse_method="kvzip"`
-and does not claim original per-head KVzip parity.
+This package studies physical radix KV pruning with `policy="kvzip_global"`
+across Vanilla, QuEST, and OmniKV decode methods. The selected sparse method
+controls decode attention; KVzip scores cached tokens for physical removal.
+This does not select `sparse_method="kvzip"` and does not claim original
+per-head KVzip parity.
 
 ## Region contract
 
@@ -88,3 +90,7 @@ bodies are recorded as `skipped_by_policy`; failed jobs do not advance the messa
 cursor. The trigger-token threshold applies only to static-range mode.
 The engine remains unaware of message roles. User input, reasoning and assistant
 output are outside this experiment's pruning scope.
+
+The recorded full300 campaign uses the same target and policy with
+`--prefix-prune-keep-ratio 0.2`; the `0.5` command above remains the smoke
+example.

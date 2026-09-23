@@ -75,17 +75,27 @@ def probe_capacity_boundary(attempts):
     return maximum, upper
 
 
-def full_kv_capacity_hint(case, span):
-    """A hint, not a measured boundary: minimum observed per-rank full KV pool."""
+def minimum_kv_slots(case):
+    """Return the minimum logged per-rank KV pool across engine repetitions."""
     slots = []
     for path in case.rglob("*.log"):
         text = path.read_text(errors="replace")
         slots.extend(int(x.replace(",", "")) for x in re.findall(
             r"(?:kv_slots=|GPU KV cache size: |Vortex KV slots: )([\d,]+)", text))
-    return min(slots) // span if slots else None
+    return min(slots) if slots else None
+
+
+def full_kv_capacity_hint(case, span):
+    """A hint, not a measured boundary: minimum observed per-rank full KV pool."""
+    slots = minimum_kv_slots(case)
+    return slots // span if slots else None
 
 
 def capacity_failure(error, log_path):
+    if any(text in error.lower() for text in (
+            "request finished before all admission waves completed",
+            "requests finished before full decode admission")):
+        return False
     if any(text in error.lower() for text in ("out of memory", "full decode batch capacity exceeded", "no runnable sequences", "cannot fit", "cannot admit")):
         return True
     if "Full decode batch capacity exceeded: scheduler preemption" in log_path.read_text():
@@ -165,6 +175,12 @@ def main():
     parser.add_argument("--attempt", default="initial")
     parser.add_argument("--hold-reservation-seconds", type=int, default=0,
                         help="Keep the guarded GPU reservation after this sweep (bounded, opt-in)")
+    parser.add_argument("--continue-after-contention", action="store_true",
+                        help="Finish a single-lane run after foreign GPU activity, then mark it potentially invalid")
+    parser.add_argument("--isolated-cache-root", action="store_true",
+                        help="Use this sweep attempt's directory for compiler caches")
+    parser.add_argument("--no-binary-search", action="store_true",
+                        help="Use powers and the configured/slot-derived hint only; retain a lower bound if not adjacent")
     parser.add_argument("--handoff-reservation-pid", type=int,
                         help="Existing same-user reservation guard; release it within 60s of new guard readiness")
     parser.add_argument("--reuse-equivalent-gpus", action="store_true",
@@ -191,6 +207,8 @@ def main():
         raise ValueError("Additional probes require probe-only and positive concurrency")
     if args.complete_from_capacity and (not args.probe_only or not args.completion_note):
         raise ValueError("Completing a partial curve requires probe-only and an explicit provenance note")
+    if args.continue_after_contention and "," in args.lanes:
+        raise ValueError("Continue-after-contention requires one lane so only the affected result is invalidated")
     REPO = args.repo.resolve()
     # The orchestration script may live outside the selected benchmark checkout.
     # Validate the same statistics module used by raw-artifact checks before GPUs.
@@ -244,7 +262,12 @@ def main():
            "HF_HUB_OFFLINE": "1", "TOKENIZERS_PARALLELISM": "false"}
     for key, name in (("VLLM_CACHE_ROOT", "vllm"), ("TRITON_CACHE_DIR", "triton"),
                       ("TORCHINDUCTOR_CACHE_DIR", "inductor"), ("CUDA_CACHE_PATH", "cuda"), ("TMPDIR", "scratch")):
-        directory = Path(config["scratch_root"]) if key == "TMPDIR" else Path(config["output_root"]) / "cache" / name
+        cache_root = root if args.isolated_cache_root else Path(config["output_root"])
+        if key == "TMPDIR":
+            suffix = hashlib.sha256(str(root).encode()).hexdigest()[:12]
+            directory = Path(config["scratch_root"]) / suffix if args.isolated_cache_root else Path(config["scratch_root"])
+        else:
+            directory = cache_root / "cache" / name
         directory.mkdir(parents=True, exist_ok=True)
         env[key] = str(directory)
     native_env = config["native_env"]
@@ -268,7 +291,7 @@ def main():
     def ensure_guard():
         if guard.poll() is not None:
             raise RuntimeError("GPU reservation exited; inspect guard.log")
-        if (root / "guard.contention.json").exists():
+        if (root / "guard.contention.json").exists() and not args.continue_after_contention:
             raise RuntimeError("External GPU contention invalidates the run")
 
     def run_case(lane, batch, smoke=False):
@@ -513,6 +536,7 @@ def main():
             guard = subprocess.Popen([config["conda"], "run", "--no-capture-output", "-p", native_env,
                 "python", "-u", str(PACKAGE / "decode_capacity_guard.py"), "--parent", str(os.getpid()),
                 "--ready", str(root / "guard.json")]
+                + (["--contention-policy", "mark"] if args.continue_after_contention else [])
                 + (["--handoff-reservation-pid", str(args.handoff_reservation_pid)] if args.handoff_reservation_pid else []),
                 cwd=REPO, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         for _ in range(120):
@@ -623,11 +647,35 @@ def main():
                     upper = batch
                     break
                 lower = batch
-                if batch == 1 and lane in ("sengine-vanilla", "sengine-quest", "sengine-omnikv", "vllm-vanilla", "vortex-quest"):
-                    hint = full_kv_capacity_hint(root / lane / "bs1", config["input_len"] + config["output_len"])
-                    if hint and hint >= lower:
+                if args.no_binary_search and hint and batch == hint + 1:
+                    write(root / lane / "capacity.json", {"status": "partial", "model": args.model,
+                          "lane": lane, "max_concurrency": None, "verified_concurrency": lower,
+                          "first_failed_concurrency": None, "maximum_verified": False,
+                          "selection": "slot_hint_no_binary", "attempts": attempts,
+                          "reason": "The direct hint and hint+1 both passed; binary search disabled."})
+                    status(lane, "completed_lower_bound", verified_concurrency=lower,
+                           first_failed_concurrency=None, maximum_verified=False)
+                    return
+                if batch == 1:
+                    configured_hint = config.get("capacity_hints", {}).get(args.model, {}).get(lane)
+                    if configured_hint:
+                        hint = int(configured_hint["concurrency"])
+                        tokens_per_sequence = int(configured_hint.get("tokens_per_sequence", 0))
+                        slots = minimum_kv_slots(root / lane / "bs1")
+                        slot_upper = slots // tokens_per_sequence if slots and tokens_per_sequence > 0 else None
+                        if (hint < 1 or hint > config["safety_concurrency_limit"]
+                                or not configured_hint.get("basis") or slot_upper is None or hint > slot_upper):
+                            raise LaneFailure("Configured capacity hint lacks compatible current BS1 slot evidence")
                         status(lane, "capacity_hint", concurrency=hint,
-                               basis="minimum logged full KV slots / request total span; not a verified limit")
+                               basis=configured_hint["basis"], source="configured_conservative_hint",
+                               current_kv_slots=slots, slot_quotient_upper=slot_upper,
+                               tokens_per_sequence=tokens_per_sequence)
+                    elif lane in ("sengine-vanilla", "sengine-quest", "sengine-omnikv", "vllm-vanilla", "vortex-quest"):
+                        hint = full_kv_capacity_hint(root / lane / "bs1", config["input_len"] + config["output_len"])
+                        if hint and hint >= lower:
+                            status(lane, "capacity_hint", concurrency=hint,
+                                   basis="minimum logged full KV slots / request total span; not a verified limit",
+                                   source="current_bs1_slots")
                 if hint and lower < hint < batch * 2:
                     batch = hint
                 elif hint and lower == hint:
@@ -636,6 +684,15 @@ def main():
                     batch = 1 << lower.bit_length()
             if upper is None or lower == 0:
                 raise LaneFailure(f"No validated nonzero capacity boundary for {lane}")
+            if args.no_binary_search and upper - lower > 1:
+                write(root / lane / "capacity.json", {"status": "partial", "model": args.model,
+                      "lane": lane, "max_concurrency": None, "verified_concurrency": lower,
+                      "first_failed_concurrency": upper, "maximum_verified": False,
+                      "selection": "slot_hint_no_binary", "attempts": attempts,
+                      "reason": "Direct slot/hint probes did not establish adjacent max/max+1; binary search disabled."})
+                status(lane, "completed_lower_bound", verified_concurrency=lower,
+                       first_failed_concurrency=upper, maximum_verified=False)
+                return
             while upper - lower > 1:
                 batch = (upper + lower) // 2
                 result = run_case(lane, batch)
@@ -660,8 +717,35 @@ def main():
             status(lane, "failed", **failure)
 
         failures = run_lane_stages(lanes, smoke_lane, sweep_lane, record_failure, ensure_guard)
+        contention_path = root / "guard.contention.json"
+        contention = json.loads(contention_path.read_text()) if contention_path.exists() else None
+        if contention:
+            lane = lanes[0]
+            failure = {"phase": "contention",
+                       "error": "External GPU activity was observed; measurements completed but are potentially invalid.",
+                       "artifact": str(contention_path)}
+            if lane not in failures:
+                failures[lane] = failure
+                record_failure(lane, failure)
+            capacity_path = root / lane / "capacity.json"
+            if capacity_path.exists():
+                capacity = json.loads(capacity_path.read_text())
+                capacity.update(validity_status="potentially_invalid_external_contention",
+                                contention_artifact=str(contention_path))
+                write(capacity_path, capacity)
+            validity = {"status": "potentially_invalid_external_contention",
+                        "contention_artifact": str(contention_path)}
+            write(root / lane / "validity.json", validity)
+            if args.export_measurements_dir:
+                export_lane = args.export_measurements_dir / args.model / args.attempt / lane
+                write(export_lane / "validity.json", validity)
+                for measurement_path in export_lane.glob("bs*.json"):
+                    measurement = json.loads(measurement_path.read_text())
+                    measurement.update(validity_status=validity["status"],
+                                       contention_artifact=str(contention_path))
+                    write(measurement_path, measurement)
         write(root / "queue_summary.json", {"status": "failed" if failures else "completed",
-              "lanes": lanes, "failures": failures})
+              "lanes": lanes, "failures": failures, "external_contention": contention})
         if failures:
             raise RuntimeError(f"Lane failures retained after continuing other methods: {list(failures)}")
         status("queue", "smoke_completed" if args.smoke_only else "probe_completed" if args.probe_only else "completed")

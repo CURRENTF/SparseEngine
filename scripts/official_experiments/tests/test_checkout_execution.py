@@ -103,33 +103,3 @@ def test_boundary_preflight_uses_checkout_without_copying_it(tmp_path, monkeypat
     assert Path(command[command.index("--repo") + 1]) == REPO
     assert Path(read(root / "manifest.json")["repo"]) == REPO
     assert not (root / "source").exists()
-
-
-def test_session_control_scripts_resolve_from_selected_checkout(tmp_path):
-    config = read(ROOT / "sparseengine_vs_vortex/session/campaign.json")
-    config["quality"] = config["quality"][:1]
-    config["efficiency32"] = []
-    cfg = tmp_path / "campaign.json"
-    write(cfg, config)
-    paths = {key: str(tmp_path) for key in (
-        "model_root", "dataset", "conda", "native_env", "vllm_env", "vortex_env",
-        "tangram_env", "hisparse_env", "vortex_repo", "vortex_overlay", "cuda_home", "scratch_root",
-    )}
-    prepared = tmp_path / "prepared"
-    for model in config["models"].values():
-        (tmp_path / model["name"]).mkdir()
-        write(prepared / model["name"] / "prepared_samples.json", {})
-    paths_file = tmp_path / "paths.json"
-    write(paths_file, paths)
-    root = tmp_path / "run"
-    run("sparseengine_vs_vortex/session/build_campaign.py", "--config", cfg,
-        "--paths", paths_file, "--root", root, "--prepared", prepared,
-        "--source", REPO, "--gpus", "0")
-    jobs = read(root / "queued_commands.json")
-    assert jobs
-    for job in jobs:
-        assert Path(job["cwd"]) == REPO
-        assert Path(job["command"][1]).is_file()
-        assert Path(job["command"][1]).is_relative_to(REPO)
-    assert not (root / "control").exists()
-    assert not (root / "source_v2").exists()

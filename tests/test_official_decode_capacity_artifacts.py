@@ -179,6 +179,26 @@ def test_missing_graph_requires_explicit_capacity_evidence(tmp_path):
     assert not capacity_failure("benchmark child exited with code -9", log)
 
 
+def test_finished_request_during_staged_admission_is_not_kv_capacity(tmp_path):
+    """A short output window can expire before all waves enter decode without exhausting KV."""
+    from scripts.official_experiments.sparse_decode_efficiency.sweep_decode_capacity import capacity_failure
+
+    log = tmp_path / "run.log"
+    log.write_text("")
+    assert not capacity_failure(
+        "Full decode batch capacity exceeded: request finished before all admission waves completed",
+        log,
+    )
+    assert not capacity_failure(
+        "Full decode batch capacity exceeded: requests finished before full decode admission",
+        log,
+    )
+    assert capacity_failure(
+        "Full decode batch capacity exceeded: not all requests entered decode together",
+        log,
+    )
+
+
 @pytest.mark.parametrize("change", [None, "protocol", "command", "gpu", "model", "hyperparams", "gpu_equivalent", "gpu_mismatch"])
 def test_boundary_resume_rejects_changed_workload_identity(tmp_path, monkeypatch, change):
     """Hash-free run records must still reject changed workloads and devices."""
@@ -320,6 +340,33 @@ def test_partial_replot_does_not_turn_theoretical_capacity_into_measurement(tmp_
         plot.main()
         assert calls
         assert json.loads((output / "plot_data.json").read_text())["curves"][0]["max_concurrency"] is None
+
+
+@pytest.mark.parametrize("marker", ["capacity", "validity_file"])
+def test_partial_curve_rejects_gpu_contention_before_loading_points(tmp_path, monkeypatch, marker):
+    """An explicit partial-curve policy must not publish marked-invalid measurements."""
+    from scripts.official_experiments.sparse_decode_efficiency import plot_decode_capacity as plot
+
+    lane = "sengine-snapkv"
+    capacity = tmp_path / "fixture" / "attempt" / lane / "capacity.json"
+    capacity.parent.mkdir(parents=True)
+    evidence = {"status": "failed", "attempts": [{"concurrency": 1,
+                "status": "success", "artifact": str(tmp_path / "raw.jsonl")}]}
+    if marker == "capacity":
+        evidence["validity_status"] = "potentially_invalid_external_contention"
+    else:
+        (capacity.parent / "validity.json").write_text(json.dumps({
+            "status": "potentially_invalid_external_contention"}))
+    capacity.write_text(json.dumps(evidence))
+    config = {"output_root": str(tmp_path), "models": {"fixture": {}},
+              "unsupported": {"fixture": {name: "not measured" for name in plot.LANES if name != lane}},
+              "partial_curves": {"fixture": {lane: {
+                  "reason": "queue stopped", "capacity_artifact": str(capacity.relative_to(tmp_path))}}}}
+    monkeypatch.setattr(plot, "validate_measurement",
+                        lambda *_args, **_kwargs: pytest.fail("Invalid measurement reached validation"))
+
+    with pytest.raises(ValueError, match="Capacity evidence is marked invalid"):
+        plot.load_campaign(config)
 
 
 def test_grid_preserves_per_panel_protocol_and_explicit_missing_curve(tmp_path, monkeypatch):

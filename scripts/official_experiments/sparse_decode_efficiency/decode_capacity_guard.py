@@ -8,6 +8,29 @@ import subprocess
 import time
 
 
+def record_contention(path, foreign_pids, episodes, active_pids):
+    """Atomically retain bounded contention episodes for later validity checks."""
+    now = time.time()
+    current = tuple(sorted(foreign_pids))
+    if current != active_pids:
+        episodes.append({
+            "foreign_pids": list(current),
+            "first_seen_unix_s": now,
+            "last_seen_unix_s": now,
+            "samples": 1,
+        })
+    else:
+        episodes[-1]["last_seen_unix_s"] = now
+        episodes[-1]["samples"] += 1
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps({
+        "policy": "mark_potentially_invalid_and_continue",
+        "episodes": episodes,
+    }, indent=2) + "\n")
+    temporary.replace(path)
+    return current
+
+
 def descendants(pid, parent):
     for _ in range(64):
         if pid == parent:
@@ -28,6 +51,7 @@ def main():
     parser.add_argument("--ready", type=Path, required=True)
     parser.add_argument("--max-seconds", type=int, default=172800)
     parser.add_argument("--handoff-reservation-pid", type=int)
+    parser.add_argument("--contention-policy", choices=("abort", "mark"), default="abort")
     args = parser.parse_args()
     handoff = args.handoff_reservation_pid
     handoff_start = None
@@ -66,13 +90,19 @@ def main():
         raise RuntimeError("GPU ownership changed while attaching reservation")
     args.ready.write_text(json.dumps({"pid": os.getpid(), "devices": os.environ["CUDA_VISIBLE_DEVICES"]}))
     deadline = time.monotonic() + args.max_seconds
+    contention_path = args.ready.with_suffix(".contention.json")
+    episodes, active_pids = [], ()
     while time.monotonic() < deadline:
         os.kill(args.parent, 0)
         foreign = check()
         if foreign:
-            args.ready.with_suffix(".contention.json").write_text(json.dumps({"foreign_pids": foreign}))
-            os.kill(args.parent, signal.SIGTERM)
-            raise RuntimeError(f"External GPU contention: {foreign}")
+            if args.contention_policy == "abort":
+                contention_path.write_text(json.dumps({"foreign_pids": foreign}))
+                os.kill(args.parent, signal.SIGTERM)
+                raise RuntimeError(f"External GPU contention: {foreign}")
+            active_pids = record_contention(contention_path, foreign, episodes, active_pids)
+        else:
+            active_pids = ()
         time.sleep(5)
     os.kill(args.parent, signal.SIGTERM)
     raise RuntimeError("Reservation lifetime exceeded")

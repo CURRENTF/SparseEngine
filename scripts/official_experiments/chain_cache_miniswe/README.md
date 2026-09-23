@@ -6,6 +6,11 @@ Docker evaluator. It does not run synthetic or teacher-forced generation.
 Use `setting.json` as the single experimental setting. No GPU result is implied
 by this recipe; every method needs its own smoke and concurrency pilot.
 
+The finalized official result package is [`RESULTS.md`](RESULTS.md) with the
+machine-readable [`results.json`](results.json). It records only the devices,
+launch arguments, final scores, and Git commits. Large raw artifacts remain on
+persistent storage outside Git.
+
 ## Frozen comparison
 
 - Same BF16 GLM-4.7-Flash checkpoint, TP2/EP2/DP1, two GPUs, target 64 agent workers.
@@ -433,9 +438,11 @@ python3 "$RECIPE" collect --root "$RUN_ROOT" --method "$METHOD" --phase "$PHASE"
 Collection validates selected IDs and exact smoke/pilot/full row coverage, preserves the
 official summary, and exports `request_samples.jsonl` and `report.json` from
 server request JSON. Also retain server logs, trajectories, predictions, official
-reports, and environment manifests. `prepare` records the Git commit and working-tree
-status in `source.json`; it does not copy source files or save a working-tree patch.
-Use the Research-Vault workflow for the final dated record and compact data.
+reports, and environment manifests. `prepare` records the Git commit in
+`source.json`; it does not copy source files or save a working-tree patch.
+Write finalized official scores and their compact table/plot data into this
+directory. Research-Vault may keep private retry history or external raw-artifact
+indexes, but it must not replace the repository result package.
 
 `timed_mini.py` delegates to the installed `mini-extra` console entrypoint and
 wraps only its `process_instance` call. It preserves returned values/exceptions

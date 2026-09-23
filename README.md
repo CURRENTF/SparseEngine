@@ -14,13 +14,11 @@ A sparse-first inference engine for long-context LLM serving.
 
 <div align="center">
   <img src="docs/assets/sparse_engine_throughput.png" alt="Decode throughput at each method's largest measured batch" style="width:100%; height:auto;">
-  <img src="docs/assets/sparse_decode_efficiency_lowbs.png" alt="Decode throughput versus concurrency for Qwen3 and GLM" style="width:100%; height:auto;">
   <img src="docs/assets/sparse_decode_efficiency_relative_vllm.png" alt="Decode throughput improvement relative to vLLM Vanilla at matched concurrency" style="width:100%; height:auto;">
 </div>
 
 128K input / 2K output on H100 80GB. Top: decode throughput at each method's
-largest measured batch. Middle: absolute throughput at low concurrency.
-Bottom: throughput improvement relative to vLLM Vanilla
+largest measured batch. Bottom: throughput improvement relative to vLLM Vanilla
 at the same concurrency, with vLLM at 0%. Ours denotes SparseEngine.
 See the [measurement and figure notes](scripts/official_experiments/sparse_decode_efficiency/README.md#readme-figures).
 

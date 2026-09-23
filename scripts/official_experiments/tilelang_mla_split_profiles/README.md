@@ -57,7 +57,7 @@ Every arm receives ten warmup calls and six block-averaged CUDA-event samples in
 three balanced ABBA/BAAB rounds. Compilation/cold binding is recorded separately.
 Identical configurations are controls, not evidence of a policy improvement.
 
-Each run records Git commit/dirty status, resolved profiles, environment/device
+Each run records the Git commit, resolved profiles, environment/device
 identity, raw samples, per-case numerical status and medians. The aggregate is
 an unweighted geometric mean over the sampled grid, **not** engine throughput
 or a production-workload-weighted speedup. GPU clocks are observed, not locked.

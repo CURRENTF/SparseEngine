@@ -1,6 +1,8 @@
 """Protect protocol forwarding and reject failed repetitions without GPU mocks."""
 import json
+import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace as NS
 
 import pytest
@@ -117,6 +119,94 @@ def test_resource_loss_after_lane_failure_stops_before_continuation():
     with pytest.raises(RuntimeError, match="reservation exited"):
         run_lane_stages(["first", "last"], fail, fail, lambda *a: recorded.append(a), guard)
     assert not recorded
+
+
+def test_mark_contention_retains_episode_without_stopping(tmp_path):
+    """Foreign activity must remain auditable when the explicit mark-only policy is used."""
+    from scripts.official_experiments.sparse_decode_efficiency.decode_capacity_guard import record_contention
+
+    path = tmp_path / "guard.contention.json"
+    episodes = []
+    active = record_contention(path, [91, 17], episodes, ())
+    active = record_contention(path, [17, 91], episodes, active)
+
+    evidence = json.loads(path.read_text())
+    assert active == (17, 91)
+    assert evidence["policy"] == "mark_potentially_invalid_and_continue"
+    assert evidence["episodes"][0]["foreign_pids"] == [17, 91]
+    assert evidence["episodes"][0]["samples"] == 2
+
+
+@pytest.mark.parametrize("missed_wait", [False, True])
+def test_two_gpu_native_queue_continues_and_refills_qwen_slots(tmp_path, missed_wait):
+    """A failed Qwen lane must release its GPU to the next lane before GLM uses both."""
+    repo = tmp_path / "repo"
+    package = repo / "scripts/official_experiments/sparse_decode_efficiency"
+    package.mkdir(parents=True)
+    events = tmp_path / "events.tsv"
+    runner = package / "run_lanes.sh"
+    runner.write_text("""#!/usr/bin/env bash
+set -u
+model=$2
+gpus=$3
+lane=$4
+printf 'start\\t%s\\t%s\\t%s\\n' "$model" "$lane" "$gpus" >> "$QUEUE_TEST_EVENTS"
+case "$lane" in
+  sengine-vanilla) sleep 0.1; code=7 ;;
+  sengine-snapkv) sleep 0.4; code=0 ;;
+  *) sleep 0.1; code=0 ;;
+esac
+printf 'end\\t%s\\t%s\\t%s\\n' "$model" "$lane" "$gpus" >> "$QUEUE_TEST_EVENTS"
+exit "$code"
+""")
+    runner.chmod(0o755)
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    (run_root / "config.json").write_text(json.dumps({
+        "measurement_protocol": "boundary_sync_v2", "input_len": 131072, "output_len": 2048,
+        "models": {"qwen3-30b-fp8": {"tp": 1, "ep": 1}, "glm4.7-flash": {"tp": 2, "ep": 2}},
+    }))
+    (run_root / "launch.json").write_text(json.dumps({"data_root": str(tmp_path / "data")}))
+    queue = (Path(__file__).parents[1] / "scripts/official_experiments/sparse_decode_efficiency"
+             / "run_128k_native_queue.sh")
+    env = {**os.environ, "QUEUE_TEST_EVENTS": str(events)}
+    if missed_wait:
+        # Reproduce Bash's 127/unset-PID result when both children have already
+        # exited before wait -n. Their individual wait PID statuses remain valid.
+        bash_env = tmp_path / "bash_env"
+        bash_env.write_text("""wait() {
+  if [[ ${1-} == -n && ${QUEUE_TEST_WAIT_MISS_PENDING:-0} == 1 ]]; then
+    QUEUE_TEST_WAIT_MISS_PENDING=0
+    sleep 0.5
+    return 127
+  fi
+  builtin wait "$@"
+}
+""")
+        env.update(BASH_ENV=str(bash_env), QUEUE_TEST_WAIT_MISS_PENDING="1")
+    result = subprocess.run(["bash", str(queue), str(run_root), "6", "7", str(repo)],
+                            env=env,
+                            capture_output=True, text=True, timeout=10)
+
+    assert result.returncode == 1
+    rows = [line.split("\t") for line in events.read_text().splitlines()]
+    qwen_starts = [row for row in rows if row[0] == "start" and row[1] == "qwen3-30b-fp8"]
+    assert {tuple(row) for row in qwen_starts[:2]} == {
+        ("start", "qwen3-30b-fp8", "sengine-vanilla", "6"),
+        ("start", "qwen3-30b-fp8", "sengine-snapkv", "7"),
+    }
+    if missed_wait:
+        assert {row[3] for row in qwen_starts[2:]} == {"6", "7"}
+    else:
+        assert qwen_starts[2][3] == "6"
+    assert len(qwen_starts) == 4
+    assert len([row for row in rows if row[0] == "end"]) == 8
+    last_qwen_end = max(i for i, row in enumerate(rows) if row[0] == "end" and row[1] == "qwen3-30b-fp8")
+    first_glm_start = min(i for i, row in enumerate(rows) if row[0] == "start" and row[1] == "glm4.7-flash")
+    assert first_glm_start > last_qwen_end
+    assert all(row[3] == "6,7" for row in rows if row[0] == "start" and row[1] == "glm4.7-flash")
+    status = (run_root / "native-128k.queue.status.tsv").read_text()
+    assert "completed_with_failures" in status
 
 
 def test_legacy_continuation_never_retries_started_or_failed_methods(tmp_path):

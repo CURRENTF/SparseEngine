@@ -1,0 +1,124 @@
+{
+  "launch_args": {
+    "backend": "sparseengine",
+    "dataset": "SWE-bench/SWE-bench_Lite",
+    "split": "test",
+    "samples": 300,
+    "model": "GLM-4.7-Flash",
+    "dtype": "bfloat16",
+    "device": "2x NVIDIA H20 96GB",
+    "tensor_parallel_size": 2,
+    "expert_parallel_size": 2,
+    "data_parallel_size": 1,
+    "agent_concurrency": 24,
+    "max_num_seqs_in_batch": 24,
+    "max_decoding_seqs": 24,
+    "max_num_seqs_in_gpu": 64,
+    "favor_min_decoding_seqs": 18,
+    "max_model_len": 202752,
+    "max_num_batched_tokens": 65536,
+    "engine_prefill_chunk_size": 4096,
+    "gpu_memory_utilization": 0.95,
+    "decode_graph": true,
+    "decode_graph_capture_sizes": [1, 2, 4, 8, 16, 24],
+    "enable_prefix_cache_offload": false,
+    "prefix_cache_mode": "radix",
+    "chain_cache": false,
+    "prefix_prune": {
+      "policy": "kvzip_global",
+      "target": "tool_results",
+      "schedule": "accumulated_tool_tokens",
+      "keep_ratio": 0.2,
+      "trigger_tokens": 1
+    },
+    "max_tokens": 16384,
+    "temperature": 0.7,
+    "top_p": 1.0,
+    "step_limit": 80,
+    "wall_time_limit_seconds": 7200,
+    "enable_thinking": true,
+    "preserve_thinking": true,
+    "eval_workers": 16,
+    "eval_timeout_seconds": 1800
+  },
+  "results": [
+    {
+      "method": "vanilla",
+      "launch_args": {
+        "sparse_method": "vanilla"
+      },
+      "final_result": {
+        "resolved": 71,
+        "total": 300,
+        "score_percent": 23.67,
+        "status_counts": {
+          "success": 135,
+          "model_failed": 161,
+          "metric_failed": 4
+        },
+        "generation_exit_status_counts": {
+          "Submitted": 139,
+          "LimitsExceeded": 161
+        },
+        "total_api_calls": 19969
+      },
+      "git_commit": "ed632bc3eb21a32e502ffb31d47e4c59a6eacfd2"
+    },
+    {
+      "method": "quest",
+      "launch_args": {
+        "sparse_method": "quest",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 1472,
+        "quest_chunk_size": 16,
+        "quest_skip_layers": 2
+      },
+      "final_result": {
+        "resolved": 64,
+        "total": 300,
+        "score_percent": 21.33,
+        "status_counts": {
+          "success": 120,
+          "model_failed": 173,
+          "metric_failed": 7
+        },
+        "generation_exit_status_counts": {
+          "Submitted": 127,
+          "LimitsExceeded": 171,
+          "TimeExceeded": 1,
+          "RepeatedFormatError": 1
+        },
+        "total_api_calls": 19754
+      },
+      "git_commit": "ed632bc3eb21a32e502ffb31d47e4c59a6eacfd2"
+    },
+    {
+      "method": "omnikv",
+      "launch_args": {
+        "sparse_method": "omnikv",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 1472,
+        "full_attention_layers": "auto"
+      },
+      "final_result": {
+        "resolved": 67,
+        "total": 300,
+        "score_percent": 22.33,
+        "status_counts": {
+          "success": 127,
+          "model_failed": 169,
+          "metric_failed": 4
+        },
+        "generation_exit_status_counts": {
+          "Submitted": 132,
+          "LimitsExceeded": 167,
+          "TimeExceeded": 1
+        },
+        "total_api_calls": 20161
+      },
+      "git_commit": "ed632bc3eb21a32e502ffb31d47e4c59a6eacfd2"
+    }
+  ]
+}

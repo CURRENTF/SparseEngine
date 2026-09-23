@@ -183,22 +183,24 @@ vLLM-compatible fork 用 `--engine-kwargs @config.json` 和 `--backend-label`。
 无需 CUDA，JSON 输出到 stdout，不覆盖原文件；缺字段/失败样本会报错。
 缺 `timing_source` 须先核实边界；仅有批次聚合无法恢复请求分位数。
 
-记录命令、配置、Git commit 和 dirty 状态、依赖、模型、trace hash、GPU/拓扑和失败。
+在原始运行产物中记录命令、配置、Git commit、依赖、模型、trace identity、
+GPU/拓扑和失败。
 除非用户明确要求，不复制或归档源码、不保存工作区补丁、不生成逐文件源码指纹，
 不以源码哈希相等作为运行、续跑或复用条件，也不因未跟踪源码而拒绝运行。
 保留配置、输入数据、模型和结果校验；源码变化是否需要重测由实验者判断。
-dirty 状态只表示存在未提交修改，不保证仅凭 commit 可以精确重建源码。
+正式结果不承担工作区恢复；无法重建时按记录的 commit 和启动参数重跑。
 原始输出、逐次测量与聚合分开保存；吞吐按总 tokens / 总时间聚合，保留离散程度。
 最大并发须验证整数边界及 max+1；普通崩溃不是容量不足证据。
 多方法队列中，方法的 smoke/测量失败应保留证据、跳过该方法并继续其他方法，
 最终仍报告失败；GPU 冲突、资源失效、存储错误或用户停止中止整组。
 契约、硬件或 Graph/backend 政策变化须重测 baseline，不覆盖旧数据。
 
-脚本、可复用配置和绘图代码留在 `scripts/official_experiments/<experiment>/`。
-每次重复数据、可重绘 JSON/CSV、resolved config 和原始数据校验和单独存入
-Research-Vault 的项目数据目录并纳入版本控制，通过显式路径参数交给运行和绘图入口。
-repo 代码配合该数据包应能重绘。大体积日志/原始输出保存在持久数据盘，
-数据包及 Vault 记录保留其索引；不放 tmp、不覆盖旧实验。
+脚本、可复用配置、绘图代码和精简的正式结果包都保存在
+`scripts/official_experiments/<experiment>/`。结果包只记录设备、启动参数、
+最终结果和 Git commit，以及重现正式表格或图所必需的精简 JSON/CSV。
+不保存工作区状态、patch、源码快照、逐文件 hash 或恢复材料。大体积日志和
+原始输出保存在 Git 外的持久数据盘。Research-Vault 可以索引私有或临时证据，
+但不能替代仓库内的正式结果包。不放 tmp、不覆盖旧实验。
 
 | 现象 | 处理 |
 | --- | --- |

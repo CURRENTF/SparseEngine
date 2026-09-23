@@ -19,7 +19,7 @@ upstream-first provider portfolio and separate TileLang overlay are unchanged.
 Only H100 has local performance evidence. The manual legacy configuration is
 retained as a numerical/benchmark baseline, not a production batch table.
 
-- `prepare.py` records Git commit/dirty status and prepares jobs for the existing
+- `prepare.py` records the Git commit and prepares jobs for the existing
   GPU guard/queue, executing directly from `--repo`. Explicit repo, output root,
   conda and environment arguments are required.
 - `micro.py --config micro.json --output-dir <NEW_OUTPUT>` compares the frozen
@@ -28,8 +28,8 @@ retained as a numerical/benchmark baseline, not a production batch table.
   score reset, stage1 and stage2; independent FP32 Torch checks precede timing.
 - `prepare_related.py` reuses historical H2O job settings with an explicitly
   prepared `--updated-source` checkout. Apply the intended schedule change there
-  before preparing jobs. `summarize_related.py` delegates trace,
-  residency, output and window validation to the existing shared summarizer.
+  before preparing jobs. `summarize_related.py` validates the fixed native H2O
+  traces, residency, outputs and windows used by this package.
   These 32K/512 edge-synchronized windows are separate from the 128K/2K stage plot.
 
 ## External capacity curves

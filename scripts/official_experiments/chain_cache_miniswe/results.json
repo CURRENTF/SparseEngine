@@ -1,0 +1,192 @@
+{
+  "launch_args": {
+    "dataset": "SWE-bench/SWE-bench_Lite",
+    "split": "test",
+    "samples": 300,
+    "model": "GLM-4.7-Flash",
+    "dtype": "bfloat16",
+    "max_model_len": 202752,
+    "max_tokens": 16384,
+    "temperature": 0.7,
+    "top_p": 1.0,
+    "step_limit": 80,
+    "wall_time_limit_seconds": 7200,
+    "enable_thinking": true,
+    "preserve_thinking": true,
+    "max_num_batched_tokens": 65536,
+    "engine_prefill_chunk_size": 4096,
+    "decode_graph": true
+  },
+  "results": [
+    {
+      "method": "vanilla",
+      "device": "2x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "launch_args": {
+        "backend": "vllm",
+        "tensor_parallel_size": 1,
+        "data_parallel_size": 2,
+        "expert_parallel_size": 2,
+        "agent_concurrency": 16,
+        "max_num_seqs_per_replica": 8,
+        "prefix_cache": "native",
+        "prefix_prune": null
+      },
+      "final_result": {
+        "resolved": 75,
+        "total": 300,
+        "score_percent": 25.0
+      },
+      "git_commit": "3b232adb1f86112f939ec61a06dbdb3ac4da3174"
+    },
+    {
+      "method": "snapkv",
+      "device": "2x NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "launch_args": {
+        "backend": "sparseengine",
+        "tensor_parallel_size": 2,
+        "data_parallel_size": 1,
+        "expert_parallel_size": 2,
+        "agent_concurrency": 40,
+        "max_decoding_seqs": 40,
+        "max_num_seqs_in_gpu": 64,
+        "favor_min_decoding_seqs": 32,
+        "prefix_cache_mode": "chain",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 15808,
+        "prefix_prune": null
+      },
+      "final_result": {
+        "resolved": 74,
+        "total": 300,
+        "score_percent": 24.67
+      },
+      "git_commit": "58bb6b26c8c5e1267be66b2e7c0ca6860247dc83"
+    },
+    {
+      "method": "h2o",
+      "device": "2x NVIDIA H100 80GB HBM3",
+      "launch_args": {
+        "backend": "sparseengine",
+        "tensor_parallel_size": 2,
+        "data_parallel_size": 1,
+        "expert_parallel_size": 2,
+        "agent_concurrency": 64,
+        "max_decoding_seqs": 64,
+        "max_num_seqs_in_gpu": 64,
+        "favor_min_decoding_seqs": 48,
+        "prefix_cache_mode": "chain",
+        "h2o_prefill_budget": 16384,
+        "h2o_decode_budget": 8192,
+        "h2o_decode_eviction_interval": 128,
+        "h2o_decode_eviction": true,
+        "sparse_prefill_score_mode": "probability",
+        "prefix_prune": null
+      },
+      "final_result": {
+        "resolved": 39,
+        "total": 300,
+        "score_percent": 13.0
+      },
+      "git_commit": "8611054c264d346e5e6dfc5e288ea192a045bd14"
+    },
+    {
+      "method": "h2o",
+      "variant": "logits_no_decode_eviction_chunk16k_c80",
+      "device": "2x NVIDIA H20",
+      "launch_args": {
+        "backend": "sparseengine",
+        "tensor_parallel_size": 2,
+        "data_parallel_size": 1,
+        "expert_parallel_size": 2,
+        "agent_concurrency": 80,
+        "max_num_seqs_in_batch": 80,
+        "max_decoding_seqs": 80,
+        "max_num_seqs_in_gpu": 80,
+        "favor_min_decoding_seqs": 48,
+        "prefix_cache_mode": "chain",
+        "h2o_prefill_budget": 16384,
+        "h2o_decode_budget": 8192,
+        "h2o_prefill_score_window": 128,
+        "h2o_recent_ratio": 0.5,
+        "sparse_prefill_score_mode": "logits",
+        "sparse_attn_score_dtype": "float32",
+        "h2o_decode_eviction": false,
+        "decode_reservation_tokens": 1024,
+        "engine_prefill_chunk_size": 16384,
+        "prefix_prune": null
+      },
+      "final_result": {
+        "resolved": 64,
+        "total": 300,
+        "score_percent": 21.33,
+        "status_counts": {
+          "success": 112,
+          "model_failed": 183,
+          "metric_failed": 5,
+          "incomplete": 0
+        }
+      },
+      "source_artifact": "h2o-chain/full/benchmark/final_summary.json",
+      "run_id": "h2o_logits_noevict_chunk16k_c80_20260923_r5",
+      "recovery": {
+        "validated_completed_predictions_reused": 215,
+        "new_predictions_generated": 85
+      },
+      "git_commit": "58138120c4cbb55dbce7f7fb7525bbbb64ac0b8d"
+    },
+    {
+      "method": "omnikv",
+      "device": "2x NVIDIA H100 80GB HBM3",
+      "launch_args": {
+        "backend": "sparseengine",
+        "tensor_parallel_size": 2,
+        "data_parallel_size": 1,
+        "expert_parallel_size": 2,
+        "agent_concurrency": 16,
+        "max_decoding_seqs": 16,
+        "max_num_seqs_in_gpu": 16,
+        "favor_min_decoding_seqs": 10,
+        "prefix_cache_mode": "radix",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 1472,
+        "full_attention_layers": "auto",
+        "prefix_prune": null
+      },
+      "final_result": {
+        "resolved": 93,
+        "total": 300,
+        "score_percent": 31.0
+      },
+      "git_commit": "58bb6b26c8c5e1267be66b2e7c0ca6860247dc83"
+    },
+    {
+      "method": "quest",
+      "device": "2x NVIDIA H20",
+      "launch_args": {
+        "backend": "sparseengine",
+        "tensor_parallel_size": 2,
+        "data_parallel_size": 1,
+        "expert_parallel_size": 2,
+        "agent_concurrency": 16,
+        "max_decoding_seqs": 16,
+        "max_num_seqs_in_gpu": 16,
+        "favor_min_decoding_seqs": 10,
+        "prefix_cache_mode": "radix",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 1472,
+        "quest_chunk_size": 16,
+        "quest_skip_layers": 2,
+        "prefix_prune": null
+      },
+      "final_result": {
+        "resolved": 91,
+        "total": 300,
+        "score_percent": 30.33
+      },
+      "git_commit": "e720f93864881ce841f6da6e5e64381df2eb5be6"
+    }
+  ]
+}

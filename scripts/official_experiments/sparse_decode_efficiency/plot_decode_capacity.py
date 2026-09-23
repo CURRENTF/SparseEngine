@@ -52,6 +52,11 @@ def read_rows(path):
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
+def reject_invalid_capacity(path, boundary):
+    if boundary.get("validity_status") or (path.parent / "validity.json").exists():
+        raise ValueError(f"Capacity evidence is marked invalid: {path}")
+
+
 def validate_measurement(path, concurrency, config):
     rows = read_rows(path)
     if len(rows) != 1:
@@ -221,6 +226,7 @@ def load_campaign(config):
                     raise ValueError("Partial curve requires an explicit stop reason")
                 path = root / partial["capacity_artifact"]
                 boundary = json.loads(path.read_text())
+                reject_invalid_capacity(path, boundary)
                 attempts = boundary["attempts"]
                 protocol = config.get("curve_protocols", {}).get(model, {}).get(lane, {})
                 points = [validate_measurement(Path(a["artifact"]), a["concurrency"], {**config, **protocol})
@@ -241,6 +247,7 @@ def load_campaign(config):
             if len(matches) != 1:
                 raise ValueError(f"Expected exactly one completed {model}/{lane} sweep, found {len(matches)}")
             boundary = json.loads(matches[0].read_text())
+            reject_invalid_capacity(matches[0], boundary)
             if boundary["status"] != "completed":
                 raise ValueError(f"Incomplete sweep: {matches[0]}")
             maximum = boundary["max_concurrency"]
@@ -742,8 +749,8 @@ def render(curves, config, output, palette_path=DEFAULT_PALETTE):
                 "decode_throughput_tps", "capacity_confirmed", "artifact"], extrasaction="ignore")
             writer.writeheader()
             writer.writerows(selected)
-        # Match sparseengine_vs_vortex/plot.py's visual theme, not its mean/SD
-        # aggregation: these bars retain the recorded pooled token/time rates.
+        # These bars retain the recorded pooled token/time rates rather than
+        # substituting a mean/SD aggregation.
         sns.set_theme(style="whitegrid", context="paper", font="DejaVu Sans", font_scale=1.15,
                       rc={"axes.edgecolor": "#D6DDE5", "grid.color": "#E9EEF3", "grid.linewidth": .7,
                           "grid.alpha": 1,
@@ -759,7 +766,11 @@ def render(curves, config, output, palette_path=DEFAULT_PALETTE):
             labels = []
             for point in points:
                 method_label = lanes[point["lane"]][0].replace(" (", "\n(")
-                labels.append(f"{method_label}\n{point['decode_throughput_tps']:.1f}\nB={point['concurrency']}")
+                relation = "=" if point["capacity_confirmed"] else "≥"
+                labels.append(
+                    f"{method_label}\n{point['decode_throughput_tps']:.1f}\n"
+                    f"B{relation}{point['concurrency']}"
+                )
             ax.bar_label(bars, labels=labels, padding=4, fontsize=9, color="#364152")
             ax.set_xticks([])
             ax.set_xlabel(caption(model))
@@ -771,11 +782,14 @@ def render(curves, config, output, palette_path=DEFAULT_PALETTE):
             fig.savefig(output / f"{config['figure_name']}_max_batch.{extension}", dpi=220)
         plt.close(fig)
         (output / "max_batch_style.json").write_text(json.dumps(dict(
-            reference="scripts/official_experiments/sparseengine_vs_vortex/plot.py",
+            reference="self-contained paper/whitegrid configuration",
             theme="paper/whitegrid", font_scale=1.15, figsize_inches=[width, width / 2.5],
-            shared_y_axis=True, bar_labels="framework / method / pooled throughput (one decimal) / B=batch", legend=False,
+            shared_y_axis=True,
+            bar_labels="framework / method / pooled throughput (one decimal) / B=batch; ≥ marks an unconfirmed lower bound",
+            legend=False,
             aggregation="unchanged pooled completed tokens / elapsed time; no mean/SD substitution",
-            palette="unchanged method colors", capacity_marker="not displayed; verification status retained in data"), indent=2) + "\n")
+            palette="unchanged method colors",
+            capacity_marker="B=N is confirmed; B≥N is an unconfirmed lower bound"), indent=2) + "\n")
 
 
 def main():

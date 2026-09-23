@@ -14,11 +14,10 @@ SparseEngine 是一个面向长上下文大语言模型服务、以稀疏机制�
 
 <div align="center">
   <img src="docs/assets/sparse_engine_throughput.png" alt="各方法最大已测批量下的解码吞吐量" style="width:100%; height:auto;">
-  <img src="docs/assets/sparse_decode_efficiency_lowbs.png" alt="Qwen3 和 GLM 解码吞吐量随并发数的变化" style="width:100%; height:auto;">
   <img src="docs/assets/sparse_decode_efficiency_relative_vllm.png" alt="相同并发数下相对 vLLM Vanilla 的解码吞吐量提升" style="width:100%; height:auto;">
 </div>
 
-H100 80GB，128K 输入 / 2K 输出。从上到下依次展示：各方法最大已测批量下的解码吞吐量、低并发下的绝对吞吐量，以及相同并发数下相对 vLLM Vanilla 的吞吐量提升（vLLM 为 0% 基线）。
+H100 80GB，128K 输入 / 2K 输出。从上到下依次展示：各方法最大已测批量下的解码吞吐量，以及相同并发数下相对 vLLM Vanilla 的吞吐量提升（vLLM 为 0% 基线）。
 图中的 Ours 指 SparseEngine。详见[测量口径与图表说明](scripts/official_experiments/sparse_decode_efficiency/README.md#readme-figures)。
 
 ## 项目概览

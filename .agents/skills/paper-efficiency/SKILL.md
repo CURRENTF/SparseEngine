@@ -99,10 +99,11 @@ output，保持总长度不变，为满批 warmup 和测量窗口留足输出；
    估算不是实测值，压缩/wave 路径还需考虑峰值占用与满批驻留。
    step-sync 与 boundary-sync 不混图、不估算修正；异常未解释时不宣称性能或质量优越。
    分类修复后的同协议续跑遵循实验 README 的参数、硬件和原始结果校验，不放宽跨协议复用。
-4. 脚本、可复用配置和绘图代码留在 `scripts/official_experiments/<experiment>/`。
-   每次重复数据、重绘 JSON/CSV、resolved config 和原始数据校验和单独存入
-   Research-Vault 的项目数据目录并纳入版本控制，通过显式路径参数读写。
-   repo 代码配合该数据包应能重绘；大体积日志/原始输出留持久数据盘，
-   按 `research-vault-docs` 保存记录和索引，不放 tmp、不覆盖历史版本。
+4. 脚本、可复用配置、绘图代码和正式结果包留在
+   `scripts/official_experiments/<experiment>/`。结果包只记录设备、启动参数、
+   最终结果和 Git commit；若有正式图表，同目录保存其必需的精简 JSON/CSV。
+   不保存工作区状态、patch、源码快照、源码 hash 或恢复材料。大体积日志/
+   原始输出留在持久数据盘。Research-Vault 只用于可选的私有运行历史、
+   失败记录和外部证据索引，不能替代仓库内的正式结果。
 5. 图例标注外部系统及具体方法；unsupported 不伪造为 0。
    声称整体服务效率时另报请求/E2E 指标，不只交付 decode 窗口图。
