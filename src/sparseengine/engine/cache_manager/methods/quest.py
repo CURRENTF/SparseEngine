@@ -31,13 +31,8 @@ from sparseengine.engine.prefix_prune import (
 from sparseengine.engine.sequence import Sequence
 from sparseengine.kernels.triton.quest_decode_view import (
     finalize_quest_decode_view,
-    fuse_mla_quest_selection_query,
     prepare_quest_decode_geometry,
     prepare_quest_decode_graph_metadata,
-)
-from sparseengine.operators.quest_scoring import (
-    QuestPageScoreSpec,
-    resolve_quest_page_score_provider,
 )
 from sparseengine.operators.quest_selection import (
     QuestPageSelectionOpSpec,
@@ -50,6 +45,7 @@ from sparseengine.utils.profiler import profiler
 from ..base import (
     AttentionCacheWrite,
     AttentionPayload,
+    AttentionViewMeta,
     CacheManager,
     DecodeComputeView,
     LayerBatchStates,
@@ -163,21 +159,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             ),
             device_index=self.device.index or 0,
         )
-        if self.platform.is_cuda_alike():
-            self.quest_page_scorer = resolve_quest_page_score_provider(
-                QuestPageScoreSpec(
-                    dtype=self.hf_config.dtype,
-                    query_heads=(
-                        1 if isinstance(self.attention_cache_storage, MlaLatentStorage)
-                        else int(self.hf_config.num_attention_heads) // self.tp_size
-                    ),
-                    kv_heads=self.metadata_num_heads,
-                    head_dim=self.metadata_head_dim,
-                    cuda_graph=bool(config.decode_graph),
-                ),
-                device_index=self.device.index or 0,
-            )
-
         self.allocate_kv_cache()
 
         self.free_pages_stack = torch.arange(self.num_pages, dtype=torch.int32, device=self.device)
@@ -3053,117 +3034,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         self._poll_prefix_offload()
         super().on_forward_end(seqs, is_prefill)
 
-    @staticmethod
-    def _score_pages_batched(
-        q_heads: torch.Tensor,
-        page_max: torch.Tensor,
-        page_min: torch.Tensor,
-        num_metadata_heads: int,
-    ) -> torch.Tensor:
-        batch_size, num_heads, head_dim = q_heads.shape
-        q_dtype = page_max.dtype
-        if num_heads == num_metadata_heads:
-            num_pages = page_max.shape[2]
-            q_heads = q_heads.to(q_dtype)
-            q_pos = q_heads.clamp_min(0).reshape(batch_size * num_heads, 1, head_dim)
-            q_neg = q_heads.clamp_max(0).reshape(batch_size * num_heads, 1, head_dim)
-            page_max_t = page_max.reshape(batch_size * num_heads, num_pages, head_dim).transpose(1, 2)
-            page_min_t = page_min.reshape(batch_size * num_heads, num_pages, head_dim).transpose(1, 2)
-            page_scores = torch.bmm(q_pos, page_max_t).squeeze(1)
-            page_scores += torch.bmm(q_neg, page_min_t).squeeze(1)
-            return page_scores.view(batch_size, num_heads, num_pages).amax(dim=1)
-
-        if num_heads % num_metadata_heads:
-            raise ValueError(
-                "QuEST selection-query heads must be divisible by metadata heads: "
-                f"query_heads={num_heads} metadata_heads={num_metadata_heads}."
-            )
-        group_size = num_heads // num_metadata_heads
-        num_pages = page_max.shape[2]
-        q_grouped = q_heads.view(
-            batch_size,
-            num_metadata_heads,
-            group_size,
-            head_dim,
-        ).to(q_dtype)
-        q_pos = q_grouped.clamp_min(0).reshape(
-            batch_size * num_metadata_heads,
-            group_size,
-            head_dim,
-        )
-        q_neg = q_grouped.clamp_max(0).reshape(
-            batch_size * num_metadata_heads,
-            group_size,
-            head_dim,
-        )
-        page_max_t = page_max.reshape(
-            batch_size * num_metadata_heads,
-            num_pages,
-            head_dim,
-        ).transpose(1, 2)
-        page_min_t = page_min.reshape(
-            batch_size * num_metadata_heads,
-            num_pages,
-            head_dim,
-        ).transpose(1, 2)
-        page_scores = torch.bmm(q_pos, page_max_t)
-        page_scores += torch.bmm(q_neg, page_min_t)
-        return page_scores.view(
-            batch_size,
-            num_metadata_heads,
-            group_size,
-            num_pages,
-        ).amax(dim=2).amax(dim=1)
-
-    def _selection_query_tensor(
-        self,
-        q: torch.Tensor | MlaLatentSelectionQuery,
-    ) -> torch.Tensor:
-        if isinstance(self.attention_cache_storage, MlaLatentStorage):
-            if not isinstance(q, MlaLatentSelectionQuery):
-                raise TypeError(
-                    "MLA QuEST decode requires MlaLatentSelectionQuery, got "
-                    f"{type(q).__name__}."
-                )
-            # MLA compute consumes one shared page set across all query heads.
-            # Match Vortex quest_mla by routing with the TP-local head-mean
-            # fused query, rather than taking the union/max of per-head bounds.
-            if q.latent.is_cuda:
-                query = fuse_mla_quest_selection_query(q.latent, q.rope)
-            else:
-                query = q.fused().mean(dim=1, keepdim=True)
-        else:
-            if not isinstance(q, torch.Tensor):
-                raise TypeError(
-                    "Explicit-KV QuEST decode requires a tensor query, got "
-                    f"{type(q).__name__}."
-                )
-            query = q
-        if query.ndim != 3 or int(query.shape[-1]) != self.metadata_head_dim:
-            raise ValueError(
-                "QuEST selection query does not match page metadata: "
-                f"query={tuple(query.shape)} metadata_dim={self.metadata_head_dim}."
-            )
-        return query
-
-    def build_decode_selection_query(
-        self,
-        q: torch.Tensor,
-        *,
-        mla_latent: torch.Tensor | None = None,
-        mla_rope: torch.Tensor | None = None,
-    ) -> torch.Tensor | MlaLatentSelectionQuery:
-        if not isinstance(self.attention_cache_storage, MlaLatentStorage):
-            return q
-        if mla_latent is None or mla_rope is None:
-            raise ValueError(
-                "MLA QuEST requires absorbed latent and RoPE decode queries."
-            )
-        return MlaLatentSelectionQuery(
-            latent=mla_latent,
-            rope=mla_rope,
-        )
-
     @torch.no_grad()
     def build_decode_view(
         self,
@@ -3176,33 +3046,8 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         num_heads: int,
         num_kv_heads: int,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if isinstance(self.attention_cache_storage, MlaLatentStorage):
-            if layer_idx < self.config.quest_skip_layers:
-                return active_slots, req_indices, context_lens
-            token_budget = int(self.config.quest_token_budget)
-            if token_budget <= 0:
-                return active_slots, req_indices, context_lens
-            return self._build_token_decode_view_static(
-                layer_idx,
-                q,
-                active_slots,
-                req_indices,
-                context_lens,
-                token_budget=token_budget,
-                num_kv_heads=num_kv_heads,
-            )
-        del active_slots, num_heads
-        page_table, local_req_indices, local_context_lens, _, _, _ = (
-            self._build_paged_decode_view_static(
-                layer_idx,
-                q,
-                req_indices,
-                context_lens,
-                token_budget=int(self.config.quest_token_budget),
-                num_kv_heads=num_kv_heads,
-            )
-        )
-        return page_table, local_req_indices, local_context_lens
+        del layer_idx, q, num_heads, num_kv_heads
+        return active_slots, req_indices, context_lens
 
     @torch.no_grad()
     def build_decode_compute_view(
@@ -3214,7 +3059,14 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         num_heads: int,
         num_kv_heads: int,
     ) -> DecodeComputeView:
-        if isinstance(self.attention_cache_storage, MlaLatentStorage):
+        if int(num_kv_heads) != self.metadata_num_heads:
+            raise ValueError(
+                "QuEST attention/metadata head contract is inconsistent: "
+                f"attention_kv_heads={num_kv_heads} "
+                f"metadata_heads={self.metadata_num_heads}."
+            )
+        plan = selection.page_selection
+        if isinstance(self.attention_cache_storage, MlaLatentStorage) and plan is None:
             return super().build_decode_compute_view(
                 layer_idx,
                 q,
@@ -3222,22 +3074,72 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
                 num_heads=num_heads,
                 num_kv_heads=num_kv_heads,
             )
+        if isinstance(self.attention_cache_storage, MlaLatentStorage):
+            selected_pages = self.quest_page_selector.select(
+                plan.scores,
+                plan.row_page_slots,
+                plan.previous_page_counts,
+                plan.previous_page_budget,
+            )
+            dense_slots = self.buffer_req_to_token_slots[:, :plan.max_keep_tokens].index_select(
+                0, selection.req_indices.to(torch.long)
+            )
+            active_slots, req_indices, context_lens = finalize_quest_decode_view(
+                selected_pages,
+                plan.row_page_slots,
+                plan.num_pages.to(torch.int32).contiguous(),
+                selection.context_lens,
+                dense_slots,
+                page_size=self.page_size,
+                token_budget=plan.token_budget,
+                output_width=plan.max_keep_tokens,
+            )
+            return DecodeComputeView(
+                meta=AttentionViewMeta(
+                    active_slots=active_slots,
+                    req_indices=req_indices,
+                    context_lens=context_lens,
+                    max_context_len=min(int(selection.max_context_len), int(active_slots.shape[1])),
+                    attn_score=selection.attn_score,
+                ),
+                payload=self.attention_cache_storage.layer_payload(
+                    self.kv_layer_index(layer_idx)
+                ),
+            )
         del num_heads
-        (
-            page_table,
-            req_indices,
-            context_lens,
-            page_counts,
-            last_page_lens,
-            is_sparse,
-        ) = self._build_paged_decode_view_static(
-            layer_idx,
-            q,
-            selection.req_indices,
-            selection.context_lens,
-            token_budget=int(self.config.quest_token_budget),
-            num_kv_heads=num_kv_heads,
-        )
+        if plan is None:
+            dense_width = min(
+                self.max_pages_per_row,
+                max(1, (int(selection.max_context_len) + self.page_size - 1) // self.page_size),
+            )
+            page_table, req_indices, context_lens, page_counts, last_page_lens, is_sparse = (
+                self._dense_paged_decode_view(
+                    selection.req_indices, selection.context_lens, width=dense_width,
+                )
+            )
+        else:
+            output_width = max(
+                plan.previous_page_budget + 1,
+                (plan.token_budget + self.page_size - 1) // self.page_size,
+            )
+            outputs = self._get_decode_paged_view_buffers(
+                int(plan.scores.shape[0]), int(output_width),
+            )
+            page_table, req_indices, context_lens, page_counts, last_page_lens = (
+                self.quest_page_selector.select_and_finalize_paged_view(
+                    plan.scores,
+                    plan.row_page_slots,
+                    plan.previous_page_counts,
+                    plan.num_pages.to(torch.int32).contiguous(),
+                    selection.context_lens,
+                    k=plan.previous_page_budget,
+                    page_size=self.page_size,
+                    token_budget=plan.token_budget,
+                    outputs=outputs,
+                    use_dense_fallback=True,
+                )
+            )
+            is_sparse = True
         max_context_len = selection.max_context_len
         if max_context_len is not None:
             max_context_len = min(
@@ -3322,25 +3224,16 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             False,
         )
 
-    def _score_previous_decode_pages(
+    def quest_decode_page_inputs(
         self,
-        layer_idx: int,
-        score_query: torch.Tensor,
         req_indices: torch.Tensor,
         context_lens: torch.Tensor,
         *,
         max_pages: int,
-        num_kv_heads: int,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Score physical pages and return the exact selection inputs."""
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Borrow current physical page rows and replay-safe geometry buffers."""
 
-        if int(num_kv_heads) != self.metadata_num_heads:
-            raise ValueError(
-                "QuEST attention/metadata head contract is inconsistent: "
-                f"attention_kv_heads={num_kv_heads} "
-                f"metadata_heads={self.metadata_num_heads}."
-            )
-        batch_size = int(score_query.shape[0])
+        batch_size = int(req_indices.numel())
         num_pages = getattr(self, "_decode_num_pages", None)
         previous_page_counts = getattr(
             self, "_decode_previous_page_counts", None
@@ -3372,198 +3265,4 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             )[:, :max_pages]
         else:
             row_page_slots = row_page_slots[:, :max_pages]
-        kv_idx = self.kv_layer_index(layer_idx)
-        if self.platform.is_cuda_alike():
-            page_scores = self.quest_page_scorer.score(
-                score_query.contiguous(),
-                self.metadata_cache[0, kv_idx],
-                self.metadata_cache[1, kv_idx],
-                row_page_slots.contiguous(),
-            )
-        else:
-            safe_page_slots = row_page_slots.to(torch.long).clamp_min_(0)
-            metadata_shape = (
-                batch_size,
-                max_pages,
-                self.metadata_num_heads,
-                self.metadata_head_dim,
-            )
-            prev_page_max = self.metadata_cache[0, kv_idx].index_select(
-                0, safe_page_slots.reshape(-1)
-            ).view(metadata_shape).permute(0, 2, 1, 3)
-            prev_page_min = self.metadata_cache[1, kv_idx].index_select(
-                0, safe_page_slots.reshape(-1)
-            ).view(metadata_shape).permute(0, 2, 1, 3)
-            page_scores = self._score_pages_batched(
-                score_query,
-                prev_page_max,
-                prev_page_min,
-                self.metadata_num_heads,
-            )
-        return (
-            page_scores.contiguous(),
-            row_page_slots.contiguous(),
-            num_pages,
-            previous_page_counts,
-        )
-
-    @torch.no_grad()
-    def _build_token_decode_view_static(
-        self,
-        layer_idx: int,
-        q: torch.Tensor | MlaLatentSelectionQuery,
-        active_slots: torch.Tensor,
-        req_indices: torch.Tensor,
-        context_lens: torch.Tensor,
-        *,
-        token_budget: int,
-        num_kv_heads: int,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Preserve the existing token-level execution view for MLA providers."""
-
-        with profiler.record("quest_build_decode_view_static"):
-            score_query = self._selection_query_tensor(q)
-            page_budget_base = max(3, int(token_budget) // self.page_size)
-            max_keep = max(
-                int(token_budget),
-                page_budget_base * self.page_size,
-                self.page_size,
-            )
-            max_context_len = self.layer_batch_state.max_context_len
-            if max_context_len is None:
-                raise RuntimeError(
-                    "QuEST decode CUDA graph requires max_context_len to be pinned."
-                )
-            max_context_len = int(max_context_len)
-            if max_context_len <= max_keep:
-                return active_slots, req_indices, context_lens
-
-            max_pages = min(
-                self.max_pages_per_row,
-                (max_context_len + self.page_size - 1) // self.page_size,
-            )
-            prev_budget = min(page_budget_base - 1, max_pages - 1)
-            if prev_budget <= 0:
-                return active_slots, req_indices, context_lens
-
-            dense_slots = self.buffer_req_to_token_slots[:, :max_keep].index_select(
-                0, req_indices.to(torch.long)
-            )
-            page_scores, row_page_slots, num_pages, previous_page_counts = (
-                self._score_previous_decode_pages(
-                    layer_idx,
-                    score_query,
-                    req_indices,
-                    context_lens,
-                    max_pages=max_pages,
-                    num_kv_heads=num_kv_heads,
-                )
-            )
-            selected_prev_page_slots = self.quest_page_selector.select(
-                page_scores,
-                row_page_slots,
-                previous_page_counts,
-                prev_budget,
-            )
-            output_width = max_keep
-            return finalize_quest_decode_view(
-                selected_prev_page_slots,
-                row_page_slots,
-                num_pages.to(torch.int32).contiguous(),
-                context_lens,
-                dense_slots,
-                page_size=self.page_size,
-                token_budget=token_budget,
-                output_width=output_width,
-            )
-
-    @torch.no_grad()
-    def _build_paged_decode_view_static(
-        self,
-        layer_idx: int,
-        q: torch.Tensor | MlaLatentSelectionQuery,
-        req_indices: torch.Tensor,
-        context_lens: torch.Tensor,
-        *,
-        token_budget: int,
-        num_kv_heads: int,
-    ) -> tuple[
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        bool,
-    ]:
-        with profiler.record("quest_build_decode_view_static"):
-            score_query = self._selection_query_tensor(q)
-            page_budget_base = max(3, int(token_budget) // self.page_size)
-            max_keep = max(
-                int(token_budget),
-                page_budget_base * self.page_size,
-                self.page_size,
-            )
-            max_context_len = self.layer_batch_state.max_context_len
-            if max_context_len is None:
-                raise RuntimeError(
-                    "QuEST decode CUDA graph requires max_context_len to be pinned."
-                )
-            max_context_len = int(max_context_len)
-            dense_width = min(
-                self.max_pages_per_row,
-                max(1, (max_context_len + self.page_size - 1) // self.page_size),
-            )
-            if (
-                layer_idx < self.config.quest_skip_layers
-                or token_budget <= 0
-                or max_context_len <= max_keep
-            ):
-                return self._dense_paged_decode_view(
-                    req_indices,
-                    context_lens,
-                    width=dense_width,
-                )
-
-            batch_size = int(score_query.shape[0])
-            max_pages = min(
-                self.max_pages_per_row,
-                (max_context_len + self.page_size - 1) // self.page_size,
-            )
-            prev_budget = min(page_budget_base - 1, max_pages - 1)
-            if prev_budget <= 0:
-                return self._dense_paged_decode_view(
-                    req_indices,
-                    context_lens,
-                    width=max_pages,
-                )
-
-            page_scores, row_page_slots, num_pages, previous_page_counts = (
-                self._score_previous_decode_pages(
-                    layer_idx,
-                    score_query,
-                    req_indices,
-                    context_lens,
-                    max_pages=max_pages,
-                    num_kv_heads=num_kv_heads,
-                )
-            )
-            output_width = max(
-                prev_budget + 1, (int(token_budget) + self.page_size - 1) // self.page_size,
-            )
-            outputs = self._get_decode_paged_view_buffers(
-                int(batch_size),
-                int(output_width),
-            )
-            paged_view = self.quest_page_selector.select_and_finalize_paged_view(
-                page_scores,
-                row_page_slots,
-                previous_page_counts,
-                num_pages.to(torch.int32).contiguous(),
-                context_lens,
-                k=prev_budget,
-                page_size=self.page_size,
-                token_budget=token_budget,
-                outputs=outputs,
-                use_dense_fallback=True,
-            )
-            return (*paged_view, True)
+        return row_page_slots.contiguous(), num_pages, previous_page_counts

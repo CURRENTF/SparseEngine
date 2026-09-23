@@ -75,6 +75,7 @@ class DecodeSelectionRequest:
     layer_idx: int
     query: torch.Tensor
     forward_context: Any
+    selection_query: Any = None
 
 
 @dataclass(frozen=True)

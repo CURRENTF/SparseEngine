@@ -175,3 +175,65 @@ class QuestPageScoreDispatch(TritonQuestPageScoreProvider):
 def resolve_quest_page_score_provider(spec, *, device_index):
     caps = platforms.current_platform.get_device_caps(device_index)
     return OpResolver(QUEST_PAGE_SCORE_REGISTRY).resolve(spec, caps).provider
+
+
+def score_quest_pages_batched(
+    q_heads: torch.Tensor,
+    page_max: torch.Tensor,
+    page_min: torch.Tensor,
+    num_metadata_heads: int,
+) -> torch.Tensor:
+    batch_size, num_heads, head_dim = q_heads.shape
+    q_dtype = page_max.dtype
+    if num_heads == num_metadata_heads:
+        num_pages = page_max.shape[2]
+        q_heads = q_heads.to(q_dtype)
+        q_pos = q_heads.clamp_min(0).reshape(batch_size * num_heads, 1, head_dim)
+        q_neg = q_heads.clamp_max(0).reshape(batch_size * num_heads, 1, head_dim)
+        page_max_t = page_max.reshape(batch_size * num_heads, num_pages, head_dim).transpose(1, 2)
+        page_min_t = page_min.reshape(batch_size * num_heads, num_pages, head_dim).transpose(1, 2)
+        page_scores = torch.bmm(q_pos, page_max_t).squeeze(1)
+        page_scores += torch.bmm(q_neg, page_min_t).squeeze(1)
+        return page_scores.view(batch_size, num_heads, num_pages).amax(dim=1)
+
+    if num_heads % num_metadata_heads:
+        raise ValueError(
+            "QuEST selection-query heads must be divisible by metadata heads: "
+            f"query_heads={num_heads} metadata_heads={num_metadata_heads}."
+        )
+    group_size = num_heads // num_metadata_heads
+    num_pages = page_max.shape[2]
+    q_grouped = q_heads.view(
+        batch_size,
+        num_metadata_heads,
+        group_size,
+        head_dim,
+    ).to(q_dtype)
+    q_pos = q_grouped.clamp_min(0).reshape(
+        batch_size * num_metadata_heads,
+        group_size,
+        head_dim,
+    )
+    q_neg = q_grouped.clamp_max(0).reshape(
+        batch_size * num_metadata_heads,
+        group_size,
+        head_dim,
+    )
+    page_max_t = page_max.reshape(
+        batch_size * num_metadata_heads,
+        num_pages,
+        head_dim,
+    ).transpose(1, 2)
+    page_min_t = page_min.reshape(
+        batch_size * num_metadata_heads,
+        num_pages,
+        head_dim,
+    ).transpose(1, 2)
+    page_scores = torch.bmm(q_pos, page_max_t)
+    page_scores += torch.bmm(q_neg, page_min_t)
+    return page_scores.view(
+        batch_size,
+        num_metadata_heads,
+        group_size,
+        num_pages,
+    ).amax(dim=2).amax(dim=1)

@@ -164,7 +164,8 @@ Startup prefill profiling 包含这些分配。观察层之间清零评分，ste
 
 | Runtime | 当前方法 | 共同点 |
 | --- | --- | --- |
-| `PassThroughRuntime` | vanilla、QuEST | Controller 侧返回完整逻辑选择，特殊物理视图由 CacheManager 或 Provider 构造。 |
+| `PassThroughRuntime` | vanilla | Controller 侧返回完整逻辑选择。 |
+| `QuestRuntime` | QuEST | 计算当前页分数和 query 感知的页选择计划；CacheManager 持有物理视图。 |
 | `StreamingLLMRuntime` | StreamingLLM | Attention 使用普通视图，结束后按 sink 和 recent window 物理淘汰。 |
 | `ScoredCompactionRuntime` | SnapKV、PyramidKV | 共用打分和物理压缩流程；PyramidKV 使用逐层预算。 |
 | `H2ORuntime` | H2O prefill 和/或 H2O decode | 准备 prompt 分数并独立触发 prefill/final-prompt 压缩；可选 decode 概率累计和周期驱逐。 |
@@ -224,10 +225,11 @@ CacheManager 基类；反过来也一样。
 不要通过 `layers/attention.py` 传递方法专用 tuple、整个配置对象、隐藏的全局张量
 或方法名称。
 
-QuEST 是一个典型例子。它的 Runtime 返回普通的完整逻辑选择，但
-`QuestCacheManager` 和选择算子会使用当前 query 构造原生物理页视图。QuEST 的
-page metadata 长期跟随物理缓存，因此应留在 CacheManager，而不是复制到
-Runtime。
+QuEST 是一个 query 感知页选择的例子。`QuestRuntime` 判断是否需要评分，
+借用 CacheManager 的页元数据计算分数，并返回类型化的页选择计划。
+`QuestCacheManager` 持有物理页表与输出缓冲，将计划转换为 paged 或 MLA decode
+视图。显式 KV 算子可以把 top-k 与物理视图构造融合为一个 kernel。page metadata
+长期跟随物理缓存，因此留在 CacheManager，不复制到 Runtime。
 
 ## 有序提交与结果回收
 

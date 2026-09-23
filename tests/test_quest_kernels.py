@@ -34,6 +34,7 @@ from sparseengine.operators.quest_selection import (
     FlashInferQuestPageSelectionProvider,
     QuestPageSelectionOpSpec,
     TorchQuestPageSelectionProvider,
+    TritonExactQuestPageSelectionProvider,
 )
 
 
@@ -466,6 +467,65 @@ def test_fused_exact_quest_selection_and_paged_view_match_stable_oracle_and_grap
         k,
     )
     torch.testing.assert_close(outputs[0][:, :k], expected, rtol=0, atol=0)
+
+
+@CUDA_REQUIRED
+@pytest.mark.parametrize("width", [256, 2048])
+def test_fused_quest_paged_view_preserves_dense_fallback_and_graph_replay(
+    width: int,
+) -> None:
+    """The profiled fused route must match stable top-k for mixed row lengths."""
+    torch.manual_seed(431)
+    batch, page_size, k, budget = 4, 16, 127, 2048
+    scores = torch.randn(batch, width, device="cuda", dtype=torch.bfloat16)
+    scores[:, :16] = 1  # Exercise deterministic small-index tie breaking.
+    page_table = torch.stack([
+        torch.randperm(width, device="cuda", dtype=torch.int32)
+        for _ in range(batch)
+    ])
+    context_lens = torch.tensor(
+        [1, 128, 2048, width * page_size - 3], device="cuda", dtype=torch.int32,
+    )
+    previous = ((context_lens + page_size - 1) // page_size - 1).clamp_min(0)
+    num_pages = previous + 1
+    spec = QuestPageSelectionOpSpec(score_dtype=torch.bfloat16, cuda_graph=True)
+    fused = TritonExactQuestPageSelectionProvider(op_spec=spec)
+    oracle = TorchQuestPageSelectionProvider(op_spec=spec)
+
+    def buffers():
+        return (
+            torch.empty(batch, 128, device="cuda", dtype=torch.int32),
+            *(torch.empty(batch, device="cuda", dtype=torch.int32) for _ in range(4)),
+        )
+
+    fused_buffers, oracle_buffers = buffers(), buffers()
+
+    def run(provider, outputs):
+        return provider.select_and_finalize_paged_view(
+            scores, page_table, previous, num_pages, context_lens,
+            k=k, page_size=page_size, token_budget=budget,
+            outputs=outputs, use_dense_fallback=True,
+        )
+
+    def check():
+        run(oracle, oracle_buffers)
+        for actual, expected in zip(fused_buffers, oracle_buffers):
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    run(fused, fused_buffers)
+    check()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        run(fused, fused_buffers)
+    scores.copy_(scores.flip(1))
+    page_table.copy_(page_table.flip(1))
+    context_lens.copy_(torch.tensor(
+        [16, 2096, 1024, width * page_size - 6], device="cuda", dtype=torch.int32,
+    ))
+    previous.copy_(((context_lens + page_size - 1) // page_size - 1).clamp_min(0))
+    num_pages.copy_(previous + 1)
+    graph.replay()
+    check()
 
 
 @CUDA_REQUIRED

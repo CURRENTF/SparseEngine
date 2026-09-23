@@ -48,10 +48,11 @@ JIT or execution failure. Runtime reports identify the selected kernel paths.
   maximum across query heads. The matrix path bounds FP32 accumulation error
   using two additional absolute-product sums. Heads near a BF16/FP16 rounding
   midpoint are recomputed using a vector reduction inside the merged repair pass.
-  Repair work stays on the GPU, including under Graph replay. This addresses
-  observed selection changes from tiny score differences; it is not a proof of
-  bitwise identity on every architecture or input. The cache manager still owns MLA head-mean query formation;
-  the scoring operator does not change MLA versus GQA selection semantics.
+Repair work stays on the GPU, including under Graph replay. This addresses
+observed selection changes from tiny score differences; it is not a proof of
+bitwise identity on every architecture or input. The QuEST sparse runtime owns
+MLA head-mean query formation; the scoring operator does not change MLA versus
+GQA selection semantics.
 
 ## Reproduce
 
@@ -104,6 +105,11 @@ its FilteredTopK buffers. Devices below that resource requirement select the
 existing Torch provider during resolution. Its stable ordering preserves
 small-column tie breaking and invalid-row padding, including CUDA Graph replay.
 This eligibility check is independent of the scoring policy and H100 profiles.
+
+The H100 BF16 paged-view profile uses the exact fused selection and view kernel
+for widths up to 512 pages with CUDA Graph, and up to 2048 pages in eager mode.
+The kernel preserves the dense short-row fallback. Wider views and graph views
+above 512 pages use FlashInfer selection followed by view finalization.
 
 ## Original Qwen/H100 evidence
 

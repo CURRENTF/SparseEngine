@@ -9,6 +9,7 @@ from sparseengine.engine.cache_manager.base import (
     AttentionKeyComputeView,
     DecodeComputeView,
     MlaLatentPayload,
+    MlaLatentSelectionQuery,
     MlaLatentWrite,
     PrefillComputeView,
 )
@@ -394,16 +395,17 @@ class MLAAttention:
                     chunk_lens=chunk_lens,
                 )
             else:
-                selection = sparse_controller.get_decode_selection(layer_idx, q)
                 q_nope_absorbed = absorb_query(q_nope)
-                selection_query = cache_manager.build_decode_selection_query(
-                    q,
-                    mla_latent=q_nope_absorbed,
-                    mla_rope=q_rope,
+                selection_query = MlaLatentSelectionQuery(
+                    latent=q_nope_absorbed,
+                    rope=q_rope,
+                )
+                selection = sparse_controller.get_decode_selection(
+                    layer_idx, q, selection_query=selection_query,
                 )
                 view = cache_manager.build_decode_compute_view(
                     layer_idx,
-                    selection_query,
+                    q,
                     selection,
                     num_heads=self.spec.local_q_heads,
                     num_kv_heads=1,

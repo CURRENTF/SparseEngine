@@ -253,7 +253,8 @@ class TritonExactQuestPageSelectionProvider(QuestPageSelectionProvider):
             "kernel_path": "triton.quest_fused_selection",
             "deterministic": True,
             "tie_break": "small",
-            "max_profiled_width": 512,
+            "max_profiled_page_select_width": 512,
+            "max_profiled_paged_view_width": 2048,
         }
 
     def select(self, scores, page_table, lengths, k):
@@ -365,7 +366,8 @@ class H100ExactQuestPagedViewDispatch(QuestPageSelectionProvider):
             "implementation_kind": "dispatch_plan",
             "routes": [
                 {
-                    "condition": "sparse paged view, 0<k<width<=512",
+                    "condition": "sparse paged view with dense short-row fallback, "
+                    "0<k<width<=512 for graphs or <=2048 for eager",
                     "provider": self.fused.name,
                     "provider_metadata": self.fused.binding_metadata(),
                 },
@@ -405,9 +407,8 @@ class H100ExactQuestPagedViewDispatch(QuestPageSelectionProvider):
         use_dense_fallback,
     ):
         use_fused = (
-            not use_dense_fallback
-            and 0 < int(k) < int(scores.shape[1])
-            and int(scores.shape[1]) <= 512
+            0 < int(k) < int(scores.shape[1])
+            and int(scores.shape[1]) <= (512 if self.spec.cuda_graph else 2048)
         )
         provider = self.fused if use_fused else self.fallback
         self._record_route("fused" if use_fused else "flashinfer")

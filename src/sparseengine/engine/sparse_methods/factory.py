@@ -14,6 +14,7 @@ from .kvzip import KVzipRuntime
 from .joint import SkipKVRuntime
 from .rkv import RKVRuntime
 from .passthrough import PassThroughRuntime
+from .quest import QuestRuntime
 from .snapkv import PyramidKVRuntime, SnapKVRuntime
 from .streamingllm import StreamingLLMRuntime
 
@@ -30,7 +31,7 @@ RUNTIME_BINDINGS: dict[str, type[SparseMethodRuntime]] = {
     "h2o": H2ORuntime,
     "pyramidkv": PyramidKVRuntime,
     "omnikv": OmniKVRuntime,
-    "quest": PassThroughRuntime,
+    "quest": QuestRuntime,
     "rkv": RKVRuntime,
     "skipkv": SkipKVRuntime,
     "deltakv": DeltaKVRuntime,

@@ -16,6 +16,7 @@ from .base import (
     MlaLatentSelectionQuery,
     MlaLatentWrite,
     PagedDecodeViewMeta,
+    PageSelectionPlan,
     PrefillComputeView,
     SparseSelection,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "MlaLatentSelectionQuery",
     "MlaLatentWrite",
     "PagedDecodeViewMeta",
+    "PageSelectionPlan",
     "PrefillComputeView",
     "SparseSelection",
     "StandardCacheManager",

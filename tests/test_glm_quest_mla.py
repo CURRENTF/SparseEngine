@@ -13,11 +13,17 @@ from sparseengine.engine.cache_manager import (
     SparseSelection,
 )
 from sparseengine.engine.cache_manager.methods.quest import QuestCacheManager
+from sparseengine.engine.sparse_methods.base import (
+    DecodeSelectionRequest,
+    LayerBatchSparseState,
+)
+from sparseengine.engine.sparse_methods.quest import QuestRuntime
 from sparseengine.engine.cache_manager.storage import MlaLatentStorage
 from sparseengine.operators.quest_selection import (
     QuestPageSelectionOpSpec,
     TorchQuestPageSelectionProvider,
 )
+from sparseengine.operators.quest_scoring import score_quest_pages_batched
 from sparseengine.utils.context import reset_context, set_context
 
 
@@ -57,12 +63,16 @@ def test_quest_mla_fused_query_matches_expanded_logits_and_bounds_each_page():
         latent=absorbed_nope.unsqueeze(0),
         rope=q_rope.unsqueeze(0),
     )
-    shared_query = manager._selection_query_tensor(selection_query)[0]
+    runtime = object.__new__(QuestRuntime)
+    runtime.quest_cache = manager
+    shared_query = runtime._score_query(
+        DecodeSelectionRequest(0, torch.empty(0), None, selection_query)
+    )[0]
     torch.testing.assert_close(
         shared_query,
         fused_query.mean(dim=0, keepdim=True),
     )
-    production_bounds = QuestCacheManager._score_pages_batched(
+    production_bounds = score_quest_pages_batched(
         shared_query.unsqueeze(0),
         page_max[None, None, :, :],
         page_min[None, None, :, :],
@@ -212,16 +222,12 @@ def test_quest_mla_metadata_and_decode_view_keep_latent_payload_typed():
     latent_query = torch.zeros((1, 2, 512), dtype=torch.bfloat16)
     latent_query[..., 0] = 1
     rope_query = torch.zeros((1, 2, 64), dtype=torch.bfloat16)
-    fused_query = manager.build_decode_selection_query(
-        torch.zeros((1, 2, 256), dtype=torch.bfloat16),
-        mla_latent=latent_query,
-        mla_rope=rope_query,
-    )
+    fused_query = MlaLatentSelectionQuery(latent_query, rope_query)
     assert isinstance(fused_query, MlaLatentSelectionQuery)
     selected_metadata = manager.metadata_cache[
         :, 0, logical_to_physical_pages[:3].long()
     ]
-    page_scores = manager._score_pages_batched(
+    page_scores = score_quest_pages_batched(
         fused_query.fused(),
         selected_metadata[0].permute(1, 0, 2).unsqueeze(0),
         selected_metadata[1].permute(1, 0, 2).unsqueeze(0),
@@ -230,6 +236,18 @@ def test_quest_mla_metadata_and_decode_view_keep_latent_payload_typed():
     torch.testing.assert_close(
         page_scores,
         torch.tensor([[-5.0, 10.0, 2.0]], dtype=torch.bfloat16),
+    )
+    runtime = object.__new__(QuestRuntime)
+    runtime.config = manager.config
+    runtime.quest_cache = manager
+    runtime.quest_page_scorer = None
+    runtime.layer_batch_sparse_states = {0: LayerBatchSparseState(
+        req_indices=selection.req_indices,
+        context_lens=selection.context_lens,
+        max_context_len=selection.max_context_len,
+    )}
+    selection = runtime.build_decode_selection(
+        DecodeSelectionRequest(0, torch.empty(0), None, fused_query)
     )
     set_context(False, cache_manager=manager)
     try:
