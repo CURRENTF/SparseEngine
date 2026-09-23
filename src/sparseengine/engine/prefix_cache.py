@@ -1046,11 +1046,26 @@ class RadixPrefixIndex:
         self.block_id_generation_requests += 1
         token_limit = len(token_ids) if max_tokens is None else min(int(max_tokens), len(token_ids))
         token_limit = (token_limit // self.block_size) * self.block_size
+        if token_limit <= 0:
+            return []
+        # Preserve the stable ID wire format while doing token conversion and
+        # packing once, outside the per-block hash loop.
+        packed_tokens = _pack_token_ids(token_ids[:token_limit])
+        block_bytes = self.block_size * 8
         parent_block_id: bytes | None = None
         block_ids: list[bytes] = []
-        for start in range(0, token_limit, self.block_size):
-            block_tokens = token_ids[start: start + self.block_size]
-            block_id = self.stable_block_id(block_tokens, parent_block_id)
+        # Every non-root block starts with the same fingerprint and marker.
+        # Copy that SHA state instead of initializing and updating it for
+        # every block; the hashed byte sequence remains unchanged.
+        child_hasher = hashlib.sha256(self.fingerprint + b"\x01")
+        for start in range(0, len(packed_tokens), block_bytes):
+            if parent_block_id is None:
+                hasher = hashlib.sha256(self.fingerprint + b"\x00")
+            else:
+                hasher = child_hasher.copy()
+                hasher.update(parent_block_id)
+            hasher.update(packed_tokens[start: start + block_bytes])
+            block_id = hasher.digest()
             block_ids.append(block_id)
             parent_block_id = block_id
         return block_ids

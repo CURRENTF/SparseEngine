@@ -1,3 +1,4 @@
+import hashlib
 import math
 import pickle
 import random
@@ -45,6 +46,24 @@ from sparseengine.engine.prefix_cache import (
 from sparseengine.engine.prefix_prune import select_global_keep_indices
 from sparseengine.engine.sequence import Sequence
 from sparseengine.platforms import device_runtime
+
+
+@pytest.mark.parametrize("block_size", [1, 3, 16])
+@pytest.mark.parametrize("limit", [None, -1, 0, 1, 17, 100])
+def test_bulk_prefix_ids_preserve_signed_little_endian_hash_chain(block_size, limit):
+    tokens = [-(2**63), 2**63 - 1, -1, 0, 1] * 7
+    index = RadixPrefixIndex(block_size=block_size, fingerprint=b"wire-compatibility")
+    usable = len(tokens) if limit is None else min(limit, len(tokens))
+    expected = []
+    parent = None
+    for offset in range(0, max(0, usable - block_size + 1), block_size):
+        payload = b"".join(int(x).to_bytes(8, "little", signed=True)
+                           for x in tokens[offset:offset + block_size])
+        prefix = b"\x00" if parent is None else b"\x01" + parent
+        parent = hashlib.sha256(b"wire-compatibility" + prefix + payload).digest()
+        expected.append(parent)
+    assert index.block_ids_for_tokens(tokens, max_tokens=limit) == expected
+    assert index.block_ids_for_tokens(tuple(tokens), max_tokens=limit) == expected
 
 
 def _cfg(method="", salt="", block_size=4):
