@@ -1794,6 +1794,25 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         self.assertEqual(scheduled, [final_window])
         self.assertEqual(final_window.current_chunk_size, 2)
 
+    def test_all_chunked_reports_final_window_larger_than_effective_step_budget(self):
+        # Config normally rejects this static mismatch; the scheduler still
+        # needs a clear failure when a synthetic oracle or live capacity hits it.
+        scheduler = make_scheduler(
+            PREFILL_POLICY_ALL_CHUNKED,
+            chunk=64,
+            max_tokens=32,
+            oracle=FakeMemoryOracle(min_final_prefill_chunk_size=64),
+        )
+        seq = seq_with_len(128)
+        seq.num_prefilled_tokens = 64
+        scheduler.add(seq)
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Final prefill score window cannot fit in the effective step budget",
+        ):
+            scheduler.schedule()
+
     def test_snapkv_final_prefill_window_applies_when_final_physical_context_exceeds_budget(self):
         manager = object.__new__(SnapKVCacheManager)
         manager.num_kv_layers = 2

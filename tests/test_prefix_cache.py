@@ -4298,6 +4298,120 @@ def test_decode_row_exhaustion_does_not_partially_claim_a_batch(method):
     assert list(rows) == [0]
 
 
+class _FailingDecodeIndexCopy:
+    def __getitem__(self, _index):
+        return self
+
+    def copy_(self, *_args, **_kwargs):
+        raise RuntimeError("injected metadata copy failure")
+
+
+class _FailingDecodeTableWrite:
+    def __init__(self, tensor):
+        self.tensor = tensor
+        self.fail_next_write = True
+
+    @property
+    def shape(self):
+        return self.tensor.shape
+
+    def __getitem__(self, index):
+        return self.tensor[index]
+
+    def __setitem__(self, index, value):
+        if self.fail_next_write:
+            self.fail_next_write = False
+            raise RuntimeError("injected metadata scatter failure")
+        self.tensor[index] = value
+
+
+@pytest.mark.parametrize("method", ["standard", "snapkv"])
+@pytest.mark.parametrize("failure", ["copy", "scatter"])
+@pytest.mark.parametrize("fence_fails", [False, True])
+def test_decode_metadata_failure_restores_rows_and_slots(
+    method, failure, fence_fails, monkeypatch,
+):
+    # Row-exhaustion tests fail before ownership changes; inject after the slot
+    # and row claims to cover copy/scatter transaction rollback.
+    if method == "standard":
+        manager = _make_standard_manager_for_prefix()
+        manager.row_logical_lens = manager.row_seq_lens.copy()
+        capacity = manager.num_free_slots
+        mapping = manager.seq_id_to_row
+        rows = manager.free_rows
+        lengths = manager.row_seq_lens
+        table = manager.buffer_req_to_token_slots
+        stack = manager.free_slots_stack
+        free_count = lambda: manager.num_free_slots
+        allocate = lambda: manager._allocate_batch([10], 1)
+    else:
+        from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+
+        manager = object.__new__(SnapKVCacheManager)
+        manager.device = torch.device("cpu")
+        manager.max_model_len = 4
+        manager.seq_id_to_row = [{}]
+        manager.free_rows = [deque([0, 1])]
+        manager.row_seq_lens = [np.zeros(2, dtype=np.int32)]
+        manager.buffer_req_to_token_slots = [torch.zeros((2, 4), dtype=torch.int32)]
+        manager.free_slots_stack = [torch.arange(8, dtype=torch.int32)]
+        manager._num_free_slots = [8]
+        capacity = 8
+        mapping = manager.seq_id_to_row[0]
+        rows = manager.free_rows[0]
+        lengths = manager.row_seq_lens[0]
+        table = manager.buffer_req_to_token_slots[0]
+        stack = manager.free_slots_stack[0]
+        free_count = lambda: manager._num_free_slots[0]
+        allocate = lambda: manager._allocate_batch(0, [10], 1)
+
+    manager._decode_buf_capacity = 64
+    manager._static_rows_gpu = (
+        _FailingDecodeIndexCopy()
+        if failure == "copy"
+        else torch.empty(64, dtype=torch.long)
+    )
+    manager._static_cols_gpu = torch.empty(64, dtype=torch.long)
+    if failure == "scatter":
+        failing_table = _FailingDecodeTableWrite(table)
+        if method == "standard":
+            manager.buffer_req_to_token_slots = failing_table
+        else:
+            manager.buffer_req_to_token_slots[0] = failing_table
+    if fence_fails:
+        from sparseengine.platforms import device_runtime
+
+        monkeypatch.setattr(device_runtime, "supports_streams", lambda _device: True)
+        monkeypatch.setattr(
+            device_runtime,
+            "synchronize",
+            lambda: (_ for _ in ()).throw(RuntimeError("injected fence failure")),
+        )
+    rows_before = list(rows)
+
+    with pytest.raises(RuntimeError, match=f"injected metadata {failure} failure"):
+        allocate()
+
+    if fence_fails:
+        assert free_count() == capacity - 1
+        assert len(manager._quarantined_decode_allocations) == 1
+        quarantined_slots = manager._quarantined_decode_allocations[0][-1]
+        assert quarantined_slots.tolist() == [capacity - 1]
+        return
+
+    assert not mapping
+    assert list(rows) == rows_before
+    assert free_count() == capacity
+    assert np.all(lengths == 0)
+    free_ids = stack[:free_count()].tolist()
+    owned_ids = [
+        int(slot)
+        for row_idx in mapping.values()
+        for slot in table[row_idx, :int(lengths[row_idx])].tolist()
+    ]
+    assert sorted(free_ids + owned_ids) == list(range(capacity))
+
+
 def test_static_decode_stale_row_plan_returns_slots_without_partial_row_commit():
     manager = _make_standard_manager_for_prefix()
     rows = list(manager.free_rows)

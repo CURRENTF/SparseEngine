@@ -933,6 +933,17 @@ class SnapKVCacheManager(CacheManager):
             return int(self.pyramidkv_prefill_staging_num_slots)
         return super().prefill_step_free_slots_for(seq)
 
+    def prefill_capacity_after_decode_reservations(
+        self, free_slots: int, reserved: dict[str, int], *, admission: bool,
+    ) -> int:
+        if self._pyramidkv_can_use_full_prefill_staging() and not admission:
+            # The staging tensor is a separate temporary pool. Decode windows
+            # reserve the persistent per-layer pools and cannot consume it.
+            return int(free_slots)
+        return super().prefill_capacity_after_decode_reservations(
+            free_slots, reserved, admission=admission,
+        )
+
     def min_final_prefill_chunk_size(self, seq: Sequence) -> int:
         method = self.config.sparse_method
         if method not in {"snapkv", "pyramidkv"}:
@@ -1538,18 +1549,46 @@ class SnapKVCacheManager(CacheManager):
             raise RuntimeError("KV row length exceeds max_model_len in _allocate_batch.")
         self._ensure_decode_buffers(batch_size)
 
+        new_seq_ids = list(dict.fromkeys(
+            sid for sid in seq_ids if sid not in self.seq_id_to_row[layer_idx]
+        ))
         row_indices = [self._get_free_row(layer_idx, sid) for sid in seq_ids]
         cur_lens = self.row_seq_lens[layer_idx][row_indices]
         ptr = self._num_free_slots[layer_idx]
         select_indices = self.free_slots_stack[layer_idx][ptr - batch_size: ptr]
         self._num_free_slots[layer_idx] -= batch_size
-
-        rows_gpu = self._static_rows_gpu[:batch_size]
-        cols_gpu = self._static_cols_gpu[:batch_size]
-        rows_gpu.copy_(torch.as_tensor(row_indices, dtype=torch.long), non_blocking=True)
-        cols_gpu.copy_(torch.as_tensor(cur_lens, dtype=torch.long), non_blocking=True)
-        self.buffer_req_to_token_slots[layer_idx][rows_gpu, cols_gpu] = select_indices.to(torch.int32)
-        self.row_seq_lens[layer_idx][row_indices] += 1
+        try:
+            rows_gpu = self._static_rows_gpu[:batch_size]
+            cols_gpu = self._static_cols_gpu[:batch_size]
+            rows_gpu.copy_(torch.as_tensor(row_indices, dtype=torch.long), non_blocking=True)
+            cols_gpu.copy_(torch.as_tensor(cur_lens, dtype=torch.long), non_blocking=True)
+            self.buffer_req_to_token_slots[layer_idx][rows_gpu, cols_gpu] = select_indices.to(torch.int32)
+            self.row_seq_lens[layer_idx][row_indices] += 1
+        except BaseException as error:
+            try:
+                for row_idx, cur_len in zip(row_indices, cur_lens, strict=True):
+                    self.buffer_req_to_token_slots[layer_idx][int(row_idx), int(cur_len)] = 0
+                self.row_seq_lens[layer_idx][row_indices] = cur_lens
+                if device_runtime.supports_streams(self.device):
+                    device_runtime.synchronize()
+                for seq_id in reversed(new_seq_ids):
+                    row_idx = self.seq_id_to_row[layer_idx].pop(seq_id)
+                    self.free_rows[layer_idx].appendleft(row_idx)
+                self._num_free_slots[layer_idx] = ptr
+            except BaseException as rollback_error:
+                quarantined = getattr(self, "_quarantined_decode_allocations", None)
+                if quarantined is None:
+                    quarantined = []
+                    self._quarantined_decode_allocations = quarantined
+                quarantined.append(
+                    (int(layer_idx), tuple(int(seq_id) for seq_id in seq_ids), select_indices)
+                )
+                error.add_note(
+                    "Decode allocation rollback could not fence and restore metadata; "
+                    "slot ownership was quarantined instead of being recycled."
+                )
+                raise error from rollback_error
+            raise
 
         return select_indices
 

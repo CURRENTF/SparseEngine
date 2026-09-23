@@ -1981,22 +1981,49 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
         row_indices, pending_rows = self._plan_decode_rows(seq_ids)
         self._ensure_decode_buffers(batch_size)
         cur_lens = self.row_seq_lens[row_indices]
+        logical_lens = self.row_logical_lens[row_indices]
         if np.any(cur_lens >= self.buffer_req_to_token_slots.shape[1]):
             raise ValueError("Decode allocation exceeds the cache row capacity.")
         select_indices = self._take_device_slots(batch_size)
+        rows_committed = False
         try:
             self._commit_decode_rows(pending_rows)
-        except BaseException:
-            self._return_prefix_device_slots(select_indices)
+            rows_committed = True
+            rows_gpu = self._static_rows_gpu[:batch_size]
+            cols_gpu = self._static_cols_gpu[:batch_size]
+            rows_gpu.copy_(torch.as_tensor(row_indices, dtype=torch.long), non_blocking=True)
+            cols_gpu.copy_(torch.as_tensor(cur_lens, dtype=torch.long), non_blocking=True)
+            self.buffer_req_to_token_slots[rows_gpu, cols_gpu] = select_indices
+            self.row_seq_lens[row_indices] += 1
+            self.row_logical_lens[row_indices] += 1
+        except BaseException as error:
+            try:
+                if rows_committed or not pending_rows:
+                    for row_idx, cur_len in zip(row_indices, cur_lens, strict=True):
+                        self.buffer_req_to_token_slots[int(row_idx), int(cur_len)] = 0
+                self.row_seq_lens[row_indices] = cur_lens
+                self.row_logical_lens[row_indices] = logical_lens
+                if device_runtime.supports_streams(self.device):
+                    device_runtime.synchronize()
+                if rows_committed:
+                    self._rollback_decode_rows(pending_rows)
+                elif any(seq_id in self.seq_id_to_row for seq_id, _ in pending_rows):
+                    raise RuntimeError(
+                        "Static decode allocation partially committed its row plan."
+                    )
+                self._return_prefix_device_slots(select_indices)
+            except BaseException as rollback_error:
+                quarantined = getattr(self, "_quarantined_decode_allocations", None)
+                if quarantined is None:
+                    quarantined = []
+                    self._quarantined_decode_allocations = quarantined
+                quarantined.append((tuple(int(seq_id) for seq_id in seq_ids), select_indices))
+                error.add_note(
+                    "Decode allocation rollback could not fence and restore metadata; "
+                    "slot ownership was quarantined instead of being recycled."
+                )
+                raise error from rollback_error
             raise
-
-        rows_gpu = self._static_rows_gpu[:batch_size]
-        cols_gpu = self._static_cols_gpu[:batch_size]
-        rows_gpu.copy_(torch.as_tensor(row_indices, dtype=torch.long), non_blocking=True)
-        cols_gpu.copy_(torch.as_tensor(cur_lens, dtype=torch.long), non_blocking=True)
-        self.buffer_req_to_token_slots[rows_gpu, cols_gpu] = select_indices
-        self.row_seq_lens[row_indices] += 1
-        self.row_logical_lens[row_indices] += 1
 
         return select_indices
 
@@ -2045,6 +2072,20 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
             )
         for seq_id, _ in pending:
             self.seq_id_to_row[seq_id] = self.free_rows.popleft()
+
+    def _rollback_decode_rows(
+        self,
+        pending: tuple[tuple[int, int], ...],
+    ) -> None:
+        for seq_id, expected_row in reversed(pending):
+            actual_row = self.seq_id_to_row.get(seq_id)
+            if actual_row != expected_row:
+                raise RuntimeError(
+                    "Static decode row rollback found unexpected ownership: "
+                    f"seq_id={seq_id} expected={expected_row} actual={actual_row}."
+                )
+            self.seq_id_to_row.pop(seq_id)
+            self.free_rows.appendleft(expected_row)
 
     @torch.no_grad()
     def _allocate_decode_batch_static(

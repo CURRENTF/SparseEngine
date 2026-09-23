@@ -142,3 +142,21 @@ def test_dp_rejects_uncaptured_sampling_plan_at_configuration_boundary():
     )
     with pytest.raises(ValueError, match="DP attention does not support"):
         normalize_decode_cuda_graph(config)
+
+
+def test_generate_rejects_sampling_parameter_length_mismatch_before_submission():
+    # Scalar broadcast coverage does not catch zip() silently dropping prompts
+    # when an explicit SamplingParams list is short.
+    import pytest
+
+    engine = _frontend()
+    engine.add_request = Mock()
+
+    with pytest.raises(ValueError, match="must have the same length"):
+        engine.generate(
+            [[1, 2], [3, 4]],
+            [SamplingParams(max_tokens=1)],
+            use_tqdm=False,
+        )
+
+    engine.add_request.assert_not_called()

@@ -169,10 +169,17 @@ def resolve_prefill_token_budget(config) -> None:
             f"engine_prefill_chunk_size={chunk}, long_prefill_offload_threshold={threshold}."
         )
     method = normalize_sparse_method(config.sparse_method)
-    if method in {"snapkv", "pyramidkv"} and chunk < int(config.snapkv_window_size):
+    effective_step_budget = min(int(chunk), int(budget))
+    if (
+        method in {"snapkv", "pyramidkv"}
+        and effective_step_budget < int(config.snapkv_window_size)
+    ):
         raise ValueError(
-            f"{method} requires engine_prefill_chunk_size >= snapkv_window_size so the "
-            f"final score window fits in one prefill step: engine_prefill_chunk_size={chunk}, "
+            f"{method} requires the effective prefill step budget "
+            f"min(engine_prefill_chunk_size, max_num_batched_tokens) >= "
+            f"snapkv_window_size so the final score window fits in one prefill "
+            f"step: engine_prefill_chunk_size={chunk}, "
+            f"max_num_batched_tokens={budget}, "
             f"snapkv_window_size={config.snapkv_window_size}."
         )
     config.max_num_batched_tokens = int(budget)

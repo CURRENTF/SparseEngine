@@ -203,6 +203,32 @@ def test_rejected_sole_decode_preemption_keeps_request_abortable(reservation_fai
     assert scheduler.is_finished()
 
 
+def test_abort_many_stably_filters_queues_and_reports_possible_owners():
+    # Single-abort lifecycle tests do not protect stable queue order or the
+    # ownership result when several completions are removed in one scan.
+    oracle = FakeMemoryOracle(free_slots=32)
+    scheduler = make_scheduler("all_chunked", oracle=oracle)
+    waiting = [request(4) for _ in range(4)]
+    decoding = [request(4) for _ in range(3)]
+    for seq in waiting:
+        scheduler.add(seq)
+    for seq in decoding:
+        seq.num_prefilled_tokens = seq.num_prompt_tokens
+        scheduler.decoding.append(seq)
+    targets = [waiting[1].seq_id, waiting[3].seq_id, decoding[1].seq_id]
+
+    removed = scheduler.abort_many(targets)
+
+    assert removed == {
+        waiting[1].seq_id: False,
+        waiting[3].seq_id: False,
+        decoding[1].seq_id: True,
+    }
+    assert list(scheduler.waiting) == [waiting[0], waiting[2]]
+    assert list(scheduler.decoding) == [decoding[0], decoding[2]]
+    assert all(seq.status == SequenceStatus.FINISHED for seq in (waiting[1], waiting[3], decoding[1]))
+
+
 @pytest.mark.parametrize("phase", ["first_prefill", "partial_prefill", "decode"])
 @pytest.mark.parametrize("cleanup_fails_once", [False, True])
 @pytest.mark.parametrize("chain_mode", [False, True])

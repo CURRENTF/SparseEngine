@@ -1749,6 +1749,7 @@ class LLMEngine:
                         # ownership until cleanup succeeds, including the first
                         # chunk whose num_prefilled_tokens is still zero.
                         self.scheduler.waiting.extendleft(reversed(seqs))
+                    reclaimed_seq_ids = []
                     for seq in seqs:
                         chain_seq = self._active_chain_sequences.get(int(seq.seq_id))
                         try:
@@ -1771,7 +1772,8 @@ class LLMEngine:
                         # Commit removal only after the physical release. Keep
                         # failed cleanup visible to the serving cancellation path.
                         self._active_chain_sequences.pop(int(seq.seq_id), None)
-                        self.scheduler.abort(int(seq.seq_id))
+                        reclaimed_seq_ids.append(int(seq.seq_id))
+                    self.scheduler.abort_many(reclaimed_seq_ids)
                     raise
             token_logprobs, top_logprobs = (
                 logprob_outputs if logprob_outputs is not None else (None, None)
@@ -1858,9 +1860,15 @@ class LLMEngine:
                                 seq.completion_top_logprobs,
                             )
                         )
-                for seq_id in finished_seq_ids:
-                    self._release_slots_transaction(seq_id, finish=True)
-                    self.scheduler.abort(seq_id)
+                released_seq_ids = []
+                try:
+                    for seq_id in finished_seq_ids:
+                        self._release_slots_transaction(seq_id, finish=True)
+                        released_seq_ids.append(seq_id)
+                finally:
+                    # Physical release remains the commit point. If a later
+                    # release fails, remove only the requests already released.
+                    self.scheduler.abort_many(released_seq_ids)
         
         # 计算吞吐量统计数据 (正数表示 Prefill，负数表示 Decode)
         num_tokens = sum(seq.current_chunk_size for seq in seqs) if is_prefill else -len(seqs)
@@ -1900,6 +1908,12 @@ class LLMEngine:
         高层 API：批量输入 Prompt，阻塞直至全部生成完成。
         返回包含生成的 text 和 token_ids 的字典列表。
         """
+        if isinstance(sampling_params, list) and len(sampling_params) != len(prompts):
+            raise ValueError(
+                "prompts and sampling_params must have the same length when "
+                f"sampling_params is a list: prompts={len(prompts)} "
+                f"sampling_params={len(sampling_params)}."
+            )
         if use_tqdm:
             pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True)
         

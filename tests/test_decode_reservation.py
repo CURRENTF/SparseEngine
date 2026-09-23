@@ -488,6 +488,34 @@ def test_deltakv_latent_reservation_does_not_consume_prefill_raw_slots():
     assert runtime.prompt_admission_free_slots() == manager.prompt_admission_free_slots()
 
 
+def test_pyramidkv_decode_reservations_do_not_consume_independent_staging():
+    # Existing multi-pool tests cover persistent raw pools, not PyramidKV's
+    # separately allocated temporary prefill tensor.
+    from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+    from sparseengine.engine.runtime_state import RuntimeState
+
+    manager = object.__new__(SnapKVCacheManager)
+    manager.config = SimpleNamespace(
+        sparse_method="pyramidkv",
+        pyramid_layer_ratios=[1.0, 0.5],
+        prefill_schedule_policy="long_bs1full_short_batch",
+    )
+    manager.pyramidkv_prefill_staging_num_slots = 1024
+    manager._num_free_slots = [8192, 4096]
+    manager.kv_transformer_layer_indices = lambda: [0, 1]
+    runtime = RuntimeState(
+        SimpleNamespace(decode_reservation_tokens=1, max_num_seqs_in_gpu=8),
+        manager,
+    )
+    reserved = {"layer_0": 2048, "layer_1": 1024}
+    runtime.decode_reservations.outstanding = Mock(return_value=reserved)
+
+    assert runtime.prefill_step_free_slots() == 1024
+    assert manager.prefill_capacity_after_decode_reservations(
+        8192, reserved, admission=True,
+    ) == 6144
+
+
 def test_kivi_prefill_subtracts_each_raw_pool_before_taking_minimum():
     # KIVI bounds full-layer raw growth while sparse raw growth uses a different
     # pool. Subtracting the largest raw reservation from the smallest pool fails.

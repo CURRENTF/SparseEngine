@@ -1,7 +1,7 @@
 import os
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from sparseengine.config import Config
 from sparseengine.engine.prefill import (
@@ -185,22 +185,35 @@ class Scheduler:
         Returns True when the sequence may own KV slots and the caller should
         notify ModelRunner.free_slots(seq_id).
         """
-        self._prefill_wait_since.pop(seq_id, None)
+        return self.abort_many((seq_id,)).get(int(seq_id), False)
+
+    def abort_many(self, seq_ids: Iterable[int]) -> dict[int, bool]:
+        """Remove requests with one stable pass over each scheduler queue."""
+        requested = {int(seq_id) for seq_id in seq_ids}
+        if not requested:
+            return {}
+        for seq_id in requested:
+            self._prefill_wait_since.pop(seq_id, None)
+        removed: dict[int, bool] = {}
         for queue in (self.waiting, self.decoding):
-            for seq in list(queue):
-                if seq.seq_id != seq_id:
+            retained = deque()
+            while queue:
+                seq = queue.popleft()
+                seq_id = int(seq.seq_id)
+                if seq_id not in requested:
+                    retained.append(seq)
                     continue
                 may_own_slots = (
                     seq.status == SequenceStatus.RUNNING
                     or seq.num_prefilled_tokens > 0
                     or queue is self.decoding
                 )
-                queue.remove(seq)
                 seq.status = SequenceStatus.FINISHED
                 self._admission_defer_warned_seq_ids.discard(seq_id)
                 self.memory_oracle.reset_prefill_execution_state(seq_id)
-                return may_own_slots
-        return False
+                removed[seq_id] = bool(removed.get(seq_id, False) or may_own_slots)
+            queue.extend(retained)
+        return removed
 
     def request_may_own_slots(self, seq_id: int) -> bool:
         for queue in (self.waiting, self.decoding):
@@ -531,6 +544,7 @@ class Scheduler:
         deferred_prompt_failure: tuple[Sequence, str, int, int] | None = None
         blocked_prefill_step_failure: tuple[Sequence, int, int] | None = None
         blocked_prefill_capacity_failure: tuple[Sequence, int, int, int] | None = None
+        blocked_final_prefill_window_failure: tuple[Sequence, int, int] | None = None
         charged_shared_resources: dict[str, set[object]] = {}
 
         if overdue:
@@ -605,6 +619,7 @@ class Scheduler:
                         num_batched_tokens=num_batched_tokens,
                         step_free_count=candidate_step_free_count,
                     )
+                    proposed_prefill_tokens = int(can_prefill_tokens)
                     can_prefill_tokens = self._respect_min_final_prefill_chunk(
                         seq,
                         remaining_prefill_tokens,
@@ -612,6 +627,20 @@ class Scheduler:
                     )
 
                     if can_prefill_tokens <= 0:
+                        min_final = int(
+                            self.memory_oracle.min_final_prefill_chunk_size(seq)
+                        )
+                        if (
+                            min_final > 0
+                            and remaining_prefill_tokens <= min_final
+                            and proposed_prefill_tokens < remaining_prefill_tokens
+                            and blocked_final_prefill_window_failure is None
+                        ):
+                            blocked_final_prefill_window_failure = (
+                                seq,
+                                int(min_final),
+                                int(proposed_prefill_tokens),
+                            )
                         if candidate_step_free_count <= 0 and step_free_count > 0:
                             if blocked_prefill_capacity_failure is None:
                                 blocked_prefill_capacity_failure = (
@@ -878,6 +907,17 @@ class Scheduler:
                     f"engine_prefill_chunk_size={self.engine_prefill_chunk_size} "
                     f"max_num_batched_tokens={self.max_num_batched_tokens}. "
                     "Increase the raw KV budget / max_num_batched_tokens or reduce short-batch size."
+                )
+            if blocked_final_prefill_window_failure is not None and not self.decoding:
+                seq, min_final, available = blocked_final_prefill_window_failure
+                raise RuntimeError(
+                    "Final prefill score window cannot fit in the effective step budget. "
+                    f"cache_manager={type(self.memory_oracle).__name__} "
+                    f"seq_id={seq.seq_id} prompt_len={seq.num_prompt_tokens} "
+                    f"remaining_prefill_tokens={seq.num_prompt_tokens - seq.num_prefilled_tokens} "
+                    f"required_final_window={min_final} available_step_tokens={available} "
+                    f"engine_prefill_chunk_size={self.engine_prefill_chunk_size} "
+                    f"max_num_batched_tokens={self.max_num_batched_tokens}."
                 )
             if blocked_prefill_capacity_failure is not None and not self.decoding:
                 seq, need, seq_free, global_free = blocked_prefill_capacity_failure

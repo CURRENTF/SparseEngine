@@ -110,6 +110,19 @@ def test_auto_chunk_uses_final_atomic_budget_and_score_window(prefill_config):
         make(sparse_method="snapkv", max_num_batched_tokens=16, snapkv_window_size=32)
 
 
+def test_explicit_batch_budget_must_fit_final_score_window(prefill_config):
+    # Chunk-only validation misses the independent scheduler-wide token cap.
+    make, _, probes = prefill_config
+    with pytest.raises(ValueError, match="effective prefill step budget"):
+        make(
+            sparse_method="snapkv",
+            engine_prefill_chunk_size=64,
+            max_num_batched_tokens=32,
+            snapkv_window_size=64,
+        )
+    assert not probes
+
+
 def test_auto_budget_rejects_missing_activation_headroom(prefill_config):
     make, _, _ = prefill_config
     with pytest.raises(ValueError, match="capacity is zero"):
