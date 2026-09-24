@@ -263,6 +263,7 @@ def build_mha_decode_attention_op(
     device: torch.device,
     max_batch_size: int,
     cuda_graph: bool,
+    runtime_config=None,
 ) -> PreparedDecodeAttentionOp:
     return prepare_decode_attention_op(
         build_mha_decode_attention_spec(
@@ -271,6 +272,7 @@ def build_mha_decode_attention_op(
             attention_tp_size=attention_tp_size,
             max_batch_size=max_batch_size,
             cuda_graph=cuda_graph,
+            runtime_config=runtime_config,
         ),
         device_index=int(device.index or 0),
     )

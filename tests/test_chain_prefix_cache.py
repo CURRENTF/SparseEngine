@@ -539,7 +539,7 @@ def test_runtime_chain_lru_reclaims_payload_before_reusing_capacity():
         sink_keep_tokens=1,
         recent_keep_tokens=1,
         decode_keep_tokens=4,
-        snapkv_window_size=2,
+        observation_window_size=2,
         snapkv_num_full_layers=0,
         sparse_attn_score_dtype="float32",
         pool_kernel_size=1,
@@ -608,7 +608,7 @@ def test_runtime_warmup_reset_reclaims_chain_payload_before_metadata():
         sink_keep_tokens=1,
         recent_keep_tokens=1,
         decode_keep_tokens=4,
-        snapkv_window_size=2,
+        observation_window_size=2,
         snapkv_num_full_layers=0,
         sparse_attn_score_dtype="float32",
         pool_kernel_size=1,
@@ -651,7 +651,7 @@ def test_snapkv_resumed_prefill_score_uses_physical_coordinates():
     manager.config = SimpleNamespace(
         sparse_method="snapkv",
         snapkv_num_full_layers=0,
-        snapkv_window_size=8,
+        observation_window_size=8,
         sink_keep_tokens=2,
         decode_keep_tokens=16,
         recent_keep_tokens=4,
@@ -690,7 +690,7 @@ def test_snapkv_resumed_prefill_skips_score_below_physical_budget():
     manager.config = SimpleNamespace(
         sparse_method="snapkv",
         snapkv_num_full_layers=0,
-        snapkv_window_size=8,
+        observation_window_size=8,
         sink_keep_tokens=2,
         decode_keep_tokens=16,
         recent_keep_tokens=4,
@@ -714,7 +714,7 @@ def test_snapkv_recompute_replay_scores_the_full_prompt_window():
     manager.config = SimpleNamespace(
         sparse_method="snapkv",
         snapkv_num_full_layers=0,
-        snapkv_window_size=8,
+        observation_window_size=8,
         sink_keep_tokens=2,
         decode_keep_tokens=16,
         recent_keep_tokens=4,
@@ -787,7 +787,8 @@ def test_new_pyramid_chain_capacity_uses_materialized_layer_budgets():
         generation_tokens=5,
         needs_resident_row=True,
     )
-    assert decode_deficits == (12, 6)
+    # Four decode appends occur before the default 1024-token interval fires.
+    assert decode_deficits == (12, 7)
 
 
 def test_resumed_snapkv_capacity_reserves_score_free_decode_growth():
@@ -1179,7 +1180,7 @@ def test_engine_chain_admission_reuses_resident_seq_and_logical_boundary():
         sink_keep_tokens=1,
         recent_keep_tokens=1,
         decode_keep_tokens=4,
-        snapkv_window_size=2,
+        observation_window_size=2,
         snapkv_num_full_layers=0,
         sparse_attn_score_dtype="float32",
         pool_kernel_size=1,

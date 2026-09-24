@@ -66,7 +66,7 @@
         "sink_keep_tokens": 0,
         "recent_keep_tokens": 32,
         "decode_keep_tokens": 4096,
-        "snapkv_window_size": 32,
+        "observation_window_size": 32,
         "pool_kernel_size": 7,
         "gpu_memory_utilization": 0.9
       },
@@ -99,7 +99,7 @@
         "sink_keep_tokens": 0,
         "recent_keep_tokens": 32,
         "decode_keep_tokens": 4096,
-        "snapkv_window_size": 32,
+        "observation_window_size": 32,
         "pool_kernel_size": 7,
         "pyramidkv_start_layer": 0,
         "pyramidkv_start_ratio": 0.5,

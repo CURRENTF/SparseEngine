@@ -1342,6 +1342,11 @@ class CacheManager(ABC):
         """Whether this method should bypass graph replay for diagnostics."""
         return False
 
+    def decode_graph_force_eager_for_seqs(self, seqs: list[Sequence]) -> bool:
+        """Whether the next decode append needs work outside a captured graph."""
+        del seqs
+        return False
+
     requires_committed_token_history = False
 
     def acquire_step_host_buffer(self, template: torch.Tensor) -> torch.Tensor:

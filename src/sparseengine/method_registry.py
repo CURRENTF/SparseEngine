@@ -247,7 +247,6 @@ if set(_PREFILL_LAYER_VARYING_PAGE_TABLE) != CANONICAL_SPARSE_METHODS:
 # Static method score contracts let providers bind before CUDA Graph capture
 # instead of changing the score-producing implementation during replay.
 _DECODE_ATTENTION_SCORE_KINDS = {
-    "pyramidkv": AttentionScoreKind.RAW_QK_REDUCED,
     "omnikv": AttentionScoreKind.RAW_QK_PER_HEAD,
     "skipkv": AttentionScoreKind.RAW_QK_PER_HEAD,
     "deltakv": AttentionScoreKind.RAW_QK_PER_HEAD,
@@ -367,7 +366,7 @@ def sparse_decode_attention_score_kind(
 
     OmniKV, SkipKV, and DeltaKV normalize each head in ``SparseController``
     before reducing across heads, so providers must preserve raw per-head QK.
-    PyramidKV consumes the existing fused head-reduced raw-QK representation.
+    SnapKV and PyramidKV score cached query windows after the decode step.
     Explicit-KV H2O consumes probabilities summed over heads. MLA H2O uses
     an explicit head-reduced-logit softmax approximation in its runtime.
     """

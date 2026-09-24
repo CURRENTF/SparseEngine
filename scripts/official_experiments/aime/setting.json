@@ -1,5 +1,5 @@
 {
-  "protocol": "aime2024_pass1_miniswe_settings_v1",
+  "protocol": "aime2024_pass1_periodic_eviction_v2",
   "model": "Qwen3-30B-A3B-Thinking-2507-FP8",
   "engine": {
     "tensor_parallel_size": 2,
@@ -63,9 +63,11 @@
       "prefix_cache_mode": "auto",
       "sink_keep_tokens": 64,
       "recent_keep_tokens": 512,
-      "decode_keep_tokens": 15808,
-      "snapkv_window_size": 32,
+      "decode_keep_tokens": 3520,
+      "observation_window_size": 32,
       "snapkv_num_full_layers": 0,
+      "snapkv_decode_eviction": true,
+      "decode_eviction_interval": 1024,
       "sparse_prefill_score_mode": "probability"
     },
     "h2o": {
@@ -87,6 +89,8 @@
       "sink_keep_tokens": 64,
       "recent_keep_tokens": 512,
       "decode_keep_tokens": 15808,
+      "observation_window_size": 32,
+      "decode_eviction_interval": 1024,
       "pyramidkv_start_layer": 0,
       "pyramidkv_start_ratio": 0.6,
       "pyramidkv_least_ratio": 0.01

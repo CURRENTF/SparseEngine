@@ -841,7 +841,7 @@ class TritonPagedDecodeAttentionProvider(DecodeAttentionProvider):
         meta = view.meta
         max_context_len = meta.max_context_len
         static_cap = getattr(cache_manager, "_decode_static_max_context_len", None)
-        if static_cap is not None:
+        if static_cap is not None and spec.cuda_graph:
             max_context_len = max(
                 int(max_context_len) if max_context_len is not None else 0,
                 int(static_cap),

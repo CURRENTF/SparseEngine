@@ -28,7 +28,7 @@ def make_runtime(*, capacity=16, decode_limit=1, manager_cls=SnapKVCacheManager)
     config.eos = -1
     config.decode_reservation_tokens = 1
     config.decode_keep_tokens = 2
-    config.snapkv_window_size = 2
+    config.observation_window_size = 2
     manager.validate_runtime_invariants = True
     runtime = RuntimeState(config, manager)
     return manager, runtime, Scheduler(config, runtime)

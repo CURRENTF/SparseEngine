@@ -472,8 +472,19 @@ class LLMEngine:
         prepared = False
 
         def park_prefilled() -> None:
+            diagnostics = os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1"
             while self.scheduler.waiting:
+                if diagnostics:
+                    logger.info(
+                        "Startup CUDA Graph prefill step begin: batch={} waiting={} decoding={}",
+                        batch_size, len(self.scheduler.waiting), len(self.scheduler.decoding),
+                    )
                 self.step()
+                if diagnostics:
+                    logger.info(
+                        "Startup CUDA Graph prefill step complete: batch={} waiting={} decoding={}",
+                        batch_size, len(self.scheduler.waiting), len(self.scheduler.decoding),
+                    )
                 while self.scheduler.decoding:
                     parked.append(self.scheduler.decoding.popleft())
             while self.scheduler.decoding:
@@ -567,6 +578,8 @@ class LLMEngine:
         for entry in startup_plan:
             batch_size, _ = entry
             prompt_len = 1
+            if os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1":
+                logger.info("Startup CUDA Graph batch begin: batch={} context_capacity={}.", *entry)
             parked, prompt_offset = self._prepare_startup_capture_batch(
                 capture_params,
                 prompt_offset,
@@ -574,6 +587,8 @@ class LLMEngine:
                 prompt_len=prompt_len,
                 sequential_prefill=entry in sequential_plan,
             )
+            if os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1":
+                logger.info("Startup CUDA Graph batch prefill complete: batch={}.", batch_size)
             if parked is None:
                 skipped_plan.append(entry)
                 logger.info(
@@ -584,6 +599,8 @@ class LLMEngine:
                 continue
             try:
                 self.model_runner.call("capture_decode_cuda_graph_warmup", parked)
+                if os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1":
+                    logger.info("Startup CUDA Graph batch capture complete: batch={}.", batch_size)
             finally:
                 self.scheduler.decoding.extend(parked)
                 for seq in parked:
@@ -853,6 +870,8 @@ class LLMEngine:
                 "Cannot admit requests while cache release responsibility is pending: "
                 f"seq_ids={sorted(pending)}. Retry abort_request or restart the worker."
             )
+        if sampling_params.benchmark_forced_token_ids is not None:
+            sampling_params.validate_for_vocab(int(self.config.hf_config.vocab_size))
         multimodal = None
         if is_multimodal_prompt(prompt):
             if self.multimodal_processor is None:
@@ -1496,7 +1515,9 @@ class LLMEngine:
             "full_attention_layers",
             "resolved_full_attention_profile",
             "obs_layer_ids",
-            "snapkv_window_size",
+            "observation_window_size",
+            "snapkv_decode_eviction",
+            "decode_eviction_interval",
             "snapkv_num_full_layers",
             "sparse_prefill_score_mode",
             "prefill_sparse_method",

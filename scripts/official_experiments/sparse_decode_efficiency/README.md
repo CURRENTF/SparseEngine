@@ -26,15 +26,15 @@ data with native methods labelled Ours, in this order:
 | Largest measured batch | `decode_capacity_128k_lowbs_max_batch.png` | `sparse_engine_throughput.png` |
 | Relative throughput lines | `decode_capacity_128k_lowbs_delta_vllm.png` | `sparse_decode_efficiency_relative_vllm.png` |
 
-Ours denotes SparseEngine. The label update preserves the archived measurements,
-colors, batch selection, and relative-throughput calculation.
+Ours denotes SparseEngine. The label and color updates preserve the archived
+measurements, batch selection, and relative-throughput calculation.
 
 All use H100 80GB, 128K input / 2K output and `boundary_sync_v2`: 32 warmup
 steps followed by a continuous 256-step full-residency decode window, with one
 discarded and three measured workloads. Rates pool measured decode tokens and
 window time; they are not end-to-end serving throughput. Bars select each
-method's largest measured batch, which need not be its peak throughput. An
-unconfirmed capacity is labelled as a lower bound. Relative lines show
+method's largest measured batch, which need not be its peak throughput or a
+confirmed capacity maximum. Relative lines show
 `100 * (method throughput / vLLM Vanilla
 throughput - 1)` at matching measured concurrency, with vLLM at 0%. Points without
 a matching baseline are omitted, so Qwen extends through BS3 and GLM through BS6.
@@ -46,12 +46,11 @@ remain distinct; these figures do not establish equal quality.
 
 ## Framework color families
 
-The default `palettes/framework_families.json` keeps a fresh, modern palette.
-Each framework has a distinct color family: Ours uses related teal shades,
-vLLM blue, Tangram coral, Vortex lavender, and HiSparse warm gold. Methods
-within Ours retain distinct markers and explicit framework/method labels.
-Reuse this family assignment when adding methods; preserve archived palettes
-when reproducing historical figures.
+The default `palettes/framework_families.json` uses muted rose shades for Ours.
+Baselines use muted cool colors: vLLM blue, Tangram blue-green, Vortex lavender,
+and HiSparse green. Methods within Ours retain distinct markers and explicit
+framework/method labels. Reuse this family assignment when adding methods;
+use an archived palette explicitly when reproducing historical figures.
 
 ## Relative throughput lines
 
@@ -81,25 +80,39 @@ remain supported.
 ## Low-batch lines and maximum-batch bars
 
 Use the same validated portable export for both views; no measurement rerun is
-needed. The presentation config selects 128K panels, limits the Qwen line panel
-to BS4 and GLM to BS8, and adds model/topology captions below each panel.
+needed. The single `presentation.json` preset applies to 128K and 32K. Raw
+boundary-sync plots use it automatically. Select one input length with
+`--input-len`; the preset limits Qwen lines to BS4 and GLM lines to BS8 and adds
+model/topology captions below each panel.
 
 ```bash
 python scripts/official_experiments/sparse_decode_efficiency/plot_decode_capacity.py \
   --plot-data "$DECODE_DATA_ROOT/<validated-export>/plot_data.json" \
-  --presentation-config scripts/official_experiments/sparse_decode_efficiency/presentation.128k.json \
+  --input-len 131072 \
   --output-dir "$DECODE_OUTPUT_ROOT/plots" \
   --export-data-dir "$DECODE_DATA_ROOT/<new-export>"
 ```
 
+For 32K, use the same command and preset with `--input-len 32768` and separate
+output/export directories. Omit `--input-len` for a combined 128K/32K grid.
+Replotting an existing `plot_data.json` without `--input-len` preserves its
+recorded presentation.
+
 The JSON retains every measured batch in the selected panels; only the line
-display is restricted. A separate 1×2 bar figure takes each method's throughput
+display is restricted. A separate grouped bar figure takes each method's throughput
 at its largest validated batch, not the highest throughput across batches.
-Capacity verification status is retained in the exported data. Confirmed maxima
-use `B=N`; unconfirmed largest measured batches use `B≥N`. Bars use a
-paper/whitegrid theme, borderless fills,
-shared y limits, and direct
-framework/method/throughput/batch labels above each bar, without a legend. This borrows visual styling only, retaining the recorded
+This is the default bar style whenever a presentation enables `max_batch_bars`;
+the shared preset enables it, and no extra style or palette flag is needed.
+Capacity verification status is retained in the exported data. Every bar uses
+`B=N` to identify its largest successfully measured batch; this label does not
+claim that the capacity maximum was verified. Bars put Ours before baselines
+within each model and split framework/method names across two x-axis lines
+without parentheses. Bars use a
+paper/whitegrid theme, borderless fills, a shared y axis, and equal visual
+widths; model dividers follow the number of bars in each group. All method
+labels sit below their bars on the x axis; throughput and batch labels remain
+above the bars, without a legend. The bar canvas is 75% of its
+previous height while the throughput scale stays unchanged. This borrows visual styling only, retaining the recorded
 pooled token/time rates rather than substituting a mean or error bars.
 Bars start at zero; line panels start at their visible
 minimum minus 20 tok/s. Both plots use the same method colors. Normal/log-y lines,
@@ -112,11 +125,14 @@ For the repository-optimization 128K refresh, use
 `config.boundary-sync.128k-native-rerun.json`. It makes the 8192-token native prefill
 budget, SnapKV wave admission, and `favor_min_decoding_seqs=0` explicit instead
 of inheriting mutable defaults. After a fresh BS1 run, derive one capacity
-candidate from the reported KV slots. Probe the powers of two needed by the
-line figure, then the candidate and candidate+1; do not run the default binary
-search. Only a successful candidate followed by an explicit capacity failure at
-candidate+1 is a confirmed maximum. Otherwise retain the largest successful
-batch as a lower bound. Run this delta refresh with explicit native lanes
+candidate from the reported KV slots. Probe only the low-BS points needed by the
+relative-line figure, then the capacity candidate; do not run the default binary
+search or intermediate BS16/32 solely for the capacity bar. BS≤30 still needs a
+successful maximum and a classified failure at max+1 for an exact maximum.
+Above BS30, a successful batch B with a defensible capacity upper bound U≤B+5
+may be reported as an approximate maximum with the bracket stated. Without that
+upper bound, retain B only as a measured lower bound; do not plot an estimated
+throughput. Run this delta refresh with explicit native lanes
 `sengine-vanilla,sengine-snapkv,sengine-quest,sengine-omnikv`; the default
 launcher also schedules unchanged baselines and therefore is not the delta-rerun
 entrypoint.
@@ -322,8 +338,11 @@ persisted lane-failure summary. The failed predecessor remains failed; contentio
 resource loss, user interruption and missing/mismatched failure evidence still
 block handoff. This does not retry failed methods.
 
-Only after every supported sweep has a verified integer maximum and max+1
-capacity failure, export to a **new external data directory**:
+For a complete-capacity export, every supported sweep still needs a verified
+integer maximum and max+1 capacity failure. Approximate/lower-bound results
+use the explicit partial-curve route below; a near-max bracket is reported in
+the result record, while the existing bar labels its largest measured B as a
+lower bound. Export to a **new external data directory**:
 
 ```bash
 python scripts/official_experiments/sparse_decode_efficiency/plot_decode_capacity.py \
@@ -396,9 +415,10 @@ least two formal curves with two points each, including a Vanilla baseline.
 Unverified maximums remain null;
 no interpolation, smoke results, theoretical endpoints or zero-filled failures
 are exported. Partial curves can lack intermediate powers and are not described
-as complete capacity sweeps. The grid uses independent panel protocols, shared
-four-column union legend and low-concurrency insets, with no extra single-panel
-figures. `--plot-data` replots the same grid entirely from the exported JSON.
+as complete capacity sweeps. The grid uses independent panel protocols, a shared
+four-column union legend, low-concurrency insets, and the shared max-batch bar
+style. It has no extra single-panel figures. `--plot-data` replots the same grid
+entirely from the exported JSON.
 
 ## Historical step-sync results
 
@@ -459,7 +479,7 @@ Overview canvases are 8.75 × 3.5 inches; per-model canvases are 5 × 3.625 inch
 Canvas width/height and marker sizes are scaled by 1.25 from the previous layout;
 line widths and other style parameters are unchanged.
 Font sizes remain unchanged; the y label is `Throughput (tok/s)`.
-Legends use fixed columns (4 in the overview,
+Legends list Ours methods before baselines and use fixed columns (4 in the overview,
 2 per model), with explicit `Tangram (SnapKV)` and `HiSparse (QuEST)` labels,
 not automatic width-based wrapping; constrained layout positions the artists.
 Each panel includes a native inset of observed concurrency <= 6 points, using

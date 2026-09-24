@@ -72,7 +72,7 @@ GPU 计算与 KV 更新保持顺序。需要 CPU 已确认 token 历史的方法
 | `recent_keep_tokens` | int | `512` | 保留的最近 token 数。 |
 | `decode_keep_tokens` | int | `4096` | 稀疏选择的 token 预算，具体含义随方法而定。 |
 | `full_attention_layers` | str / list[int] | `"auto"` | 完整注意力层；支持自动配置、逗号分隔字符串或层索引列表。未登记的 OmniKV / DeltaKV 模型需先校准或显式指定。 |
-| `sparse_prefill_score_mode` | str / None | `None` | Prefill 评分方式：自动选择、`probability` 或 `logits`；后者仅适用于 SnapKV、PyramidKV、H2O，且要求 float32 分数。 |
+| `sparse_prefill_score_mode` | str / None | `None` | 评分方式：自动选择、`probability` 或 `logits`；SnapKV/PyramidKV 的 prefill 和 decode observation window 使用同一种方式。`logits` 仅适用于 SnapKV、PyramidKV、H2O，且要求 float32 分数。 |
 
 Token 数预算须为非负整数，不接受比例。QuEST 的总选择预算为 `sink_keep_tokens + decode_keep_tokens + recent_keep_tokens`，不能直接设置 `quest_token_budget`。
 
@@ -90,6 +90,14 @@ Token 数预算须为非负整数，不接受比例。QuEST 的总选择预算�
 | `flashprefill_v2_abs_threshold` | float / None | `None` | FlashPrefill V2 稀疏阈值，范围 `[0, 1]`；启用时必须显式提供模型校准值。 |
 
 `flashprefill_v2` 仅支持显式 KV 模型；`omnikv_prefill` 不支持 radix 前缀复用。组合限制见[稀疏方法](../features/sparse-methods.md)，FlashPrefill 调参见 [FlashPrefill V2](../features/flashprefill-v2.md)。
+
+## SnapKV 与 PyramidKV
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `observation_window_size` | int | `32` | 正整数。prefill 评分使用 prompt 末尾的 query；每次 decode 驱逐最多使用最近这么多个 query，压缩后重新累计。 |
+| `snapkv_decode_eviction` | bool | `False` | 开启 SnapKV 的周期性 decode 驱逐；PyramidKV 始终开启。 |
+| `decode_eviction_interval` | int | `1024` | 正整数。SnapKV/PyramidKV 每层物理 KV 长度达到该层预算加此值时驱逐；仅在边界步的 decode Graph replay 后评分。 |
 
 ## KVzip
 

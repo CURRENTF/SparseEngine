@@ -775,6 +775,52 @@ def test_tool_threshold_accumulates_until_commit_without_recompressing(monkeypat
         client._maybe_prune(dict(messages=messages))
 
 
+def test_tool_result_lag_prunes_only_fifth_latest_result(monkeypatch, tmp_path):
+    from benchmark.swe_bench_lite.prefix_prune_client import PrefixPruneClient
+
+    client = PrefixPruneClient(
+        api_base='http://unused', tokenizer_path=str(tmp_path),
+        keep_ratio=.2, trigger_tokens=1, events_path=tmp_path/'events.jsonl',
+        tool_result_lag=4,
+    )
+    state = {'dropped': 0}
+    selected, jobs = [], []
+
+    def select(chat, *, message_indices, **kwargs):
+        index, = message_indices
+        selected.append(index)
+        return dict(token_ids=list(range(100)), ranges=[(index*10, index*10+10)],
+                    eligible_tokens=10, tool_tokens=10)
+
+    def match(*args):
+        return dict(block_size=1, prompt_tokens=100, usable_tokens=100,
+                    matched_tokens=100, resident_kv_tokens=100-state['dropped'],
+                    last_block_id='path')
+
+    def request(method, path, body=None):
+        if path.endswith('/match'):
+            return match()
+        if method == 'POST':
+            jobs.append(body)
+            state['dropped'] += 8
+            return dict(prune_id=f'job-{len(jobs)}')
+        return dict(status='completed', result=dict(freed_device_slots=8, quality_degraded=True))
+
+    client._prune_tool_selector = SimpleNamespace(select=select)
+    monkeypatch.setattr(client, '_match_prefix', match)
+    monkeypatch.setattr(client, '_prefix_cache_request', request)
+    messages = []
+    for i in range(6):
+        messages.append(dict(role='tool', content=str(i)))
+        client._maybe_prune(dict(messages=messages))
+        assert len(jobs) == max(0, i - 3)
+    client._maybe_prune(dict(messages=messages))
+    assert selected == [0, 1]
+    assert [job['ranges'] for job in jobs] == [[(0, 10)], [(10, 20)]]
+    assert [job['keep_tokens'] for job in jobs] == [2, 2]
+    assert len(client._prune_processed_messages) == 2
+
+
 def test_tool_prune_resumes_pending_job_after_poll_disconnect(monkeypatch, tmp_path):
     from benchmark.swe_bench_lite.prefix_prune_client import PrefixPruneClient
 

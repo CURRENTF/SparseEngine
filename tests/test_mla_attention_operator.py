@@ -245,6 +245,28 @@ def test_sgl_mla_accepts_graph_stable_score_free_contract() -> None:
     assert MlaSglFa3Provider.supports_decode_graph
 
 
+def test_ada_resolves_mla_decode_to_triton_before_fa3_probe() -> None:
+    spec = _spec(tp_size=1)
+    caps = _h100_caps(compute_capability=(8, 9), device_name="NVIDIA RTX 4090")
+    workspace = _cpu_workspace(batch_size=1, head_count=20)
+    with (
+        patch(
+            "sparseengine.operators.mla_attention.sgl_fa3_device_support",
+            side_effect=AssertionError("unsupported FA3 path must not be probed"),
+        ) as probe,
+        patch(
+            "sparseengine.operators.mla_attention.allocate_mla_decode_workspace",
+            return_value=workspace,
+        ),
+    ):
+        resolved = OpResolver(MLA_ATTENTION_REGISTRY).resolve(
+            spec, caps, op_spec=spec, device="cpu", max_batch_size=1,
+        )
+    assert type(resolved.provider) is MlaTritonProvider
+    assert ("sgl_fa3_sm90", "FA3 MLA with distinct V head dimension requires Hopper") in resolved.rejected
+    probe.assert_not_called()
+
+
 def test_decode_graph_mla_resolver_prefers_sgl_fa3() -> None:
     spec = _spec(
         cuda_graph=True,

@@ -34,7 +34,7 @@ def test_window_output_invariance(method, graph, tmp_path, monkeypatch):
                   decode_reservation_tokens=window, decode_graph=graph,
                   decode_graph_capture_sizes=[1, 2], sink_keep_tokens=2,
                   recent_keep_tokens=4, decode_keep_tokens=8,
-                  snapkv_window_size=4, h2o_prefill_budget=16,
+                  observation_window_size=4, h2o_prefill_budget=16,
                   h2o_decode_budget=16, h2o_decode_eviction=(method == "h2o"),
                   h2o_decode_eviction_interval=4)
         try:

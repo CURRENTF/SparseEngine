@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("aime_recipe", Path(__file__).with_name("run.py"))
 recipe = importlib.util.module_from_spec(spec)
@@ -16,6 +17,14 @@ spec.loader.exec_module(recipe)
 
 
 class ArtifactContracts(unittest.TestCase):
+    def test_method_boundary_waits_for_transient_gpu_teardown(self):
+        ready = {"devices": "idle", "compute_processes": ""}
+        with patch.object(recipe, "idle_gpus", side_effect=[RuntimeError("GPU 3 is busy"), ready]) as check:
+            with patch.object(recipe.time, "sleep") as sleep:
+                self.assertEqual(recipe.wait_idle_gpus("3", 1, timeout=1), ready)
+        self.assertEqual(check.call_count, 2)
+        sleep.assert_called_once()
+
     def test_duplicate_questions_cannot_count_as_complete_dataset(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "data.json"

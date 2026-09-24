@@ -2170,6 +2170,7 @@ class ModelRunner:
             return False
         return all(
             bool(getattr(seq, "should_publish_sample", True))
+            and getattr(seq, "benchmark_forced_token_ids", None) is None
             and seq.temperature <= 1e-10
             for seq in seqs
         )
@@ -2248,6 +2249,8 @@ class ModelRunner:
         if not publish_indices:
             return torch.zeros(len(seqs), dtype=torch.long, device=logits.device) if return_device_tokens else token_ids
         if graph_token_ids is not None:
+            if any(getattr(seq, "benchmark_forced_token_ids", None) is not None for seq in seqs):
+                raise RuntimeError("Benchmark forced tokens require sampling outside the CUDA Graph")
             if len(publish_indices) != len(seqs):
                 raise RuntimeError(
                     "CUDA graph sampling cannot mix recompute replay and live outputs."
@@ -2287,6 +2290,26 @@ class ModelRunner:
                 for seq in stochastic_seqs
             ),
         )
+        forced_indices = []
+        forced_values = []
+        for idx, seq in enumerate(publish_seqs):
+            forced = getattr(seq, "benchmark_forced_token_ids", None)
+            if forced is None:
+                continue
+            offset = int(seq.num_completion_tokens)
+            if not 0 <= offset < len(forced):
+                raise RuntimeError(
+                    f"Forced-token cursor is outside the recorded completion: seq_id={seq.seq_id} offset={offset}"
+                )
+            value = int(forced[offset])
+            if value >= int(logits.shape[-1]):
+                raise ValueError(f"Forced token {value} is outside the model vocabulary")
+            forced_indices.append(idx)
+            forced_values.append(value)
+        if forced_indices:
+            sampled[forced_indices] = torch.tensor(
+                forced_values, dtype=sampled.dtype, device=sampled.device
+            )
         if return_device_tokens:
             if len(publish_indices) == len(seqs):
                 return sampled

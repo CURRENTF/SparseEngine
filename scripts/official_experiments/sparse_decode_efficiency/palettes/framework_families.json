@@ -1,21 +1,22 @@
 {
-  "name": "framework_families_fresh_modern",
-  "principle": "Each framework owns a color family; methods within a framework use related shades and distinct markers.",
+  "name": "framework_families_muted_rose_ours",
+  "principle": "Ours uses muted rose shades and distinct markers; baselines use muted cool color families.",
   "framework_colors": {
-    "vllm": "#779DCF",
-    "tangram": "#DE9098",
-    "vortex": "#A68BC8",
-    "hisparse": "#D9AF70",
-    "sengine": "#60BBA7"
+    "vllm": "#80A6CE",
+    "tangram": "#7FAEBB",
+    "vortex": "#9C94BE",
+    "hisparse": "#84AFA1",
+    "sengine": "#BE8390"
   },
   "colors": {
-    "vllm-vanilla": "#779DCF",
-    "sengine-vanilla": "#A1C9BF",
-    "sengine-snapkv": "#399D8F",
-    "sengine-quest": "#64BEA5",
-    "sengine-omnikv": "#76AAA9",
-    "tangram-snapkv": "#DE9098",
-    "hisparse-quest": "#D9AF70",
-    "vortex-quest": "#A68BC8"
+    "vllm-vanilla": "#80A6CE",
+    "sengine-vanilla": "#DEB1BA",
+    "sengine-snapkv": "#C88A98",
+    "sengine-h2o": "#D5A0AA",
+    "sengine-quest": "#A9677B",
+    "sengine-omnikv": "#B87989",
+    "tangram-snapkv": "#7FAEBB",
+    "hisparse-quest": "#84AFA1",
+    "vortex-quest": "#9C94BE"
   }
 }

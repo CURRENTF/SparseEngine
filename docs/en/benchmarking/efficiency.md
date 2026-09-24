@@ -220,8 +220,13 @@ Keep configuration, input-data, model, and result validation. Experimenters deci
 whether code changes require remeasurement; rerun instead of treating worktree
 recovery as part of the official result contract.
 Aggregate throughput as total tokens / total time and retain dispersion.
-Maximum concurrency requires an integer boundary and max+1 capacity failure;
-an arbitrary crash is not capacity evidence. Multi-method queues preserve
+An exact maximum at BS≤30 requires an integer boundary and a max+1 capacity
+failure. Above BS30, a near-maximum within five is acceptable when B succeeds
+and a defensible upper bound U≤B+5 is established; a classified capacity
+failure at F gives U=F-1. A KV-slot estimate without an upper bound only
+supports a measured lower bound (usable BS≥B), not a verified error of five.
+Estimated batches are not measured throughput points. An arbitrary crash is
+not capacity evidence. Multi-method queues preserve
 method-local smoke/measurement failures and continue
 other methods, but retain a failed final status. GPU contention, lost resources,
 storage errors, and user interruption stop the entire queue.

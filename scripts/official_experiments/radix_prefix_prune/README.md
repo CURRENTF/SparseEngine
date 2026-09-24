@@ -2,6 +2,9 @@
 
 Status: full300 SWE-bench Lite results are recorded in
 [`RESULTS.md`](RESULTS.md) and [`results.json`](results.json).
+The separate FP8 delayed-tool-result rerun is recorded in
+[`RESULTS.fp8-lag4.md`](RESULTS.fp8-lag4.md) and
+[`results.fp8-lag4.json`](results.fp8-lag4.json).
 
 This package studies physical radix KV pruning with `policy="kvzip_global"`
 across Vanilla, QuEST, and OmniKV decode methods. The selected sparse method

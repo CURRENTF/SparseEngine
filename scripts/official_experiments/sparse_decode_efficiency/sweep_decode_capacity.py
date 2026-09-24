@@ -217,6 +217,9 @@ def main():
     if Path(metrics.__file__).resolve() != REPO / "benchmark/efficiency/metrics.py":
         raise RuntimeError("Measurement statistics were imported from a different benchmark checkout")
     config = load_campaign_config(args.config)
+    idle_poll_interval_s = config.get("idle_poll_interval_s", 15)
+    if not isinstance(idle_poll_interval_s, (int, float)) or isinstance(idle_poll_interval_s, bool) or not 0 < idle_poll_interval_s <= 60:
+        raise ValueError("idle_poll_interval_s must be in (0, 60] seconds")
     protocol = config.get("measurement_protocol", "step_sync_v1")
     if protocol not in ("step_sync_v1", "boundary_sync_v2"):
         raise ValueError(f"Unknown measurement protocol: {protocol}")
@@ -524,12 +527,12 @@ def main():
                     args.gpus = ",".join(idle[:count])
                     env["CUDA_VISIBLE_DEVICES"] = args.gpus
                     break
-                time.sleep(15)
+                time.sleep(idle_poll_interval_s)
                 continue
             pids = subprocess.check_output(["nvidia-smi", "-i", args.gpus, "--query-compute-apps=pid", "--format=csv,noheader,nounits"], text=True, timeout=15)
             if not [pid for pid in pids.split() if int(pid) != args.handoff_reservation_pid]:
                 break
-            time.sleep(15)
+            time.sleep(idle_poll_interval_s)
         else:
             raise RuntimeError("No idle GPU before resource deadline")
         with (root / "guard.log").open("w") as log:

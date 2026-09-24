@@ -80,6 +80,18 @@ def idle_gpus(gpus, expected):
     return {"devices": raw, "compute_processes": apps}
 
 
+def wait_idle_gpus(gpus, expected, timeout=120):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return idle_gpus(gpus, expected)
+        except RuntimeError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(2, remaining))
+
+
 def run_command(command, env, log, timeout):
     process = subprocess.Popen(command, cwd=REPO, env=env, stdout=log,
                                stderr=subprocess.STDOUT, start_new_session=True)
@@ -120,6 +132,8 @@ def main():
     parser.add_argument("--gpus", required=True)
     parser.add_argument("--methods", nargs="+", help="Default: all methods in setting.json")
     parser.add_argument("--timeout", type=int, default=43200, help="Maximum seconds per method")
+    parser.add_argument("--gpu-wait-timeout", type=int, default=120,
+                        help="Maximum seconds to wait for idle GPUs at each method")
     parser.add_argument("--execute", action="store_true", help="Without this flag, print commands only")
     args = parser.parse_args()
     setting = read(args.setting)
@@ -129,8 +143,24 @@ def main():
         raise ValueError("Methods must be distinct setting.json labels")
     if args.timeout <= 0:
         raise ValueError("Timeout must be positive")
+    if args.gpu_wait_timeout <= 0:
+        raise ValueError("GPU wait timeout must be positive")
+    if type(evaluation["seed"]) is not int or evaluation["seed"] < 0:
+        raise ValueError("Evaluation seed must be a non-negative integer")
+    if evaluation.get("min_p", 0) != 0:
+        raise ValueError("This MathBench adapter supports only min_p=0")
+    repetitions = evaluation.get("repetitions", 1)
+    if type(repetitions) is not int or repetitions <= 0:
+        raise ValueError("Evaluation repetitions must be a positive integer")
+    if type(evaluation["batch_size"]) is not int or evaluation["batch_size"] <= 0:
+        raise ValueError("Evaluation batch size must be a positive integer")
     model = args.model.resolve(strict=True)
-    data = validate_data(args.data, evaluation["expected_samples"])
+    base_data = validate_data(args.data, evaluation["expected_samples"])
+    data = [
+        {**row, "id": str(trial * len(base_data) + index), "trial": trial}
+        for trial in range(repetitions)
+        for index, row in enumerate(base_data)
+    ]
     root = args.output.resolve()
     if root.exists():
         raise FileExistsError(f"Refusing to overwrite an existing run: {root}")
@@ -143,17 +173,17 @@ def main():
                    "--hyper_param", str(root / method / "engine.json"),
                    "--max_model_len", str(setting["engine"]["max_model_len"]),
                    "--no_force_think_prefix", "--no_prompt_think_instruction"]
-        for key in ("batch_size", "max_new_tokens", "temperature", "top_p", "top_k", "prompt_style"):
+        command.extend(["--batch_size", str(evaluation["batch_size"])])
+        for key in ("max_new_tokens", "temperature", "top_p", "top_k", "prompt_style", "seed"):
             command.extend([f"--{key}", str(evaluation[key])])
         commands[method] = command
         print(method + ": " + shlex.join(command), flush=True)
     if not args.execute:
         return
-    if evaluation["seed"] != 42:
-        raise ValueError("Canonical MathBench currently fixes the seed to 42")
     if importlib.metadata.version("math-verify") != evaluation["math_verify_version"]:
         raise ValueError("Activate an environment with the configured math-verify version")
-    hardware = idle_gpus(args.gpus, setting["engine"]["tensor_parallel_size"])
+    hardware = wait_idle_gpus(args.gpus, setting["engine"]["tensor_parallel_size"],
+                              timeout=args.gpu_wait_timeout)
     root.mkdir(parents=True)
     write(root / "setting.json", setting)
     write(root / "dataset.json", data)
@@ -166,22 +196,37 @@ def main():
                 "methods": {}}
     write(root / "manifest.json", manifest)
     try:
+        failed_methods = []
         for method, command in commands.items():
             directory = root / method
             directory.mkdir()
             write(directory / "engine.json", setting["engine"] | setting["methods"][method])
-            manifest["methods"][method] = {"status": "running", "hardware": idle_gpus(args.gpus, setting["engine"]["tensor_parallel_size"])}
+            manifest["methods"][method] = {"status": "waiting_gpu"}
             write(root / "manifest.json", manifest)
             env = dict(os.environ, CUDA_VISIBLE_DEVICES=args.gpus,
                        SPARSEENGINE_OUTPUT_DIR=str(directory), ENABLE_THINKING="1" if evaluation["enable_thinking"] else "0")
-            with (directory / "run.log").open("w") as log:
-                run_command(command, env, log, args.timeout)
-            folders = list(directory.glob("benchmark/math_bench/pred/aime/*"))
-            if len(folders) != 1:
-                raise ValueError(f"Expected one prediction directory, found {folders}")
-            result = validate_results(folders[0], [row["id"] for row in data])
-            manifest["methods"][method].update(status="success", result=result, artifacts=str(folders[0]))
+            try:
+                manifest["methods"][method].update(
+                    status="running",
+                    hardware=wait_idle_gpus(args.gpus, setting["engine"]["tensor_parallel_size"],
+                                            timeout=args.gpu_wait_timeout),
+                )
+                write(root / "manifest.json", manifest)
+                with (directory / "run.log").open("w") as log:
+                    run_command(command, env, log, args.timeout)
+                folders = list(directory.glob("benchmark/math_bench/pred/aime/*"))
+                if len(folders) != 1:
+                    raise ValueError(f"Expected one prediction directory, found {folders}")
+                result = validate_results(folders[0], [row["id"] for row in data])
+                manifest["methods"][method].update(status="success", result=result, artifacts=str(folders[0]))
+            except Exception as error:
+                failed_methods.append(method)
+                manifest["methods"][method].update(
+                    status="failed", error=f"{type(error).__name__}: {error}"
+                )
             write(root / "manifest.json", manifest)
+        if failed_methods:
+            raise RuntimeError(f"AIME methods failed: {', '.join(failed_methods)}")
         manifest["status"] = "success"
         write(root / "final_summary.json", {m: manifest["methods"][m]["result"] for m in methods})
     except BaseException as error:

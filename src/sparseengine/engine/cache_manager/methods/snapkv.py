@@ -63,7 +63,7 @@ def resolve_snapkv_cache_capacity(
     num_kv_layers: int,
     max_buffer_rows: int,
     max_model_len: int,
-    layer_ratios: list[float] | None = None,
+    layer_slot_weights: list[int] | None = None,
 ) -> tuple[int, tuple[int, ...], int]:
     """Size KV storage together with its persistent slot metadata."""
     available_bytes = int(available_bytes)
@@ -84,24 +84,23 @@ def resolve_snapkv_cache_capacity(
         )
 
     persistent_bytes_per_slot = slot_bytes_per_layer + _INT32_BYTES
-    if layer_ratios is None:
-        slots_per_layer = slot_pool_bytes // (
-            num_kv_layers * persistent_bytes_per_slot
-        )
+    total_slots = slot_pool_bytes // persistent_bytes_per_slot
+    if layer_slot_weights is None:
+        slots_per_layer = total_slots // num_kv_layers
         layer_slots = (int(slots_per_layer),) * num_kv_layers
         base_slots = int(slots_per_layer)
     else:
-        ratios = tuple(float(ratio) for ratio in layer_ratios)
-        if len(ratios) != num_kv_layers or any(ratio <= 0 for ratio in ratios):
+        weights = tuple(int(weight) for weight in layer_slot_weights)
+        if len(weights) != num_kv_layers or any(weight <= 0 for weight in weights):
             raise ValueError(
-                "PyramidKV layer ratios must contain one positive value per KV layer: "
-                f"ratios={ratios}, num_kv_layers={num_kv_layers}."
+                "PyramidKV slot weights must contain one positive value per KV layer: "
+                f"weights={weights}, num_kv_layers={num_kv_layers}."
             )
-        base_slots = int(
-            slot_pool_bytes
-            // (persistent_bytes_per_slot * sum(ratios))
+        weight_sum = sum(weights)
+        layer_slots = tuple(
+            int(total_slots * weight // weight_sum) for weight in weights
         )
-        layer_slots = tuple(int(base_slots * ratio) for ratio in ratios)
+        base_slots = layer_slots[0]
 
     if base_slots <= 0 or any(num_slots <= 0 for num_slots in layer_slots):
         raise RuntimeError(
@@ -121,6 +120,7 @@ class SnapKVCacheManager(CacheManager):
         *,
         allocation_budget_bytes: int | None = None,
     ):
+        self._decode_query_cache_enabled = self._needs_decode_query_cache(config)
         super().__init__(
             config,
             parallel_context,
@@ -226,6 +226,76 @@ class SnapKVCacheManager(CacheManager):
             self.seq_id_to_row.append({})
             self.free_rows.append(deque(range(self.max_buffer_rows)))
             self.row_seq_lens.append(np.zeros((self.max_buffer_rows,), dtype=np.int32))
+
+        self._decode_query_window = int(getattr(config, "observation_window_size", 0) or 0)
+        self._decode_query_active_mask: torch.Tensor | None = None
+        self._decode_query_cache: list[torch.Tensor | None] = []
+        self._decode_query_positions: list[torch.Tensor | None] = []
+        if self._decode_query_cache_enabled:
+            kv_layers = set(self.kv_transformer_layer_indices())
+            for layer_idx in range(self.num_layers):
+                if layer_idx not in kv_layers:
+                    self._decode_query_cache.append(None)
+                    self._decode_query_positions.append(None)
+                    continue
+                self._decode_query_cache.append(torch.empty(
+                    (self.max_buffer_rows + 1, self._decode_query_window,
+                     self._decode_num_query_heads(), self.head_dim),
+                    dtype=self._decode_query_dtype(), device=self.device,
+                ))
+                self._decode_query_positions.append(torch.full(
+                    (self.max_buffer_rows + 1, self._decode_query_window), -1,
+                    dtype=torch.int32, device=self.device,
+                ))
+
+    @staticmethod
+    def _needs_decode_query_cache(config: Config) -> bool:
+        method = str(getattr(config, "sparse_method", "") or "")
+        if method not in {"snapkv", "pyramidkv"} or (
+            method == "snapkv"
+            and not bool(getattr(config, "snapkv_decode_eviction", False))
+        ):
+            return False
+        window = int(getattr(config, "observation_window_size", 0) or 0)
+        if window <= 0:
+            return False
+        budget = (int(config.sink_keep_tokens) + int(config.decode_keep_tokens)
+                  + int(config.recent_keep_tokens))
+        if method == "pyramidkv" and config.pyramid_layer_ratios is not None:
+            ratios = config.pyramid_layer_ratios
+            budget = (int(config.sink_keep_tokens)
+                      + int(int(config.decode_keep_tokens) * min(ratios) / ratios[0])
+                      + int(config.recent_keep_tokens))
+        return int(config.max_model_len) >= budget + int(
+            getattr(config, "decode_eviction_interval", 1024)
+        )
+
+    def _decode_query_dtype(self) -> torch.dtype:
+        dtype = self.hf_config.dtype
+        return dtype if isinstance(dtype, torch.dtype) else torch.float16
+
+    def _decode_num_query_heads(self) -> int:
+        return int(self.hf_config.num_attention_heads) // int(self.tp_size)
+
+    def _decode_query_cache_bytes(self) -> int:
+        if not self._decode_query_cache_enabled:
+            return 0
+        window = int(self.config.observation_window_size)
+        entries = int(self.num_kv_layers) * (int(self.max_buffer_rows) + 1) * window
+        query_bytes = (entries * self._decode_num_query_heads() * int(self.head_dim)
+                       * torch.tensor([], dtype=self._decode_query_dtype()).element_size())
+        return query_bytes + entries * _INT32_BYTES
+
+    def _get_available_slots_info(self) -> tuple[int, int]:
+        available_bytes, slot_bytes = super()._get_available_slots_info()
+        query_bytes = self._decode_query_cache_bytes()
+        if query_bytes >= available_bytes:
+            raise RuntimeError(
+                "Not enough GPU memory for SnapKV/PyramidKV decode query history: "
+                f"required={query_bytes} available={available_bytes}. "
+                "Reduce observation_window_size or max_num_seqs_in_batch."
+            )
+        return available_bytes - query_bytes, slot_bytes
 
     def _sparse_eviction_never_triggers(self) -> bool:
         method = str(getattr(self.config, "sparse_method", "") or "")
@@ -368,6 +438,21 @@ class SnapKVCacheManager(CacheManager):
                     )
             # PyramidKV: 根据比例分配每层不同大小的 cache
             kv_layer_ids = list(self.runtime_layout.kv_idx_to_layer_idx)
+            decode_horizon = max(
+                int(config.decode_reservation_tokens),
+                int(config.decode_eviction_interval),
+            )
+            full_layers = int(getattr(config, "snapkv_num_full_layers", 0))
+            use_prefill_staging = self._pyramidkv_can_use_full_prefill_staging()
+            layer_slot_weights = [
+                int(self.max_model_len)
+                if kv_idx < full_layers or not use_prefill_staging
+                else min(
+                    int(self.max_model_len),
+                    self._pyramidkv_layer_budget(layer_idx) + decode_horizon,
+                )
+                for kv_idx, layer_idx in enumerate(kv_layer_ids)
+            ]
             base_slots, resolved_layer_slots, row_slot_map_bytes = (
                 resolve_snapkv_cache_capacity(
                     available_bytes=available_memory,
@@ -375,7 +460,7 @@ class SnapKVCacheManager(CacheManager):
                     num_kv_layers=num_layers,
                     max_buffer_rows=self.max_buffer_rows,
                     max_model_len=self.max_model_len,
-                    layer_ratios=config.pyramid_layer_ratios,
+                    layer_slot_weights=layer_slot_weights,
                 )
             )
             kv_layer_slots = list(resolved_layer_slots)
@@ -412,7 +497,8 @@ class SnapKVCacheManager(CacheManager):
             config.num_kvcache_slots = layer_slots
             logger.info(
                 f"PyramidKV: KV layer slots = {list(zip(kv_layer_ids, kv_layer_slots))}, "
-                f"base_slots = {base_slots}, "
+                f"first_layer_slots = {base_slots}, "
+                f"layer_slot_weights={layer_slot_weights}, "
                 f"prefill_staging_slots={self.pyramidkv_prefill_staging_num_slots}, "
                 f"row_slot_map_bytes={row_slot_map_bytes}"
             )
@@ -645,22 +731,24 @@ class SnapKVCacheManager(CacheManager):
             )
             budget = None
             trigger_len = None
+            periodic_eviction = (
+                method == "pyramidkv"
+                or (
+                    method == "snapkv"
+                    and bool(getattr(self.config, "snapkv_decode_eviction", False))
+                )
+            )
             if method == "pyramidkv" and not is_full_layer:
                 budget = self._pyramidkv_layer_budget(layer_idx)
-                top_budget = (
-                    int(budget)
-                    - int(self.config.sink_keep_tokens)
-                    - int(self.config.recent_keep_tokens)
-                )
-                trigger_len = max(
-                    int(budget) + 1,
-                    int(budget) + max(0, int(top_budget)),
-                )
             elif method == "snapkv" and not is_full_layer:
                 budget = (
                     int(self.config.sink_keep_tokens)
                     + int(self.config.decode_keep_tokens)
                     + int(self.config.recent_keep_tokens)
+                )
+            if periodic_eviction and budget is not None:
+                trigger_len = int(budget) + int(
+                    getattr(self.config, "decode_eviction_interval", 1024)
                 )
             elif method in ("rkv", "skipkv"):
                 budget = (
@@ -685,7 +773,7 @@ class SnapKVCacheManager(CacheManager):
             if use_new_pyramid_staging and budget is not None:
                 prefill_physical_peak = min(suffix_tokens, int(budget))
 
-            if method == "snapkv" and budget is not None:
+            if method == "snapkv" and budget is not None and not periodic_eviction:
                 # SnapKV currently compacts only at final prefill. Decode is
                 # score-free and grows monotonically, so chain admission must
                 # reserve the full requested decode growth rather than the
@@ -824,11 +912,146 @@ class SnapKVCacheManager(CacheManager):
         return self.get_layer_kv_cache(layer)
 
     def snapshot_chain_method_state(self, seq_id: int) -> ChainMethodState:
-        return ChainMethodState()
+        state = ChainMethodState()
+        if getattr(self, "_decode_query_cache_enabled", False):
+            for layer_idx in self.kv_transformer_layer_indices():
+                row = self.seq_id_to_row[layer_idx][seq_id]
+                cache, positions = self._decode_query_cache_layer(layer_idx)
+                state.tensors[f"decode_queries/{layer_idx}"] = cache[row]
+                state.tensors[f"decode_positions/{layer_idx}"] = positions[row]
+        return state
 
     def restore_chain_method_state(self, seq_id: int, state: ChainMethodState) -> None:
-        if state.tensors or state.metadata is not None:
-            raise RuntimeError("Unexpected auxiliary state in a SnapKV chain snapshot.")
+        if not getattr(self, "_decode_query_cache_enabled", False):
+            if state.tensors or state.metadata is not None:
+                raise RuntimeError("Unexpected auxiliary state in a SnapKV chain snapshot.")
+            return
+        expected = {
+            f"{kind}/{layer_idx}"
+            for layer_idx in self.kv_transformer_layer_indices()
+            for kind in ("decode_queries", "decode_positions")
+        }
+        if set(state.tensors) != expected or state.metadata is not None:
+            raise RuntimeError(
+                "SnapKV chain snapshot has incomplete decode query history: "
+                f"expected={sorted(expected)} observed={sorted(state.tensors)}."
+            )
+        for layer_idx in self.kv_transformer_layer_indices():
+            row = self.seq_id_to_row[layer_idx][seq_id]
+            cache, positions = self._decode_query_cache_layer(layer_idx)
+            cache[row].copy_(state.tensors[f"decode_queries/{layer_idx}"], non_blocking=True)
+            positions[row].copy_(state.tensors[f"decode_positions/{layer_idx}"], non_blocking=True)
+
+    def _decode_query_cache_layer(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        self.kv_layer_index(layer_idx)
+        cache = self._decode_query_cache[int(layer_idx)]
+        positions = self._decode_query_positions[int(layer_idx)]
+        if cache is None or positions is None:
+            raise RuntimeError(f"Missing decode query cache for layer={layer_idx}.")
+        return cache, positions
+
+    def _clear_decode_query_rows(self, layer_idx: int, rows: list[int]) -> None:
+        if not getattr(self, "_decode_query_cache_enabled", False) or not rows:
+            return
+        _, positions = self._decode_query_cache_layer(layer_idx)
+        positions.index_fill_(
+            0, torch.tensor(rows, dtype=torch.long, device=self.device), -1,
+        )
+
+    def clear_decode_query_history(self, layer_idx: int, seq_id: int) -> None:
+        if not getattr(self, "_decode_query_cache_enabled", False):
+            return
+        row = self.seq_id_to_row[layer_idx].get(int(seq_id))
+        if row is not None:
+            self._clear_decode_query_rows(layer_idx, [int(row)])
+
+    def decode_graph_keepalive_tensors(self) -> list[torch.Tensor]:
+        tensors = super().decode_graph_keepalive_tensors()
+        if not getattr(self, "_decode_query_cache_enabled", False):
+            return tensors
+        return tensors + [
+            tensor for tensor in (*self._decode_query_cache, *self._decode_query_positions)
+            if tensor is not None
+        ]
+
+    @torch.no_grad()
+    def record_prefill_query(self, layer_idx, q, view, *, b_start_loc, chunk_lens):
+        del q, b_start_loc, chunk_lens
+        if getattr(self, "_decode_query_cache_enabled", False):
+            _, positions = self._decode_query_cache_layer(layer_idx)
+            positions.index_fill_(0, view.meta.req_indices.to(torch.long), -1)
+
+    @torch.no_grad()
+    def record_decode_query(self, layer_idx: int, q: torch.Tensor):
+        if not getattr(self, "_decode_query_cache_enabled", False) or q.numel() == 0:
+            return
+        cache, positions_cache = self._decode_query_cache_layer(layer_idx)
+        state = self.get_layer_batch_states(layer_idx)
+        rows = state.req_indices.to(torch.long)
+        active_mask = self._decode_query_active_mask
+        if active_mask is not None:
+            rows = torch.where(
+                active_mask[:q.shape[0]], rows,
+                torch.full_like(rows, int(self.max_buffer_rows)),
+            )
+        positions = state.context_lens.to(torch.long) - 1
+        cols = positions.remainder(self._decode_query_window)
+        cache[rows, cols] = q
+        positions_cache[rows, cols] = positions.to(torch.int32)
+
+    @torch.no_grad()
+    def decode_query_scores(self, layer_idx: int, seq: Sequence, kv_len: int) -> torch.Tensor:
+        """Score resident KV with the most recent contiguous decode queries."""
+        cache, positions = self._decode_query_cache_layer(layer_idx)
+        row = self.seq_id_to_row[layer_idx][seq.seq_id]
+        max_window = min(self._decode_query_window, int(kv_len))
+        expected = torch.arange(
+            kv_len - max_window, kv_len, device=self.device, dtype=torch.long,
+        )
+        observed = positions[row, expected.remainder(self._decode_query_window)] == expected
+        valid = observed.tolist()  # One synchronization per eviction, never per decode step.
+        window = 0
+        for present in reversed(valid):
+            if not present:
+                break
+            window += 1
+        if window == 0 or any(valid[:-window]):
+            raise RuntimeError(
+                "SnapKV/PyramidKV decode eviction has missing query observations: "
+                f"layer={layer_idx} seq_id={seq.seq_id} kv_len={kv_len} "
+                f"available={window}/{max_window}."
+            )
+        query_positions = expected[-window:]
+        queries = cache[row, query_positions.remainder(self._decode_query_window)].contiguous()
+        slots = self.buffer_req_to_token_slots[layer_idx][row, :kv_len]
+        view = self.build_attention_key_compute_view(layer_idx, slots)
+        if isinstance(view.payload, ExplicitKVPayload):
+            keys = view.payload.k_cache
+            slot_table = self.buffer_req_to_token_slots[layer_idx]
+            req_index = int(row)
+        else:
+            keys = self.materialize_attention_keys(layer_idx, slots.to(torch.long))
+            slot_table = torch.arange(kv_len, device=self.device, dtype=torch.int32)[None, :]
+            req_index = 0
+        if queries.dtype != keys.dtype or queries.shape[-1] != keys.shape[-1]:
+            raise RuntimeError(
+                "SnapKV/PyramidKV decode query and key layouts disagree: "
+                f"q={tuple(queries.shape)}/{queries.dtype} "
+                f"k={tuple(keys.shape)}/{keys.dtype}."
+            )
+        score = torch.empty((1, kv_len), dtype=torch.float32, device=self.device)
+        i32 = lambda value: torch.tensor([value], dtype=torch.int32, device=self.device)
+        with profiler.record("snapkv_decode_window_score"):
+            prefill_score_fwd(
+                queries, keys, score, i32(req_index), i32(0), i32(kv_len),
+                i32(kv_len - window), window, slot_table,
+                i32(kv_len - window), i32(kv_len),
+                candidate_start=int(self.config.sink_keep_tokens),
+                recent_keep_tokens=int(self.config.recent_keep_tokens),
+                score_mode=self.config.sparse_prefill_score_mode,
+                workspace=self._prefill_score_workspace,
+            )
+        return score[0]
 
     def chain_physical_residency(self, seq_id: int) -> tuple[int, ...]:
         seq_id = int(seq_id)
@@ -948,7 +1171,7 @@ class SnapKVCacheManager(CacheManager):
         method = self.config.sparse_method
         if method not in {"snapkv", "pyramidkv"}:
             return 0
-        window = int(getattr(self.config, "snapkv_window_size", 0) or 0)
+        window = int(getattr(self.config, "observation_window_size", 0) or 0)
         if window <= 0:
             return 0
         if (
@@ -1081,7 +1304,7 @@ class SnapKVCacheManager(CacheManager):
         budget = self._prefill_score_layer_budget(layer_idx)
         if budget is None:
             return []
-        window = int(getattr(self.config, "snapkv_window_size", 0) or 0)
+        window = int(getattr(self.config, "observation_window_size", 0) or 0)
         if window <= 0:
             return []
 
@@ -1716,6 +1939,7 @@ class SnapKVCacheManager(CacheManager):
 
                 self.buffer_req_to_token_slots[layer_idx][row_idx, :] = 0
                 self.row_seq_lens[layer_idx][row_idx] = 0
+                self._clear_decode_query_rows(layer_idx, [int(row_idx)])
                 self.free_rows[layer_idx].append(row_idx)
 
     def decode_kv_lens_for_layer(self, layer_idx: int, seqs: list[Sequence]) -> list[int]:
@@ -1886,6 +2110,7 @@ class SnapKVCacheManager(CacheManager):
         self.buffer_req_to_token_slots[layer_idx][row_idx, :] = 0
         self.buffer_req_to_token_slots[layer_idx][row_idx, :new_slots.numel()] = new_slots
         self.row_seq_lens[layer_idx][row_idx] = new_slots.numel()
+        self._clear_decode_query_rows(layer_idx, [int(row_idx)])
         if log_level == 'DEBUG':
             logger.debug(
                 "[SnapKV] free_part_slots(after): "
@@ -1927,6 +2152,7 @@ class SnapKVCacheManager(CacheManager):
         self.buffer_req_to_token_slots[layer_idx][rows_gpu, :new_len] = new_slots
         self.buffer_req_to_token_slots[layer_idx][rows_gpu, new_len:] = 0
         self.row_seq_lens[layer_idx][row_indices] = new_len
+        self._clear_decode_query_rows(layer_idx, row_indices)
         return int(dropped_slots.numel())
 
     def _compact_single_row_column_tiles(
@@ -1966,6 +2192,7 @@ class SnapKVCacheManager(CacheManager):
             slot_row[start:end] = selected_slots
         slot_row[new_len:] = 0
         self.row_seq_lens[layer_idx][row_idx] = new_len
+        self._clear_decode_query_rows(layer_idx, [int(row_idx)])
         return dropped_count
 
     def _compact_uniform_rows_bounded(
@@ -2053,6 +2280,9 @@ class SnapKVCacheManager(CacheManager):
         ] = 0
         for local_layer, layer_idx in enumerate(layer_indices):
             self.row_seq_lens[int(layer_idx)][row_indices[local_layer]] = new_len
+            self._clear_decode_query_rows(
+                int(layer_idx), row_indices[local_layer].tolist(),
+            )
         if dropped_per_layer.numel() <= 0:
             logger.warning(
                 "[SnapKV] dropped 0 tokens in bounded layer batch? "
@@ -2415,6 +2645,9 @@ class SnapKVCacheManager(CacheManager):
         ] = 0
         for local_layer, layer_idx in enumerate(layer_indices):
             self.row_seq_lens[int(layer_idx)][row_indices[local_layer]] = new_len
+            self._clear_decode_query_rows(
+                int(layer_idx), row_indices[local_layer].tolist(),
+            )
 
     def materialize_prefill_staging_layer(self, layer_idx: int, seq: Sequence, keep_indices: torch.Tensor):
         self.kv_layer_index(layer_idx)
@@ -3136,6 +3369,7 @@ class SnapKVCacheManager(CacheManager):
 
     def _prepare_decode(self, seqs: list[Sequence]):
         with profiler.record("cache_prepare_decode"):
+            self._decode_query_active_mask = None
             self._decode_static_state_binding_key = None
             layer_ids = self.kv_transformer_layer_indices()
             batch_size = len(seqs)
@@ -3673,6 +3907,7 @@ class SnapKVCacheManager(CacheManager):
                 host.context_lens[real_batch_size:].fill_(int(real_context_lens[0]))
                 host.request_indices[real_batch_size:].fill_(int(row_indices[0]))
                 host.active_mask[real_batch_size:].fill_(state.contract.padding.active)
+            self._decode_query_active_mask = inputs.active_mask
             return result
 
         inputs = state.inputs
@@ -3690,7 +3925,9 @@ class SnapKVCacheManager(CacheManager):
                 raise RuntimeError(
                     "A layer-uniform decode graph cannot publish per-layer metadata."
                 )
-            return self._prepare_uniform_decode_graph_step(seqs, state, seq_ids)
+            result = self._prepare_uniform_decode_graph_step(seqs, state, seq_ids)
+            self._decode_query_active_mask = inputs.active_mask
+            return result
 
     def prepare_decode_graph_in(self, state: CacheDecodeGraphState) -> None:
         if not isinstance(state, SnapKVDecodeGraphState):
@@ -3739,6 +3976,7 @@ class SnapKVCacheManager(CacheManager):
     ):
         """Prepare per-layer decode metadata into graph-stable CUDA buffers."""
         with profiler.record("cache_prepare_decode"):
+            self._decode_query_active_mask = None
             real_batch_size = len(seqs)
             graph_batch_size = int(input_ids.numel())
             if real_batch_size <= 0:
@@ -3755,6 +3993,10 @@ class SnapKVCacheManager(CacheManager):
                 raise ValueError(
                     "Static decode graph batch is smaller than the real decode batch: "
                     f"graph={graph_batch_size}, real={real_batch_size}."
+                )
+            if getattr(self, "_decode_query_cache_enabled", False) and graph_batch_size > real_batch_size:
+                self._decode_query_active_mask = (
+                    torch.arange(graph_batch_size, device=self.device) < real_batch_size
                 )
 
             input_ids_list = [seq.decode_input_token for seq in seqs]

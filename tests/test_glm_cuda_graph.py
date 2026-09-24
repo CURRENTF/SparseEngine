@@ -54,7 +54,7 @@ from glm_test_helpers import (
 @pytest.mark.parametrize(
     ("method", "expected"),
     [
-        ("pyramidkv", AttentionScoreKind.RAW_QK_REDUCED),
+        ("pyramidkv", AttentionScoreKind.NONE),
         ("omnikv", AttentionScoreKind.RAW_QK_PER_HEAD),
         ("skipkv", AttentionScoreKind.RAW_QK_PER_HEAD),
         ("deltakv", AttentionScoreKind.RAW_QK_PER_HEAD),
@@ -803,7 +803,7 @@ def _glm_method_runtime_config(method: str, *, num_layers: int):
         engine_prefill_chunk_size=8,
         pyramid_layer_ratios=None,
         snapkv_num_full_layers=0,
-        snapkv_window_size=2,
+        observation_window_size=2,
         pool_kernel_size=1,
         prefill_schedule_policy="chunked",
         h2o_decode_budget=3,

@@ -3,6 +3,7 @@
 Validate raw runs: python plot_decode_capacity.py --config campaign.json
 Replot exported data: python plot_decode_capacity.py --plot-data plot_data.json
 Override method colors: add --palette path/to/palette.json
+Boundary-sync raw plots use presentation.json by default; --input-len selects a panel length.
 Only observed results are accepted. Partial/omitted curves require explicit policy.
 """
 from __future__ import annotations
@@ -22,6 +23,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 DEFAULT_PALETTE = Path(__file__).resolve().parent / "palettes" / "framework_families.json"
+DEFAULT_PRESENTATION = Path(__file__).resolve().parent / "presentation.json"
 from benchmark.efficiency.paper import without_source_fingerprints
 
 LANES = {
@@ -46,6 +48,21 @@ def configured_lanes(config):
     if set(extras) - EXTERNAL_LANES.keys():
         raise ValueError("Unknown external curve identity")
     return {**LANES, **{key: EXTERNAL_LANES[key] for key in extras}}
+
+
+def ordered_legend(legend, columns):
+    prefixes = ("Ours (Vanilla)", "Ours (SnapKV)", "Ours (H2O)",
+                "Ours (QuEST)", "Ours (OmniKV)", "vLLM", "Tangram",
+                "HiSparse", "Vortex")
+    labels = sorted(legend, key=lambda label: (
+        not label.startswith("Ours ("),
+        next((index for index, prefix in enumerate(prefixes)
+              if label.startswith(prefix)), len(prefixes))))
+    rows = (len(labels) + columns - 1) // columns
+    # Matplotlib fills columns first; transpose so readers see this order by row.
+    labels = [labels[row * columns + column] for column in range(columns)
+              for row in range(rows) if row * columns + column < len(labels)]
+    return [legend[label] for label in labels], labels
 
 
 def read_rows(path):
@@ -385,8 +402,11 @@ def apply_presentation(config, curves, presentation):
                "max_batch_bars", "line_ymin_padding"}
     if set(presentation) - allowed:
         raise ValueError("Unknown presentation setting")
+    input_len = presentation.get("input_len")
+    if input_len is not None and (type(input_len) is not int or input_len < 1):
+        raise ValueError("Presentation input length must be a positive integer")
     models = {key: value for key, value in config["models"].items()
-              if curve_config(config, key)["input_len"] == presentation["input_len"]}
+              if input_len is None or curve_config(config, key)["input_len"] == input_len}
     if not models:
         raise ValueError("Presentation selected no model panels")
     for key in models:
@@ -394,9 +414,23 @@ def apply_presentation(config, curves, presentation):
         limit = presentation["line_max_concurrency"][source]
         if type(limit) is not int or limit < 1:
             raise ValueError("Line concurrency limits must be positive integers")
-    config = {**config, "models": models, "grid_shape": [1, len(models)],
+    if "figure_name" in presentation:
+        figure_name = presentation["figure_name"]
+    elif input_len is None and config.get("figure_name"):
+        figure_name = config["figure_name"]
+    else:
+        lengths = {curve_config(config, key)["input_len"] for key in models}
+        if len(lengths) == 1:
+            length = lengths.pop()
+            label = f"{length // 1024}k" if length % 1024 == 0 else str(length)
+            figure_name = f"decode_capacity_{label}_lowbs"
+        else:
+            figure_name = "decode_capacity_grid_lowbs"
+    grid_shape = ([1, len(models)] if input_len is not None
+                  else config.get("grid_shape", [1, len(models)]))
+    config = {**config, "models": models, "grid_shape": grid_shape,
               "batch_bands": False, "presentation": presentation,
-              "figure_name": presentation["figure_name"]}
+              "figure_name": figure_name}
     if "panel_protocols" in config:
         config["panel_protocols"] = {key: config["panel_protocols"][key] for key in models}
     return config, [curve for curve in curves if curve["model"] in models]
@@ -413,7 +447,12 @@ def max_batch_points(curves):
                      and curve.get("max_concurrency") == point["concurrency"])
         rows.append(dict(panel=curve["model"], lane=curve["lane"],
                          capacity_confirmed=confirmed, **point))
-    return rows
+    lane_order = [lane for lane in LANES if lane.startswith("sengine-")]
+    lane_order += ["vllm-vanilla", *EXTERNAL_LANES]
+    rank = {lane: index for index, lane in enumerate(lane_order)}
+    panels = {model: index for index, model in
+              enumerate(dict.fromkeys(curve["model"] for curve in curves))}
+    return sorted(rows, key=lambda row: (panels[row["panel"]], rank[row["lane"]]))
 
 
 def relative_vllm_points(curves, config):
@@ -519,7 +558,8 @@ def render_relative_vllm(curves, config, output, colors, lanes):
     for ax in axes.flat:
         handles, labels = ax.get_legend_handles_labels()
         legend.update(zip(labels, handles))
-    fig.legend(list(legend.values()), list(legend), loc='outside upper center', ncols=4,
+    handles, labels = ordered_legend(legend, 4)
+    fig.legend(handles, labels, loc='outside upper center', ncols=4,
                frameon=False, columnspacing=.8, handlelength=1.5, handletextpad=.4)
     fig.supylabel('Δ throughput vs vLLM (%)', fontsize=14)
     for extension in ('png', 'pdf', 'svg'):
@@ -722,7 +762,7 @@ def render(curves, config, output, palette_path=DEFAULT_PALETTE):
         for ax in legend_axes:
             handles, labels = ax.get_legend_handles_labels()
             legend.update(zip(labels, handles))
-        labels, handles = list(legend), list(legend.values())
+        handles, labels = ordered_legend(legend, 4)
         fig.legend(handles, labels, loc="outside upper center", ncols=4, frameon=False,
                    columnspacing=.9, handlelength=1.5, handletextpad=.4)
         for extension in ("png", "pdf", "svg"):
@@ -736,6 +776,7 @@ def render(curves, config, output, palette_path=DEFAULT_PALETTE):
             ax.set_ylabel("")
             fig.supylabel("Throughput (tok/s)", fontsize=plt.rcParams["axes.labelsize"])
             handles, labels = ax.get_legend_handles_labels()
+            handles, labels = ordered_legend(dict(zip(labels, handles)), 2)
             fig.legend(handles, labels, loc="outside upper center", ncols=2, frameon=False)
             for extension in ("png", "pdf", "svg"):
                 fig.savefig(output / f"{model}{suffix}.{extension}", dpi=220)
@@ -757,39 +798,53 @@ def render(curves, config, output, palette_path=DEFAULT_PALETTE):
                           "text.color": "#364152", "axes.labelcolor": "#364152",
                           "svg.fonttype": "none", "pdf.fonttype": 42, "savefig.bbox": None})
         width = 5.5 * len(models)
-        fig, axes = plt.subplots(1, len(models), figsize=(width, width / 2.5),
-                                 layout="constrained", squeeze=False, sharey=True)
-        for ax, model in zip(axes.flat, models):
+        height = width / 2.5 * .75
+        fig, ax = plt.subplots(figsize=(width, height), layout="constrained")
+        centers, captions, axis_labels = [], [], []
+        next_position = 0
+        for model in models:
             points = [p for p in selected if p["panel"] == model]
-            bars = ax.bar(range(len(points)), [p["decode_throughput_tps"] for p in points],
+            if not points:
+                continue
+            if next_position:
+                ax.axvline(next_position - .5, color="#D6DDE5", linewidth=.8)
+            positions = range(next_position, next_position + len(points))
+            bars = ax.bar(positions, [p["decode_throughput_tps"] for p in points],
                           color=[colors[p["lane"]] for p in points], width=.704, edgecolor="none")
-            labels = []
+            bar_labels = []
             for point in points:
-                method_label = lanes[point["lane"]][0].replace(" (", "\n(")
-                relation = "=" if point["capacity_confirmed"] else "≥"
-                labels.append(
-                    f"{method_label}\n{point['decode_throughput_tps']:.1f}\n"
-                    f"B{relation}{point['concurrency']}"
-                )
-            ax.bar_label(bars, labels=labels, padding=4, fontsize=9, color="#364152")
-            ax.set_xticks([])
-            ax.set_xlabel(caption(model))
-            ax.grid(axis="x", visible=False)
-            sns.despine(ax=ax)
-        axes[0, 0].set_ylim(0, max(p["decode_throughput_tps"] for p in selected) * 1.32)
+                method_label = lanes[point["lane"]][0].replace(" (", "\n").rstrip(")")
+                value_label = f"{point['decode_throughput_tps']:.1f}\nB={point['concurrency']}"
+                bar_labels.append(value_label)
+                axis_labels.append(method_label)
+            ax.bar_label(bars, labels=bar_labels, padding=4, fontsize=9, color="#364152")
+            centers.append(next_position + (len(points) - 1) / 2)
+            captions.append(caption(model))
+            next_position += len(points)
+        ax.set_xlim(-.5, next_position - .5)
+        ax.set_xticks(range(next_position), labels=axis_labels)
+        ax.tick_params(axis="x", length=0, pad=5)
+        for center, label in zip(centers, captions):
+            ax.annotate(label, xy=(center, 0), xycoords=ax.get_xaxis_transform(),
+                        xytext=(0, -42), textcoords="offset points",
+                        ha="center", va="top", annotation_clip=False)
+        ax.grid(axis="x", visible=False)
+        sns.despine(ax=ax)
+        ax.set_ylim(0, max(p["decode_throughput_tps"] for p in selected) * 1.32)
         fig.supylabel("Throughput (tok/s)", fontsize=plt.rcParams["axes.labelsize"])
         for extension in ("png", "pdf", "svg"):
             fig.savefig(output / f"{config['figure_name']}_max_batch.{extension}", dpi=220)
         plt.close(fig)
         (output / "max_batch_style.json").write_text(json.dumps(dict(
             reference="self-contained paper/whitegrid configuration",
-            theme="paper/whitegrid", font_scale=1.15, figsize_inches=[width, width / 2.5],
+            theme="paper/whitegrid", font_scale=1.15, figsize_inches=[width, height],
             shared_y_axis=True,
-            bar_labels="framework / method / pooled throughput (one decimal) / B=batch; ≥ marks an unconfirmed lower bound",
+            panel_dividers="between measured model groups; equal-width bars on one x-axis",
+            bar_labels="Framework and method names without parentheses at x-axis; pooled throughput and largest measured B above bars",
             legend=False,
             aggregation="unchanged pooled completed tokens / elapsed time; no mean/SD substitution",
-            palette="unchanged method colors",
-            capacity_marker="B=N is confirmed; B≥N is an unconfirmed lower bound"), indent=2) + "\n")
+            palette=palette["name"],
+            capacity_marker="B=N names the largest measured successful batch; capacity confirmation remains in the exported data"), indent=2) + "\n")
 
 
 def main():
@@ -808,7 +863,9 @@ def main():
     parser.add_argument("--batch-bands", action="store_true",
                         help="DEPRECATED: historical adjacent axes with independent y scales")
     parser.add_argument("--presentation-config", type=Path,
-                        help="Select an input length, low-BS line limits, captions and max-batch bars")
+                        help="Override the shared low-BS presentation preset")
+    parser.add_argument("--input-len", type=int,
+                        help="Select one input length with the shared presentation preset")
     parser.add_argument("--wait-seconds", type=int, default=0,
                         help="Bounded grid-only wait for formal points; validation errors still fail immediately")
     args = parser.parse_args()
@@ -903,10 +960,20 @@ def main():
         config = json.loads(args.config.read_text())
         curves = load_campaign(config)
         output = args.output_dir or Path(config["output_root"]) / "plots"
-    if args.presentation_config:
+    presentation_path = args.presentation_config
+    if (presentation_path is None and
+            (args.input_len is not None or
+             ((args.config or args.grid_config)
+              and config.get("measurement_protocol") == "boundary_sync_v2"
+              and not args.batch_bands))):
+        presentation_path = DEFAULT_PRESENTATION
+    if presentation_path:
         if args.batch_bands:
             raise ValueError("Presentation panels cannot be combined with --batch-bands")
-        config, curves = apply_presentation(config, curves, json.loads(args.presentation_config.read_text()))
+        presentation = json.loads(presentation_path.read_text())
+        if args.input_len is not None:
+            presentation["input_len"] = args.input_len
+        config, curves = apply_presentation(config, curves, presentation)
     protocol = config.get("measurement_protocol", "step_sync_v1")
     if args.batch_bands:
         config["batch_bands"] = True

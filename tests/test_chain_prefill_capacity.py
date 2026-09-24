@@ -18,7 +18,7 @@ def runtime(capacity=32):
     manager = make_manager(rows=4, capacity=capacity)
     manager.config.decode_reservation_tokens = 1
     manager.config.engine_prefill_chunk_size = 4
-    manager.config.snapkv_window_size = 2
+    manager.config.observation_window_size = 2
     coordinator = ChainCacheCoordinator(manager.config, manager)
     state = RuntimeState(manager.config, manager, chain_cache_coordinator=coordinator)
     return manager, coordinator, state

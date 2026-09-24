@@ -153,6 +153,13 @@ def _normalize_quest(config) -> None:
 
 
 def _normalize_snapkv(config) -> None:
+    config.snapkv_decode_eviction = _coerce_bool_config(
+        "snapkv_decode_eviction", config.snapkv_decode_eviction
+    )
+    _normalize_positive_int(config, "observation_window_size", fallback=0)
+    _normalize_positive_int(config, "decode_eviction_interval", fallback=0)
+    if config.sparse_method == "pyramidkv":
+        config.snapkv_decode_eviction = True
     _normalize_int_attr(config, "snapkv_num_full_layers")
     if config.snapkv_num_full_layers != 0:
         raise ValueError(

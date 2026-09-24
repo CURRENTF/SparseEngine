@@ -55,8 +55,10 @@ class SparseMethodConfig:
     quest_token_budget: int = field(init=False)
     quest_skip_layers: int = 2
 
-    snapkv_window_size: int = 32
+    observation_window_size: int = 32
     snapkv_num_full_layers: int = 0
+    snapkv_decode_eviction: bool = False
+    decode_eviction_interval: int = 1024
     sparse_prefill_score_mode: str | None = None
 
     kvzip_token_budget: int = 4096

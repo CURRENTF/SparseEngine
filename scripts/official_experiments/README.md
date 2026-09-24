@@ -20,6 +20,9 @@ the committed official results.
   H100 BF16 and PRO6000 FP8, per-context operating points and recorded results.
 - [GLM-4.7-Flash MiniSWE](chain_cache_miniswe/README.md): closed-loop
   SWE-bench Lite recipe and recorded five-method official results.
+- [GLM-4.7-Flash agent trace replay](agent_trace_sparse_methods/README.md):
+  forced-token 8,000-request serving comparison and
+  [recorded results](agent_trace_sparse_methods/RESULTS.md).
 - [128K input / 2K output decode capacity](sparse_decode_efficiency/README.md):
   two models, five methods, exact concurrency boundaries, linear/log-y figures.
 - [AIME 2024](aime/README.md): pass@1 across all 11 methods without auxiliary

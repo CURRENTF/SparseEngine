@@ -36,7 +36,7 @@
       "sink_keep_tokens": 64,
       "recent_keep_tokens": 512,
       "decode_keep_tokens": 7616,
-      "snapkv_window_size": 32,
+      "observation_window_size": 32,
       "sparse_prefill_score_mode": "probability",
       "favor_min_decoding_seqs": 0
     },

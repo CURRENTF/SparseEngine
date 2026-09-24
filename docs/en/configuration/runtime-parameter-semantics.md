@@ -84,7 +84,7 @@ recompute recovery. This option does not enable mixed prefill/decode batches.
 | `recent_keep_tokens` | int | `512` | Number of recent tokens to retain. |
 | `decode_keep_tokens` | int | `4096` | Token budget for sparse selection; interpretation depends on the method. |
 | `full_attention_layers` | str / list[int] | `"auto"` | Full-attention layers: automatic profile, comma-separated string, or index list. Unregistered OmniKV / DeltaKV models require calibration or an explicit list. |
-| `sparse_prefill_score_mode` | str / None | `None` | Prefill scoring: automatic, `probability`, or `logits`. Logits scoring is limited to SnapKV, PyramidKV, and H2O and requires float32 scores. |
+| `sparse_prefill_score_mode` | str / None | `None` | Scoring mode: automatic, `probability`, or `logits`. SnapKV/PyramidKV use the same mode for prefill and decode observation windows. Logits scoring is limited to SnapKV, PyramidKV, and H2O and requires float32 scores. |
 
 Token-count budgets must be nonnegative integers, not ratios. QuEST derives its total selection budget from `sink_keep_tokens + decode_keep_tokens + recent_keep_tokens`; `quest_token_budget` cannot be set directly.
 
@@ -100,6 +100,14 @@ Token-count budgets must be nonnegative integers, not ratios. QuEST derives its 
 | `flashprefill_v2_abs_threshold` | float / None | `None` | FlashPrefill V2 sparsity threshold in `[0, 1]`. Enabling the method requires an explicit value calibrated for the model. |
 
 `flashprefill_v2` requires explicit KV models; `omnikv_prefill` does not support radix prefix reuse. See [Sparse Methods](../features/sparse-methods.md) for compatible combinations and [FlashPrefill V2](../features/flashprefill-v2.md) for tuning.
+
+## SnapKV and PyramidKV
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `observation_window_size` | int | `32` | Positive number of final prefill queries used for prompt scoring and maximum recent decode queries used at each eviction. Decode history resets after compaction. |
+| `snapkv_decode_eviction` | bool | `False` | Enable periodic decode eviction for SnapKV. PyramidKV always enables it. |
+| `decode_eviction_interval` | int | `1024` | Positive physical KV growth above the per-layer retention budget before SnapKV/PyramidKV evict. The score is computed after decode Graph replay, only when this boundary is reached. |
 
 ## KVzip
 

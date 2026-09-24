@@ -1,5 +1,4 @@
 {
-  "input_len": 131072,
   "line_max_concurrency": {
     "qwen3-30b-fp8": 4,
     "glm4.7-flash": 8
@@ -8,7 +7,6 @@
     "qwen3-30b-fp8": "Qwen3-30B-A3B (FP8)",
     "glm4.7-flash": "GLM-4.7-Flash (BF16)"
   },
-  "figure_name": "decode_capacity_128k_lowbs",
   "max_batch_bars": true,
   "line_ymin_padding": 20
 }

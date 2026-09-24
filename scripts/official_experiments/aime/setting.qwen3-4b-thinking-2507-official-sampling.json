@@ -1,0 +1,122 @@
+{
+  "protocol": "aime2024_pass1_qwen3_4b_thinking_official_sampling_3try_v1",
+  "model": "Qwen3-4B-Thinking-2507",
+  "engine": {
+    "tensor_parallel_size": 1,
+    "expert_parallel_size": 1,
+    "data_parallel_size": 1,
+    "gpu_memory_utilization": 0.95,
+    "max_model_len": 41984,
+    "max_num_seqs_in_batch": 32,
+    "max_decoding_seqs": 32,
+    "max_num_seqs_in_gpu": 32,
+    "decode_reservation_tokens": 1024,
+    "max_num_batched_tokens": 65536,
+    "engine_prefill_chunk_size": 4096,
+    "decode_graph": true,
+    "decode_graph_capture_sizes": [1, 2, 4, 8, 16, 24, 32],
+    "sparse_attn_score_dtype": "float32",
+    "enable_prefix_cache_offload": false
+  },
+  "evaluation": {
+    "task": "aime2024",
+    "dataset": "Maxwell-Jia/AIME_2024",
+    "split": "train",
+    "expected_samples": 30,
+    "batch_size": 30,
+    "max_new_tokens": 40960,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0,
+    "seed": 42,
+    "enable_thinking": true,
+    "prompt_style": "deepseek",
+    "math_verify_version": "0.9.0"
+  },
+  "methods": {
+    "vanilla": {
+      "sparse_method": "vanilla",
+      "enable_prefix_caching": false,
+      "prefix_cache_mode": "auto"
+    },
+    "streamingllm": {
+      "sparse_method": "streamingllm",
+      "enable_prefix_caching": false,
+      "prefix_cache_mode": "auto",
+      "sink_keep_tokens": 64,
+      "recent_keep_tokens": 2048,
+      "decode_keep_tokens": 0
+    },
+    "snapkv": {
+      "sparse_method": "snapkv",
+      "enable_prefix_caching": false,
+      "prefix_cache_mode": "auto",
+      "sink_keep_tokens": 16,
+      "recent_keep_tokens": 64,
+      "decode_keep_tokens": 4096,
+      "observation_window_size": 16,
+      "snapkv_num_full_layers": 0,
+      "snapkv_decode_eviction": true,
+      "decode_eviction_interval": 1024,
+      "sparse_prefill_score_mode": "probability"
+    },
+    "h2o": {
+      "sparse_method": "h2o",
+      "enable_prefix_caching": false,
+      "prefix_cache_mode": "auto",
+      "h2o_prefill_budget": 4096,
+      "h2o_decode_budget": 4096,
+      "h2o_prefill_score_window": 128,
+      "h2o_decode_eviction": true,
+      "h2o_decode_eviction_interval": 1024,
+      "h2o_recent_ratio": 0.2,
+      "sparse_prefill_score_mode": "probability"
+    },
+    "pyramidkv": {
+      "sparse_method": "pyramidkv",
+      "enable_prefix_caching": false,
+      "prefix_cache_mode": "auto",
+      "sink_keep_tokens": 16,
+      "recent_keep_tokens": 64,
+      "decode_keep_tokens": 7987,
+      "observation_window_size": 32,
+      "decode_eviction_interval": 1024,
+      "pyramidkv_start_layer": 0,
+      "pyramidkv_start_ratio": 0.6,
+      "pyramidkv_least_ratio": 0.0154712
+    },
+    "omnikv": {
+      "sparse_method": "omnikv",
+      "enable_prefix_caching": false,
+      "prefix_cache_mode": "auto",
+      "sink_keep_tokens": 16,
+      "recent_keep_tokens": 64,
+      "decode_keep_tokens": 2048,
+      "full_attention_layers": "auto"
+    },
+    "quest": {
+      "sparse_method": "quest",
+      "enable_prefix_caching": false,
+      "prefix_cache_mode": "auto",
+      "sink_keep_tokens": 16,
+      "recent_keep_tokens": 64,
+      "decode_keep_tokens": 2048,
+      "quest_chunk_size": 16,
+      "quest_skip_layers": 2
+    },
+    "rkv": {
+      "sparse_method": "rkv",
+      "enable_prefix_caching": false,
+      "prefix_cache_mode": "auto",
+      "sink_keep_tokens": 16,
+      "recent_keep_tokens": 64,
+      "decode_keep_tokens": 4096,
+      "rkv_compression_interval": 1024,
+      "rkv_observation_tokens": 8,
+      "rkv_alpha": 0.1,
+      "rkv_kernel_size": 7,
+      "rkv_score_chunk_mb": 512
+    }
+  }
+}

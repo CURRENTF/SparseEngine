@@ -285,13 +285,21 @@ def benchmark_decode_stage(method, length, bs, args, results_dict):
             from sglang.srt.server_args import parse_cuda_graph_config_arg
             runtime_config = {**config, "cuda_graph_config": parse_cuda_graph_config_arg(json.dumps(config["cuda_graph_config"]))}
         engine = StageEngine(**runtime_config)
-        if vortex:
-            # get_server_info() waits for the tokenizer response loop, which
-            # starts on first generate in this SGLang version. Startup already
-            # returned capacity over the worker readiness pipe; no RPC needed.
-            info = dict(engine.scheduler_info)
+        if window_mode:
+            # Startup readiness already includes capacity; get_server_info()
+            # waits for the tokenizer response loop, which starts on generate.
+            info = dict(engine.scheduler_info if vortex else
+                        engine._scheduler_init_result.scheduler_infos[0])
             (case / "server_info.json").write_text(json.dumps(info, indent=2) + "\n")
-            print(f"Vortex KV slots: {int(info['max_total_num_tokens'])}", flush=True)
+            print(f"{args.backend_label} KV slots: {int(info['max_total_num_tokens'])}", flush=True)
+            if not vortex:
+                required = bs * (length + args.output_len)
+                slots = int(info["max_total_num_tokens"])
+                if slots < required:
+                    raise RuntimeError(
+                        f"Full decode batch capacity exceeded: KV slots {slots} < "
+                        f"{required} tokens required by {bs} complete requests"
+                    )
         generated = engine.generate(input_ids=[[100] * length for _ in range(bs)],
             sampling_params={"temperature": args.temperature, "top_p": args.top_p,
                              "max_new_tokens": args.output_len, "ignore_eos": True})

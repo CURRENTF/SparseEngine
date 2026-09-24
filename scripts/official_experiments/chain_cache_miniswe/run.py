@@ -216,11 +216,20 @@ def serve(args):
             env[key] = str(path)
     model = args.model.resolve(strict=True)
     config = read(args.root / args.method / "engine.json")
-    advertised = f"glm47-{args.method}"
+    advertised = args.served_model_name or f"glm47-{args.method}"
     # Bind test avoids inadvertently attaching the driver to an older service.
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", args.port))
-    hardware = idle_pair(args.gpus)
+    # A just-stopped smoke server can outlive its coordinator briefly while CUDA
+    # contexts drain. Wait for the same guarded idle check before a new launch.
+    for attempt in range(60):
+        try:
+            hardware = idle_pair(args.gpus)
+            break
+        except RuntimeError as exc:
+            if "is occupied" not in str(exc) or attempt == 59:
+                raise
+            time.sleep(2)
     backend = read(args.root / "setting.json").get("backend", "sparseengine")
     if backend == "vllm":
         if args.method != "vanilla-prefix":
@@ -612,6 +621,8 @@ def main():
             p.add_argument("--timeout", type=int, default=86400)
         if action == "serve":
             p.add_argument("--model", type=Path, required=True)
+            p.add_argument("--served-model-name",
+                           help="Model name advertised by the OpenAI-compatible server")
             p.add_argument("--gpus", required=True)
             p.add_argument("--port", type=int, default=18147)
             p.add_argument("--compile-cache-root", type=Path,

@@ -45,7 +45,7 @@
       "sparse_method": "snapkv", "enable_prefix_caching": true,
       "prefix_cache_mode": "chain", "sink_keep_tokens": 64,
       "recent_keep_tokens": 512, "decode_keep_tokens": 15808,
-      "snapkv_window_size": 32, "snapkv_num_full_layers": 0,
+      "observation_window_size": 32, "snapkv_num_full_layers": 0,
       "sparse_prefill_score_mode": "probability"
     },
     "h2o-chain": {
@@ -75,7 +75,7 @@
       "sparse_method": "snapkv", "enable_prefix_caching": false,
       "prefix_cache_mode": "auto", "sink_keep_tokens": 64,
       "recent_keep_tokens": 512, "decode_keep_tokens": 15808,
-      "snapkv_window_size": 32, "snapkv_num_full_layers": 0,
+      "observation_window_size": 32, "snapkv_num_full_layers": 0,
       "sparse_prefill_score_mode": "probability"
     }
   },

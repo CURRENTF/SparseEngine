@@ -29,7 +29,7 @@ def test_idle_reclaim_rpc_preserves_other_chain_and_graph_execution(offload, tmp
         max_model_len=256, max_num_batched_tokens=256, engine_prefill_chunk_size=64,
         max_num_seqs_in_batch=1, max_num_seqs_in_gpu=3, gpu_memory_utilization=0.04,
         decode_reservation_tokens=4, decode_graph=True, decode_graph_capture_sizes=[1],
-        sink_keep_tokens=4, recent_keep_tokens=8, decode_keep_tokens=16, snapkv_window_size=4)
+        sink_keep_tokens=4, recent_keep_tokens=8, decode_keep_tokens=16, observation_window_size=4)
     try:
         params = SamplingParams(max_tokens=8, ignore_eos=True, temperature=0)
         def turn(prompt, chain_id=None):

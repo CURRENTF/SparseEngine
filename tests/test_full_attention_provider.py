@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -7,6 +8,7 @@ import torch
 from torch import nn
 
 from sparseengine.layers.attention import Attention
+from sparseengine.models.attention_runtime import build_mha_full_attention_provider
 from sparseengine.operators.attention_capabilities import AttentionScoreKind
 from sparseengine.operators.decode_attention import DecodeAttentionOpSpec
 from sparseengine.operators.full_attention import (
@@ -125,6 +127,57 @@ def test_full_attention_provider_binds_both_phases_and_closes_once():
     provider.close()
     prefill_op.close.assert_called_once_with()
     decode_op.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("method", ["snapkv", "pyramidkv"])
+def test_snapkv_family_prepares_only_the_selected_decode_provider(method):
+    """Unused eager binding must not block score-free graph startup."""
+    config = SimpleNamespace(
+        num_attention_heads=32,
+        num_key_value_heads=8,
+        head_dim=128,
+        dtype=torch.bfloat16,
+    )
+    runtime_config = SimpleNamespace(snapkv_decode_eviction=True)
+    decode_provider = Mock(name="decode_provider")
+    decode_provider.name = "decode_provider"
+
+    def make_prefill(spec, *, device_index):
+        prefill = Mock(name="prefill_op")
+        prefill.spec = spec
+        prefill.name = "prefill_op"
+        return prefill
+
+    with (
+        patch(
+            "sparseengine.operators.full_attention.prepare_prefill_attention_op",
+            side_effect=make_prefill,
+        ),
+        patch("sparseengine.operators.decode_attention.OpResolver") as resolver,
+        patch("sparseengine.operators.decode_attention.platforms.current_platform") as platform,
+    ):
+        resolver.return_value.resolve.return_value = SimpleNamespace(
+            provider=decode_provider, rejected={},
+        )
+        prepared = build_mha_full_attention_provider(
+            config,
+            sparse_method=method,
+            attention_tp_size=1,
+            device=torch.device("cpu"),
+            max_batch_size=8,
+            cuda_graph=True,
+            runtime_config=runtime_config,
+        )
+        spec = prepared.spec.decode
+        assert spec.cuda_graph and not spec.may_require_attention_scores
+        resolver.return_value.resolve.assert_called_once_with(
+            spec, platform.get_device_caps.return_value,
+        )
+        decode_provider.prepare.assert_called_once_with(spec, device_index=0)
+        assert prepared.decode_op.provider is decode_provider
+
+    prepared.close()
+    decode_provider.close.assert_called_once_with()
 
 
 def test_full_attention_provider_binding_is_atomic_across_layers():
