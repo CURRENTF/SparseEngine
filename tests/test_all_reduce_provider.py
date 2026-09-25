@@ -18,8 +18,8 @@ from sparseengine.operators.all_reduce import (
     AllReduceGraphBufferMetadata,
     AllReduceOpSpec,
     FlashInferTrtllmAllReduceProvider,
-    FlashInferVllmAllReduceProfile,
     FlashInferVllmAllReduceProvider,
+    PreparedAllReduceOp,
     TorchDistributedAllReduceProvider,
     _expandable_segments_enabled,
     _flashinfer_dependency_support,
@@ -27,6 +27,12 @@ from sparseengine.operators.all_reduce import (
 )
 from sparseengine.operators.registry import OpResolver, SupportResult
 from sparseengine.platforms import DeviceCaps, PlatformEnum
+
+
+@pytest.fixture(autouse=True)
+def mock_peer_access(monkeypatch):
+    # These tests exercise selection/adapter contracts, not physical GPU topology.
+    monkeypatch.setattr(torch.cuda, "can_device_access_peer", lambda left, right: True)
 
 
 def _spec(
@@ -282,10 +288,15 @@ def test_vllm_all_reduce_uses_selected_runtime_for_shared_buffer_lifecycle(rank)
         patch.object(torch, "empty", return_value=rank_data),
         patch.object(torch.distributed, "barrier"),
     ):
-        provider.prepare(_spec((0, 1)), group="tp", rank=rank, device_index=rank)
+        spec = _spec((0, 1))
+        provider.prepare(spec, group="tp", rank=rank, device_index=rank)
         comm.CudaRTLibrary.assert_called_once_with("/env/nvidia/cu13/lib/libcudart.so.13")
         assert modules["flashinfer.comm.cuda_ipc"].cudart is proxy
         assert comm.create_shared_buffer.call_count == 2
+        row_bytes = spec.hidden_size * spec.dtype.itemsize
+        staging_bytes = comm.create_shared_buffer.call_args_list[1].args[0]
+        assert staging_bytes == provider.prefill_staging_max_bytes
+        assert provider.prefill_reuse_capacity(spec) * row_bytes <= staging_bytes
         assert provider._meta_ptrs[rank] == 1000
         assert provider._meta_ptrs[1 - rank] == 3000
         assert provider._buffer_ptrs[rank] == 2000
@@ -445,66 +456,6 @@ def test_vllm_all_reduce_initializes_the_upstream_nvlink_mode(world_size, full_n
         topology.assert_called_once_with(spec.device_ordinals)
 
 
-@pytest.mark.parametrize(
-    "nvml_present,full_nvlink", [(False, False), (True, False), (True, True)]
-)
-@pytest.mark.parametrize("device_name", ["NVIDIA H100 80GB HBM3", "NVIDIA H20"])
-def test_extended_all_reduce_profile_requires_verified_nvlink(
-    nvml_present, full_nvlink, device_name
-):
-    # A larger service capacity must not opt an unmeasured PCIe fabric into the profile.
-    spec = replace(
-        _spec((0, 1), cuda_graph=True),
-        max_rows=FlashInferVllmAllReduceProfile.max_rows_without_nvlink + 1,
-    )
-    topology = Mock(return_value=full_nvlink)
-    with (
-        patch(
-            "sparseengine.operators.all_reduce.importlib.util.find_spec",
-            return_value=object() if nvml_present else None,
-        ),
-        patch(
-            "sparseengine.operators.all_reduce.platforms",
-            SimpleNamespace(
-                current_platform=SimpleNamespace(supports_nvlink_group=topology)
-            ),
-        ),
-    ):
-        result = FlashInferVllmAllReduceProfile.matches(
-            spec, replace(_caps(), device_name=device_name)
-        )
-    assert result.matched == (nvml_present and full_nvlink)
-    if nvml_present:
-        topology.assert_called_once_with(spec.device_ordinals)
-    else:
-        topology.assert_not_called()
-
-
-def test_extended_all_reduce_profile_surfaces_topology_query_failure():
-    spec = replace(
-        _spec((0, 1), cuda_graph=True),
-        max_rows=FlashInferVllmAllReduceProfile.max_rows_without_nvlink + 1,
-    )
-    with (
-        patch(
-            "sparseengine.operators.all_reduce.importlib.util.find_spec",
-            return_value=object(),
-        ),
-        patch(
-            "sparseengine.operators.all_reduce.platforms",
-            SimpleNamespace(
-                current_platform=SimpleNamespace(
-                    supports_nvlink_group=Mock(
-                        side_effect=RuntimeError("NVML query failed")
-                    )
-                )
-            ),
-        ),
-        pytest.raises(RuntimeError, match="NVML query failed"),
-    ):
-        FlashInferVllmAllReduceProfile.matches(spec, _caps())
-
-
 def test_vllm_all_reduce_rejects_odd_rank_count_before_loading_extension():
     spec = replace(
         _spec((0, 1)), world_size=3, ranks=(0, 1, 2), device_ordinals=(0, 1, 2)
@@ -516,11 +467,111 @@ def test_vllm_all_reduce_rejects_odd_rank_count_before_loading_extension():
     dependency.assert_not_called()
 
 
-def test_extended_all_reduce_profile_does_not_change_eager_selection():
+@pytest.mark.parametrize("cuda_graph", [False, True])
+def test_vllm_prefill_reuse_is_bounded_by_prepared_staging(cuda_graph):
+    spec = _spec((0, 1), cuda_graph=cuda_graph)
+    provider = FlashInferVllmAllReduceProvider()
+    for shape in (spec, replace(spec, hidden_size=3072)):
+        rows = provider.prefill_reuse_capacity(shape)
+        row_bytes = shape.hidden_size * shape.dtype.itemsize
+        assert rows > shape.max_rows
+        assert rows * row_bytes <= provider.prefill_staging_max_bytes
+        assert (rows + 1) * row_bytes > provider.prefill_staging_max_bytes
+    assert TorchDistributedAllReduceProvider().prefill_reuse_capacity(spec) == 0
+
+
+def test_extended_prefill_contract_preserves_decode_shape_limit():
+    spec = replace(_spec((0, 1)), max_rows=16)
+    provider = FlashInferVllmAllReduceProvider()
+    provider.run = Mock(side_effect=lambda _spec, tensor, *, group: tensor.clone())
+    op = PreparedAllReduceOp(spec, provider, group=None)
+    larger_prefill = torch.ones((256, spec.hidden_size), dtype=spec.dtype)
+    assert torch.equal(op.run_prefill(larger_prefill), larger_prefill)
+    with pytest.raises(ValueError, match="outside the prepared range"):
+        op.run(larger_prefill)
+    with pytest.raises(ValueError, match="outside the prepared range"):
+        op.run_prefill(
+            torch.ones((op.prefill_max_rows + 1, spec.hidden_size), dtype=spec.dtype)
+        )
+
+
+@pytest.mark.parametrize("world_size", [2, 4, 6, 8])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("cuda_graph", [False, True])
+def test_vllm_all_reduce_is_upstream_default_beyond_local_profiles(
+    world_size, dtype, cuda_graph
+):
     spec = replace(
-        _spec((0, 1)),
-        max_rows=FlashInferVllmAllReduceProfile.max_rows_without_nvlink + 1,
+        _spec((0, 1), cuda_graph=cuda_graph),
+        world_size=world_size, ranks=tuple(range(world_size)),
+        device_ordinals=tuple(range(world_size)),
+        dtype=dtype, hidden_size=4096, max_rows=2048,
     )
-    with patch("sparseengine.operators.all_reduce.importlib.util.find_spec") as discover:
-        assert not FlashInferVllmAllReduceProfile.matches(spec, _caps()).matched
-    discover.assert_not_called()
+    caps = replace(_caps(), device_name="NVIDIA A100", compute_capability=(8, 0))
+    with (
+        patch.dict(sys.modules, _fake_flashinfer_modules()),
+        patch("sparseengine.operators.all_reduce._flashinfer_dependency_support",
+              return_value=SupportResult.yes("test dependency")),
+        patch("sparseengine.operators.all_reduce.importlib.util.find_spec",
+              return_value=object()),
+        patch("sparseengine.operators.all_reduce.platforms.current_platform") as platform,
+    ):
+        platform.supports_nvlink_group.return_value = True
+        resolved = OpResolver(ALL_REDUCE_REGISTRY).resolve(spec, caps)
+    assert isinstance(resolved.provider, FlashInferVllmAllReduceProvider)
+    assert resolved.report.selection_basis == "upstream_default"
+
+
+@pytest.mark.parametrize("dtype,hidden", [(torch.float16, 7), (torch.float32, 5),
+                                          (torch.int32, 2048)])
+def test_vllm_all_reduce_rejects_invalid_packing_or_dtype(dtype, hidden):
+    # max_rows=16 makes the entire maximum tensor aligned even when a row is not.
+    spec = replace(_spec((0, 1)), dtype=dtype, hidden_size=hidden)
+    with patch("sparseengine.operators.all_reduce._flashinfer_dependency_support") as dep:
+        result = FlashInferVllmAllReduceProvider.supports(spec, _caps())
+    assert not result.supported
+    dep.assert_not_called()
+
+
+@pytest.mark.parametrize("peer_access,nvlink", [(False, True), (True, False)])
+def test_vllm_all_reduce_falls_back_before_preparation_for_unsupported_fabric(
+    peer_access, nvlink
+):
+    spec = replace(_spec((0, 1)), world_size=4, ranks=(0, 1, 2, 3),
+                   device_ordinals=(0, 1, 2, 3))
+    caps = replace(_caps(), device_name="NVIDIA A100", compute_capability=(8, 0))
+    with (
+        patch.object(torch.cuda, "can_device_access_peer", return_value=peer_access),
+        patch("sparseengine.operators.all_reduce.importlib.util.find_spec",
+              return_value=object()),
+        patch("sparseengine.operators.all_reduce.platforms.current_platform") as platform,
+    ):
+        platform.supports_nvlink_group.return_value = nvlink
+        resolved = OpResolver(ALL_REDUCE_REGISTRY).resolve(spec, caps)
+    assert isinstance(resolved.provider, TorchDistributedAllReduceProvider)
+
+
+def test_vllm_all_reduce_accepts_large_two_rank_pcie_capacity():
+    spec = replace(_spec((0, 1)), max_rows=2048, hidden_size=8192)
+    with (
+        patch.dict(sys.modules, _fake_flashinfer_modules()),
+        patch("sparseengine.operators.all_reduce._flashinfer_dependency_support",
+              return_value=SupportResult.yes("test dependency")),
+        patch("sparseengine.operators.all_reduce.platforms.current_platform") as platform,
+    ):
+        assert FlashInferVllmAllReduceProvider.supports(spec, _caps()).supported
+    platform.supports_nvlink_group.assert_not_called()
+
+
+@pytest.mark.parametrize("change", ["non_cuda", "no_bf16", "element_overflow"])
+def test_vllm_all_reduce_rejects_unsupported_device_or_size_before_dependencies(change):
+    spec, caps = _spec((0, 1)), _caps()
+    if change == "non_cuda":
+        caps = replace(caps, platform=PlatformEnum.CPU)
+    elif change == "no_bf16":
+        caps = replace(caps, supports_bfloat16=False)
+    else:
+        spec = replace(spec, max_rows=2**31)
+    with patch("sparseengine.operators.all_reduce._flashinfer_dependency_support") as dep:
+        assert not FlashInferVllmAllReduceProvider.supports(spec, caps).supported
+    dep.assert_not_called()

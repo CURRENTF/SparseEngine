@@ -72,6 +72,10 @@ class AllReduceGraphBufferMetadata:
 class AllReduceProvider:
     name = ""
 
+    def prefill_reuse_capacity(self, spec: AllReduceOpSpec) -> int:
+        """Rows that may reuse decode resources on the same ordered stream."""
+        return 0
+
     def prepare(
         self,
         spec: AllReduceOpSpec,
@@ -126,11 +130,11 @@ class AllReduceProvider:
 
 ALL_REDUCE_REGISTRY: OpRegistry[AllReduceOpSpec, AllReduceProvider] = OpRegistry(
     "all-reduce",
-    portfolio=PortfolioPolicy(repo_portable=("torch_distributed",)),
-    profile_order=(
-        "flashinfer_vllm_sm90_profile",
-        "flashinfer_trtllm_sm90_profile",
+    portfolio=PortfolioPolicy(
+        upstream_standard=("flashinfer_vllm_sm90",),
+        repo_portable=("torch_distributed",),
     ),
+    profile_order=("flashinfer_trtllm_sm90_profile",),
 )
 
 
@@ -143,12 +147,6 @@ class _FlashInferTrtllmProfile:
 
 
 _FLASHINFER_TRTLLM_PROFILES = {
-    ("h100", 2, 2048): _FlashInferTrtllmProfile(
-        max_rows=256,
-        launch_with_pdl=True,
-        completion_row_threshold=16,
-        provider_output_buffer=False,
-    ),
     ("h100", 4, 3072): _FlashInferTrtllmProfile(max_rows=32),
 }
 
@@ -345,21 +343,23 @@ class FlashInferTrtllmAllReduceProvider(AllReduceProvider):
         return result.view_as(tensor)
 
 
-@ALL_REDUCE_REGISTRY.register_atomic(
-    ProviderRole.UPSTREAM_STANDARD,
-    profile_only=True,
-)
+@ALL_REDUCE_REGISTRY.register_atomic(ProviderRole.UPSTREAM_STANDARD)
 class FlashInferVllmAllReduceProvider(AllReduceProvider):
+    # Retain the existing identifier for runtime reports; eligibility is not SM90-only.
     name = "flashinfer_vllm_sm90"
-    max_rows = 1024
     num_ctas = 32
+    # Prefill uses the registered eager buffer; decode graph inputs retain
+    # their own registered addresses and max_rows contract.
+    prefill_staging_max_bytes = 16 * 1024 * 1024
+
+    def prefill_reuse_capacity(self, spec: AllReduceOpSpec) -> int:
+        row_bytes = spec.hidden_size * spec.dtype.itemsize
+        return self.prefill_staging_max_bytes // row_bytes
 
     @classmethod
     def supports(cls, spec: AllReduceOpSpec, caps: DeviceCaps) -> SupportResult:
-        if caps.platform != PlatformEnum.CUDA or caps.compute_capability != (9, 0):
-            return SupportResult.unsupported(
-                f"requires CUDA SM90, got {caps.platform.name} {caps.compute_capability}"
-            )
+        if caps.platform != PlatformEnum.CUDA:
+            return SupportResult.unsupported(f"requires CUDA, got {caps.platform.name}")
         if spec.cuda_graph and not caps.supports_graph_capture:
             return SupportResult.unsupported("requires CUDA Graph capture support")
         if spec.world_size not in (2, 4, 6, 8):
@@ -368,10 +368,16 @@ class FlashInferVllmAllReduceProvider(AllReduceProvider):
             )
         if spec.backend != "nccl":
             return SupportResult.unsupported(f"requires NCCL, got {spec.backend}")
-        if spec.dtype != torch.bfloat16:
-            return SupportResult.unsupported(
-                f"requires BF16 tensors, got {spec.dtype}"
-            )
+        if spec.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+            return SupportResult.unsupported("requires FP16, BF16 or FP32 tensors")
+        if spec.dtype == torch.bfloat16 and not caps.supports_bfloat16:
+            return SupportResult.unsupported("device does not support BF16")
+        # Upstream packs 16 bytes per lane. Every dynamic row count, including
+        # one, must be legal; checking only the maximum tensor would be unsafe.
+        if spec.hidden_size * spec.dtype.itemsize % 16:
+            return SupportResult.unsupported("requires 16-byte aligned rows")
+        if spec.max_rows * spec.hidden_size > 2**31 - 1:
+            return SupportResult.unsupported("upstream element count uses signed int32")
         if spec.device_ordinals is None:
             return SupportResult.unsupported(
                 "requires an explicit process-rank to CUDA-ordinal mapping"
@@ -381,6 +387,20 @@ class FlashInferVllmAllReduceProvider(AllReduceProvider):
                 "requires one rank per CUDA device on a single host; "
                 f"device_ordinals={spec.device_ordinals}"
             )
+        if any(
+            not torch.cuda.can_device_access_peer(left, right)
+            for left in spec.device_ordinals
+            for right in spec.device_ordinals
+            if left != right
+        ):
+            return SupportResult.unsupported("requires CUDA peer access between all ranks")
+        if spec.world_size > 2:
+            if importlib.util.find_spec("pynvml") is None:
+                return SupportResult.unsupported("NVLink validation requires nvidia-ml-py")
+            if not platforms.current_platform.supports_nvlink_group(spec.device_ordinals):
+                return SupportResult.unsupported(
+                    "upstream kernel requires fully connected NVLink for more than two ranks"
+                )
         dependency = _flashinfer_dependency_support()
         if not dependency.supported:
             return dependency
@@ -491,7 +511,8 @@ class FlashInferVllmAllReduceProvider(AllReduceProvider):
                 "fully connected NVLink."
             )
         cudart = _prepare_flashinfer_cuda_runtime()
-        max_size_bytes = spec.max_rows * spec.hidden_size * spec.dtype.itemsize
+        row_bytes = spec.hidden_size * spec.dtype.itemsize
+        max_size_bytes = max(spec.max_rows * row_bytes, self.prefill_staging_max_bytes)
         meta_ptrs = create_shared_buffer(vllm_meta_size() + max_size_bytes, group)
         buffer_ptrs = create_shared_buffer(max_size_bytes, group)
         rank_data = torch.empty(8 * 1024 * 1024, dtype=torch.uint8, device="cuda")
@@ -671,53 +692,6 @@ class FlashInferTrtllmAllReduceProfile(_FlashInferAllReduceProfile):
         return ProfileMatch.yes("matched exact FlashInfer TRT-LLM profile")
 
 
-@ALL_REDUCE_REGISTRY.register_profile
-class FlashInferVllmAllReduceProfile(_FlashInferAllReduceProfile):
-    max_rows_without_nvlink = 256
-    name = "flashinfer_vllm_sm90_profile"
-    atomic_provider_name = "flashinfer_vllm_sm90"
-
-    @classmethod
-    def matches(cls, spec: AllReduceOpSpec, caps: DeviceCaps) -> ProfileMatch:
-        if not any(
-            device_name_contains(caps.device_name, name) for name in ("H100", "H20")
-        ):
-            return ProfileMatch.no(
-                f"requires profiled H100 or H20 hardware, got {caps.device_name}"
-            )
-        if (
-            spec.world_size != 2
-            or spec.max_rows > FlashInferVllmAllReduceProvider.max_rows
-            or spec.hidden_size != 2048
-            or spec.dtype != torch.bfloat16
-        ):
-            return ProfileMatch.no(
-                "requires profiled TP2 BF16 [..., 2048] with "
-                f"max_rows <= {FlashInferVllmAllReduceProvider.max_rows}, "
-                f"got world_size={spec.world_size} max_rows={spec.max_rows} "
-                f"hidden_size={spec.hidden_size} dtype={spec.dtype}"
-            )
-        if spec.max_rows > cls.max_rows_without_nvlink:
-            if not spec.cuda_graph:
-                return ProfileMatch.no("extended row range is profiled with CUDA Graphs")
-            if (
-                spec.device_ordinals is None
-                or len(set(spec.device_ordinals)) != spec.world_size
-            ):
-                return ProfileMatch.no("extended row range requires distinct CUDA ordinals")
-            if importlib.util.find_spec("pynvml") is None:
-                return ProfileMatch.no(
-                    "extended row range needs nvidia-ml-py for NVLink validation"
-                )
-            if not platforms.current_platform.supports_nvlink_group(
-                spec.device_ordinals
-            ):
-                return ProfileMatch.no(
-                    "extended row range is profiled on fully connected NVLink"
-                )
-        return ProfileMatch.yes("matched exact FlashInfer vLLM profile")
-
-
 @ALL_REDUCE_REGISTRY.register_atomic(ProviderRole.REPO_PORTABLE)
 class TorchDistributedAllReduceProvider(AllReduceProvider):
     name = "torch_distributed"
@@ -737,7 +711,9 @@ class TorchDistributedAllReduceProvider(AllReduceProvider):
         return tensor
 
 
-def _validate_tensor_contract(spec: AllReduceOpSpec, tensor: torch.Tensor) -> None:
+def _validate_tensor_contract(
+    spec: AllReduceOpSpec, tensor: torch.Tensor, *, max_rows: int | None = None
+) -> None:
     if tensor.dtype != spec.dtype:
         raise TypeError(
             f"All-reduce expected dtype={spec.dtype}, got {tensor.dtype}."
@@ -748,10 +724,11 @@ def _validate_tensor_contract(spec: AllReduceOpSpec, tensor: torch.Tensor) -> No
         )
     row_count = tensor.numel() // int(tensor.shape[-1])
     hidden_size = int(tensor.shape[-1])
-    if not 0 < row_count <= spec.max_rows:
+    row_limit = spec.max_rows if max_rows is None else max_rows
+    if not 0 < row_count <= row_limit:
         raise ValueError(
             "All-reduce row count is outside the prepared range: "
-            f"rows={row_count} max_rows={spec.max_rows}."
+            f"rows={row_count} max_rows={row_limit}."
         )
     if hidden_size != spec.hidden_size:
         raise ValueError(
@@ -777,6 +754,7 @@ class PreparedAllReduceOp:
         self.spec = spec
         self.provider = provider
         self.group = group
+        self.prefill_max_rows = provider.prefill_reuse_capacity(spec)
         self._closed = False
 
     @property
@@ -784,16 +762,24 @@ class PreparedAllReduceOp:
         return self.provider.name
 
     def run(self, tensor: torch.Tensor) -> torch.Tensor:
+        return self._run(tensor, max_rows=self.spec.max_rows)
+
+    def run_prefill(self, tensor: torch.Tensor) -> torch.Tensor:
+        if self.prefill_max_rows <= 0:
+            raise RuntimeError("This all-reduce provider does not support prefill reuse.")
+        return self._run(tensor, max_rows=self.prefill_max_rows)
+
+    def _run(self, tensor: torch.Tensor, *, max_rows: int) -> torch.Tensor:
         if self._closed:
             raise RuntimeError("All-reduce operator is closed.")
-        _validate_tensor_contract(self.spec, tensor)
+        _validate_tensor_contract(self.spec, tensor, max_rows=max_rows)
         output = self.provider.run(self.spec, tensor, group=self.group)
         if not isinstance(output, torch.Tensor):
             raise TypeError(
                 f"All-reduce provider {self.provider.name} returned "
                 f"{type(output).__name__}, expected torch.Tensor."
             )
-        _validate_tensor_contract(self.spec, output)
+        _validate_tensor_contract(self.spec, output, max_rows=max_rows)
         if output.shape != tensor.shape or output.device != tensor.device:
             raise ValueError(
                 f"All-reduce provider {self.provider.name} returned an incompatible tensor: "

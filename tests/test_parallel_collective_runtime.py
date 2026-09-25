@@ -37,14 +37,16 @@ def _context(*, world=None, attention=None):
     )
 
 
-def _prepared_op(name="fake", metadata=None):
+def _prepared_op(name="fake", metadata=None, prefill_max_rows=0):
     return SimpleNamespace(
         name=name,
+        prefill_max_rows=prefill_max_rows,
         collect_local_cuda_graph_metadata=Mock(return_value=metadata),
         graph_metadata_summary=Mock(return_value=(0, 0)),
         register_cuda_graph_buffers=Mock(),
         close=Mock(),
         run=Mock(side_effect=lambda tensor: tensor),
+        run_prefill=Mock(side_effect=lambda tensor: tensor),
     )
 
 
@@ -365,6 +367,97 @@ def test_handle_uses_plain_collective_for_prefill_and_prepared_op_for_decode():
     ):
         assert handle.run(tensor) is tensor
     op.run.assert_called_once_with(tensor)
+
+
+@pytest.mark.parametrize(
+    "shape,contiguous,reuse",
+    [((2, 4), True, True), ((2, 4, 4), True, True),
+     ((9, 4), True, False), ((0, 4), True, False),
+     ((2, 4), False, False)],
+)
+def test_prefill_reuses_only_compatible_prepared_storage(shape, contiguous, reuse):
+    world = _group((0, 1), process_group=object())
+    runtime = ParallelCollectiveRuntime(
+        _context(world=world, attention=world), cuda_graph=True, device_index=0
+    )
+    handle = runtime.request_decode_collectives(
+        attention_max_rows=8, moe_max_rows=8, hidden_size=4, dtype=torch.float32
+    ).attention
+    op = _prepared_op(prefill_max_rows=8)
+    with patch(
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
+        return_value=op,
+    ):
+        runtime.prepare()
+    tensor = torch.ones(shape) if contiguous else torch.ones(4, 2).t()
+    # A custom collective is out-of-place; callers must receive its output.
+    output = torch.zeros_like(tensor)
+    op.run_prefill.side_effect = None
+    op.run_prefill.return_value = output
+    with (
+        patch("sparseengine.distributed.collective_runtime.get_context",
+              return_value=SimpleNamespace(is_prefill=True)),
+        patch.object(ParallelGroup, "all_reduce", return_value=tensor) as plain,
+    ):
+        assert handle.run(tensor) is (output if reuse else tensor)
+    if reuse:
+        op.run_prefill.assert_called_once_with(tensor)
+        plain.assert_not_called()
+    else:
+        plain.assert_called_once_with(tensor)
+        op.run_prefill.assert_not_called()
+
+
+def test_prefill_uses_capacity_above_decode_graph_limit():
+    world = _group((0, 1), process_group=object())
+    runtime = ParallelCollectiveRuntime(
+        _context(world=world, attention=world), cuda_graph=True, device_index=0
+    )
+    handle = runtime.request_decode_collectives(
+        attention_max_rows=16, moe_max_rows=32, hidden_size=4, dtype=torch.float32
+    ).attention
+    op = _prepared_op(prefill_max_rows=512)
+    with patch(
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
+        return_value=op,
+    ) as prepare:
+        runtime.prepare()
+    assert prepare.call_args.kwargs["max_rows"] == 32
+    assert "prefill_max_rows" not in prepare.call_args.kwargs
+    with (
+        patch("sparseengine.distributed.collective_runtime.get_context",
+              return_value=SimpleNamespace(is_prefill=True)),
+        patch.object(ParallelGroup, "all_reduce", side_effect=lambda tensor: tensor) as plain,
+    ):
+        handle.run(torch.ones((256, 4)))
+        handle.run(torch.ones((513, 4)))
+    op.run_prefill.assert_called_once()
+    plain.assert_called_once()
+
+
+def test_prefill_prepared_collective_failure_is_not_retried():
+    world = _group((0, 1), process_group=object())
+    runtime = ParallelCollectiveRuntime(
+        _context(world=world, attention=world), cuda_graph=True, device_index=0
+    )
+    handle = runtime.request_decode_collectives(
+        attention_max_rows=8, moe_max_rows=8, hidden_size=4, dtype=torch.float32
+    ).attention
+    op = _prepared_op(prefill_max_rows=8)
+    op.run_prefill.side_effect = RuntimeError("launch failed")
+    with patch(
+        "sparseengine.distributed.collective_runtime.prepare_parallel_all_reduce",
+        return_value=op,
+    ):
+        runtime.prepare()
+    with (
+        patch("sparseengine.distributed.collective_runtime.get_context",
+              return_value=SimpleNamespace(is_prefill=True)),
+        patch.object(ParallelGroup, "all_reduce") as plain,
+        pytest.raises(RuntimeError, match="launch failed"),
+    ):
+        handle.run(torch.ones(2, 4))
+    plain.assert_not_called()
 
 
 def test_provider_mismatch_stops_before_any_subgroup_exchange():
