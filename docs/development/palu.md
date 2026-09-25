@@ -2,7 +2,7 @@
 
 Palu preserves tokens and caches grouped low-rank projections of pre-RoPE K
 and V. It changes the model projection/storage contract, not token selection.
-Reference: https://arxiv.org/abs/2407.21118; official implementation inspected
+The official implementation was inspected
 at `bb22666e2ef96707e8dd21d93fc00146c2e0d615` (MIT).
 
 ## Supported vertical slice

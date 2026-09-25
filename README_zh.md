@@ -1,11 +1,6 @@
 <div align="center">
   <img src="docs/assets/logo.png" alt="SparseEngine" style="width:42%; height:auto;">
 
-  <p>
-    <a href="https://deepwiki.com/CURRENTF/SparseEngine"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-    <a href="https://arxiv.org/abs/2602.08005"><img src="https://img.shields.io/badge/arXiv-2602.08005-b31b1b.svg" alt="arXiv"></a>
-    <a href="https://arxiv.org/pdf/2602.08005.pdf"><img src="https://img.shields.io/badge/PDF-download-brightgreen.svg" alt="PDF"></a>
-  </p>
 </div>
 
 <p align="center"><a href="README.md">English</a> | 简体中文</p>
@@ -18,14 +13,13 @@ SparseEngine 是一个面向长上下文大语言模型服务、以稀疏机制�
 </div>
 
 H100 80GB，128K 输入 / 2K 输出。从上到下依次展示：各方法最大已测批量下的解码吞吐量，以及相同并发数下相对 vLLM Vanilla 的吞吐量提升（vLLM 为 0% 基线）。
-图中的 Ours 指 SparseEngine。详见[测量口径与图表说明](scripts/official_experiments/sparse_decode_efficiency/README.md#readme-figures)。
+图中的 Ours 指 SparseEngine。
 
 ## 项目概览
 
 SparseEngine 是一个从设计之初就以稀疏性为核心原则的推理框架。它并非简单地在传统 KV 缓存之上叠加稀疏方法，而是重新设计缓存布局、控制流程和内核，使多种稀疏机制能够清晰地接入框架。
 
-> **说明：** DeltaKV 压缩器训练代码由独立仓库
-> [CURRENTF/DeltaKV](https://github.com/CURRENTF/DeltaKV) 维护。本仓库仅保留
+> **说明：** DeltaKV 压缩器训练代码由独立仓库维护。本仓库仅保留
 > `src/sparseengine/` 下的原生 DeltaKV 推理实现，不包含 DeltaKV 训练代码或
 > Hugging Face reference implementation。
 
@@ -140,35 +134,6 @@ pip install --no-build-isolation -e ".[deepepv1]"
 
 新增稀疏方法应将方法专用的运行时状态保存在 `src/sparseengine/engine/cache_manager/` 中，并保持 `src/sparseengine/layers/attention.py` 的通用性。
 
-## 致谢
-
-本项目受到以下项目的启发，并参考了其中的理念和实现技术：
-
-- `LightLLM` (`ModelTC/LightLLM`)
-- `SGLang` (`sgl-project/sglang`)
-- `ShadowKV` (`ByteDance-Seed/ShadowKV`)
-- `nano-vllm` (`GeeeekExplorer/nano-vllm`)
-
 ## 许可证
 
 [Apache License 2.0](LICENSE)
-
-## 引用
-
-```text
-@article{hao2026deltakv,
-  title={DeltaKV: Residual-Based KV Cache Compression via Long-Range Similarity},
-  author={Hao, Jitai and Huang, Qiang and Wang, Yaowei and Zhang, Min and Yu, Jun},
-  journal={arXiv preprint arXiv:2602.08005},
-  year={2026}
-}
-
-@inproceedings{hao2025omnikv,
-  title={Omnikv: Dynamic context selection for efficient long-context llms},
-  author={Hao, Jitai and Zhu, Yuke and Wang, Tian and Yu, Jun and Xin, Xin and Zheng, Bo and Ren, Zhaochun and Guo, Sheng},
-  booktitle={The Thirteenth International Conference on Learning Representations},
-  year={2025}
-}
-```
-
-如果 SparseEngine 帮到了你，请在 [GitHub 点个 Star](https://github.com/CURRENTF/SparseEngine)，这对我们意义重大。

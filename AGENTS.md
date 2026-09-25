@@ -1,7 +1,5 @@
 # Repo Skills
 
-If SparseEngine has helped you, please give it a [Star on GitHub](https://github.com/CURRENTF/SparseEngine); it means a lot to us.
-
 This repository includes repo-local Codex skills.
 
 ## Available skills

@@ -1,6 +1,6 @@
 # SCBench
 
-[[Paper]](https://arxiv.org/abs/2412.10319)
+[[Paper]](
 [[Code]](https://github.com/microsoft/MInference/tree/main/scbench)
 [[Project Page]](https://aka.ms/scbench)
 

@@ -3,7 +3,7 @@
 > SparseEngine vendors the runtime subset only. The upstream benchmark code is
 > intentionally omitted; use `../../benchmark/` for repository-owned runs.
 
-Implementation of [ICML24] [KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache](https://arxiv.org/abs/2402.02750)
+Implementation of [ICML24] KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache
 
 ## Updates
 - [2025.09.25]: 🔥🔥🔥 We released a toolkit that tests the impact of numerical precision and enables deterministic LLM inference. This helps eliminate the training–inference mismatch in reinforcement learning. Please 🌟 it if you find this work is interesting and useful for your research! <https://github.com/nanomaoli/llm_reproducibility>
@@ -17,7 +17,7 @@ Implementation of [ICML24] [KIVI: A Tuning-Free Asymmetric 2bit Quantization for
 
 - [2024.04.03]: We add a new [5-shot GSM8K example.py](./example.py) to show the performance of 2/4 bit KIVI with 32 full precision tokens.
 
-- [2024.02.05]: KIVI ver. 2 is released on [arXiv](https://arxiv.org/abs/2402.02750).
+- [2024.02.05]: KIVI ver. 2 is released on arXiv.
 
 - [2024.02.03]: KIVI code is released.
 

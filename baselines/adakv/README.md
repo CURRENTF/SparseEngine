@@ -27,15 +27,15 @@ In addition to this AdaKV repository, we greatly appreciate the community’s en
 ## Broad Works Benefiting from AdaKV
 Many cutting-edge methods have integrated the Adaptive Budget Allocation of AdaKV for further enhancement. Below are several successful cases for reference (please feel free to suggest any additions we may have missed):
 
-* Identify Critical KV Cache in LLM Inference from an Output Perturbation Perspective [paper](https://arxiv.org/abs/2502.03805),[code](https://github.com/FFY0/AdaKV-in-NVIDIA-kvpress/tree/criticalkv)
+* Identify Critical KV Cache in LLM Inference from an Output Perturbation Perspective paper,[code](https://github.com/FFY0/AdaKV-in-NVIDIA-kvpress/tree/criticalkv)
 * ExpectedAttention [A KV compress methods proposed by NIVIDA kvpress team](https://github.com/NVIDIA/kvpress/)
-* Not All Heads Matter: A Head-Level KV Cache Compression Method with Integrated Retrieval and Reasoning [paper](https://arxiv.org/abs/2410.19258), [code](https://github.com/FYYFU/HeadKV/)
-* KVzip: Query-Agnostic KV Cache Compression with Context Reconstruction [paper](https://arxiv.org/abs/2505.23416)
-* SparseMM: Head Sparsity Emerges from Visual Concept Responses in MLLMs [paper](https://arxiv.org/pdf/2506.05344),[code](https://github.com/CR400AF-A/SparseMM)
-* The Sparse Frontier: Sparse Attention Trade-offs in Transformer LLMs [paper](https://arxiv.org/pdf/2504.17768), [code](https://github.com/PiotrNawrot/sparse-frontier)
-* KV-Compress: Paged KV-Cache Compression with Variable Compression Rates per Attention Head [paper](https://arxiv.org/abs/2410.00161), [code](https://arxiv.org/abs/2410.00161)
-* Draft-based Approximate Inference for LLMs [paper](https://arxiv.org/pdf/2506.08373), [code](https://github.com/furiosa-ai/draft-based-approx-llm)
-* Mixing Importance with Diversity: Joint Optimization for KV Cache Compression in Large Vision-Language Models [paper](https://arxiv.org/abs/2510.20707), [code](https://github.com/xuyang-liu16/MixKV)
+* Not All Heads Matter: A Head-Level KV Cache Compression Method with Integrated Retrieval and Reasoning paper, [code](https://github.com/FYYFU/HeadKV/)
+* KVzip: Query-Agnostic KV Cache Compression with Context Reconstruction paper
+* SparseMM: Head Sparsity Emerges from Visual Concept Responses in MLLMs paper,[code](https://github.com/CR400AF-A/SparseMM)
+* The Sparse Frontier: Sparse Attention Trade-offs in Transformer LLMs paper, [code](https://github.com/PiotrNawrot/sparse-frontier)
+* KV-Compress: Paged KV-Cache Compression with Variable Compression Rates per Attention Head paper, code
+* Draft-based Approximate Inference for LLMs paper, [code](https://github.com/furiosa-ai/draft-based-approx-llm)
+* Mixing Importance with Diversity: Joint Optimization for KV Cache Compression in Large Vision-Language Models paper, [code](https://github.com/xuyang-liu16/MixKV)
 
 
 ## Usage of this Repo

@@ -33,10 +33,9 @@ The head tile remains 32 for 20 local heads with batch > 1, otherwise 16.
 Neither actual context length nor context capacity enters split selection.
 The conservative candidate range is profile policy, not a kernel correctness
 limit. The formula scales with hardware but is not a claim of optimal tuning on
-every GPU. Historical context-aware experiments remain frozen in
-`scripts/official_experiments/tilelang_mla_split_profiles`; they do not measure
-this context-independent rule. The capacity rerun recipe is in
-`scripts/official_experiments/sparse_decode_efficiency`.
+every GPU. Historical context-aware experiments do not measure this
+context-independent rule. Capacity measurements should follow the shared
+efficiency benchmark runbook.
 
 The provider passes SM count from `DeviceCaps` at binding. Context capacity
 remains a storage/validation bound only. Plans are indexed only by batch;

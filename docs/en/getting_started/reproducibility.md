@@ -1,10 +1,8 @@
 # Reproducibility
 
 Use this page as the stable checklist for reproducing SparseEngine experiments.
-Keep local run ledgers out of this repo; when a repo-facing result needs
-evidence, cite the original run artifact path. Commit finalized official results
-under `scripts/official_experiments/<experiment>/`; a private record is not a
-substitute for that compact result package.
+Keep local run ledgers out of this repo. Record the original run artifacts and
+configuration needed to reproduce each reported result.
 
 ## Environment
 
@@ -35,9 +33,8 @@ relevant uncommitted changes with every reported benchmark.
 
 ## Models And Checkpoints
 
-Base models and DeltaKV compressor checkpoints must match. Public compressor
-checkpoints are listed in the README section
-[Download DeltaKV compressor checkpoints](README.md#deltakv-checkpoints).
+Base models and DeltaKV compressor checkpoints must match. Supply a matching
+local checkpoint for compressor-backed runs.
 
 Pass the downloaded local directory as `deltakv_checkpoint_path`. Current
 loaders read local `model.safetensors` files; do not assume a Hugging Face repo

@@ -2,9 +2,7 @@
 
 [English](../../en/benchmarking/efficiency.md) | 简体中文
 
-本手册维护测量定义、入口及支持限制。具体实验的参数、扫描和重绘说明放在
-[scripts/official_experiments/](../../../scripts/official_experiments/)；
-历史结果不随默认协议变化而改写。
+本手册维护测量定义、入口及支持限制。具体实验的参数、扫描和重绘说明应随结果记录；历史结果不随默认协议变化而改写。
 
 ## 入口与最小示例
 
@@ -43,9 +41,8 @@ sink/recent/selected/full layers，同名预算不保证相同工作量或质量
 
 连续窗口必须显式指定 `--scenario fixed --prompt-length-jitter 0
 --output-length-jitter 0 --decode-only-steps 256 --decode-only-warmup-steps 32`。
-这组窗口参数不是普通请求模式的默认值。正式容量扫描及其 smoke 使用
-[稀疏 decode 效率实验入口](../../../scripts/official_experiments/sparse_decode_efficiency/README.md#boundary-sync-rerun)，
-不要复制计时 runner。窗口须覆盖方法的周期评分/驱逐，必要时统一加长所有对照。
+这组窗口参数不是普通请求模式的默认值。容量扫描应复用共享 probe 和指标。
+窗口须覆盖方法的周期评分/驱逐，必要时统一加长所有对照。
 
 其他入口按需使用：
 
@@ -195,12 +192,10 @@ GPU/拓扑和失败。
 最终仍报告失败；GPU 冲突、资源失效、存储错误或用户停止中止整组。
 契约、硬件或 Graph/backend 政策变化须重测 baseline，不覆盖旧数据。
 
-脚本、可复用配置、绘图代码和精简的正式结果包都保存在
-`scripts/official_experiments/<experiment>/`。结果包只记录设备、启动参数、
-最终结果和 Git commit，以及重现正式表格或图所必需的精简 JSON/CSV。
+记录新实验时，应将脚本、可复用配置、绘图代码和精简结果包保存在一起。
+结果包记录设备、启动参数、最终结果和 Git commit，以及重现所报告表格或图所必需的精简 JSON/CSV。
 不保存工作区状态、patch、源码快照、逐文件 hash 或恢复材料。大体积日志和
-原始输出保存在 Git 外的持久数据盘。Research-Vault 可以索引私有或临时证据，
-但不能替代仓库内的正式结果包。不放 tmp、不覆盖旧实验。
+原始输出保存在 Git 外的持久数据盘。不放 tmp、不覆盖旧实验。
 
 | 现象 | 处理 |
 | --- | --- |

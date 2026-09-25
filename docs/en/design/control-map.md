@@ -10,9 +10,8 @@ before reporting results.
 - Start from `docs/en/README.md` when choosing where documentation belongs.
 - Stable English runbooks and contracts live under the topical `docs/en/`
   directories.
-- Keep local run ledgers out of repo docs. Use the run artifacts themselves
-  when a repo-facing claim needs evidence. Finalized official result packages
-  belong under `scripts/official_experiments/<experiment>/`.
+- Keep local run ledgers out of repo docs. Record the artifacts and configuration
+  needed to reproduce each reported result.
 - `docs/en/configuration/runtime-parameter-semantics.md` is the canonical parameter contract.
   Keep it synchronized before adding new public run configs.
 

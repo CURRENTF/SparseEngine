@@ -1,11 +1,6 @@
 <div align="center">
   <img src="docs/assets/logo.png" alt="SparseEngine" style="width:42%; height:auto;">
 
-  <p>
-    <a href="https://deepwiki.com/CURRENTF/SparseEngine"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-    <a href="https://arxiv.org/abs/2602.08005"><img src="https://img.shields.io/badge/arXiv-2602.08005-b31b1b.svg" alt="arXiv"></a>
-    <a href="https://arxiv.org/pdf/2602.08005.pdf"><img src="https://img.shields.io/badge/PDF-download-brightgreen.svg" alt="PDF"></a>
-  </p>
 </div>
 
 <p align="center">English | <a href="README_zh.md">简体中文</a></p>
@@ -20,14 +15,12 @@ A sparse-first inference engine for long-context LLM serving.
 128K input / 2K output on H100 80GB. Top: decode throughput at each method's
 largest measured batch. Bottom: throughput improvement relative to vLLM Vanilla
 at the same concurrency, with vLLM at 0%. Ours denotes SparseEngine.
-See the [measurement and figure notes](scripts/official_experiments/sparse_decode_efficiency/README.md#readme-figures).
 
 ## Project Overview
 
 SparseEngine is an inference framework built with sparsity as the first design principle. Instead of layering sparse methods on top of a conventional KV cache, it rethinks cache layout, controller flow, and kernels so that multiple sparse mechanisms can plug in cleanly.
 
-> **Note:** DeltaKV compressor training code is maintained separately in
-> [CURRENTF/DeltaKV](https://github.com/CURRENTF/DeltaKV). This repository only
+> **Note:** DeltaKV compressor training code is maintained separately. This repository only
 > keeps the native DeltaKV inference implementation under `src/sparseengine/`;
 > it does not include DeltaKV training code or an HF reference implementation.
 
@@ -172,34 +165,6 @@ New sparse methods should keep persistent physical cache state in
 See the [sparse method runtime architecture](docs/en/design/sparse-method-runtime.md).
 
 
-## Acknowledgements
-
-This project is inspired by and/or references ideas and implementation techniques from:
-
-- `LightLLM` (`ModelTC/LightLLM`)
-- `SGLang` (`sgl-project/sglang`)
-- `ShadowKV` (`ByteDance-Seed/ShadowKV`)
-- `nano-vllm` (`GeeeekExplorer/nano-vllm`)
-
 ## License
 
 [Apache License 2.0](LICENSE)
-
-## Citation
-```text
-@article{hao2026deltakv,
-  title={DeltaKV: Residual-Based KV Cache Compression via Long-Range Similarity},
-  author={Hao, Jitai and Huang, Qiang and Wang, Yaowei and Zhang, Min and Yu, Jun},
-  journal={arXiv preprint arXiv:2602.08005},
-  year={2026}
-}
-
-@inproceedings{hao2025omnikv,
-  title={Omnikv: Dynamic context selection for efficient long-context llms},
-  author={Hao, Jitai and Zhu, Yuke and Wang, Tian and Yu, Jun and Xin, Xin and Zheng, Bo and Ren, Zhaochun and Guo, Sheng},
-  booktitle={The Thirteenth International Conference on Learning Representations},
-  year={2025}
-}
-```
-
-If SparseEngine has helped you, please give it a [Star on GitHub](https://github.com/CURRENTF/SparseEngine); it means a lot to us.

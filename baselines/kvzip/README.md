@@ -3,7 +3,7 @@
 > SparseEngine vendors the runtime subset only. The upstream benchmark code is
 > intentionally omitted; use `../../benchmark/` for repository-owned runs.
 
-[[Paper](https://arxiv.org/abs/2505.23416)] [[Blog](https://janghyun1230.github.io/kvzip/)] 
+[Blog](https://janghyun1230.github.io/kvzip/)
 
 <img src="./images/method.png" width="800">
 
@@ -13,7 +13,7 @@
 - **09/2025**: 🎉 KVzip has been accepted at NeurIPS 2025 as an **Oral Presentation**! 
 - **07/2025**: [NVIDIA KVpress](https://github.com/NVIDIA/kvpress) adds support for KVzip (see also [Leaderboard](https://huggingface.co/spaces/nvidia/kvpress-leaderboard)).
 - **07/2025**: KVzip is presented at the [ES-FoMo III ICML Workshop](https://es-fomo.com).
-- **05/2025**: [arXiv preprint]((https://arxiv.org/abs/2505.23416)) is released.
+- **05/2025**: arXiv preprint is released.
 
 
 ## Highlights

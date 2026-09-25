@@ -116,10 +116,10 @@ this shared slot layout. `enable_omnikv_offload` remains available independently
 
 > [!NOTE]
 > The two score-free decode contracts have different paper provenance. The
-> [SnapKV paper](https://arxiv.org/abs/2404.14469) selects prompt KV from an
+> SnapKV paper selects prompt KV from an
 > observation window at the end of the prompt; adding decode-time rescoring and
 > eviction would be a SparseEngine extension. The
-> [H2O paper](https://arxiv.org/abs/2306.14048) instead defines dynamic retention
+> H2O paper instead defines dynamic retention
 > over successive decode steps. SparseEngine's intermediate-chunk H2O compaction
 > is its own prefill extension. Final-prompt compaction instead belongs to the
 > decode contract because it creates the shorter cache used during generation,

@@ -51,10 +51,8 @@ python scripts/benchmarks/bench_sparse_engine.py \
 
 ## Compressor Training
 
-Compressor training is maintained in
-[CURRENTF/DeltaKV](https://github.com/CURRENTF/DeltaKV). Use that repository to
-prepare training data, train compressor checkpoints, and run training
-ablations. SparseEngine consumes compatible checkpoints for inference and
+Compressor training is maintained separately and is not included in this
+repository. SparseEngine consumes compatible checkpoints for inference and
 benchmarking.
 
 ## Evaluate on LongBench

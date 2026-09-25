@@ -84,31 +84,8 @@ key.
 
 ## DeltaKV Checkpoints
 
-Compressor-backed DeltaKV runs require a local checkpoint directory. Download
-the compressor that matches the base model before passing
-`deltakv_checkpoint_path`.
-
-| Base model | Compressor checkpoint |
-| --- | --- |
-| `Qwen/Qwen2.5-7B-Instruct-1M` | [`JitaiHao/Qwen2.5-7B-Instruct-1M-Compressor`](https://huggingface.co/JitaiHao/Qwen2.5-7B-Instruct-1M-Compressor) |
-| `Qwen/Qwen2.5-32B-Instruct` | [`JitaiHao/Qwen2.5-32B-Instruct-Compressor`](https://huggingface.co/JitaiHao/Qwen2.5-32B-Instruct-Compressor) |
-| `meta-llama/Llama-3.1-8B-Instruct` | [`JitaiHao/Llama-3.1-8B-Instruct-Compressor`](https://huggingface.co/JitaiHao/Llama-3.1-8B-Instruct-Compressor) |
-
-```bash
-export DELTAKV_CKPT_ROOT=<CHECKPOINT_ROOT>/compressor
-mkdir -p "$DELTAKV_CKPT_ROOT"
-
-huggingface-cli download JitaiHao/Qwen2.5-7B-Instruct-1M-Compressor \
-  --local-dir "$DELTAKV_CKPT_ROOT/Qwen2.5-7B-Instruct-1M-Compressor"
-
-huggingface-cli download JitaiHao/Qwen2.5-32B-Instruct-Compressor \
-  --local-dir "$DELTAKV_CKPT_ROOT/Qwen2.5-32B-Instruct-Compressor"
-
-huggingface-cli download JitaiHao/Llama-3.1-8B-Instruct-Compressor \
-  --local-dir "$DELTAKV_CKPT_ROOT/Llama-3.1-8B-Instruct-Compressor"
-```
-
-Use the downloaded local directory as `deltakv_checkpoint_path`. Do not reuse a
+Compressor-backed DeltaKV runs require a local checkpoint directory matching
+the base model. Pass that directory as `deltakv_checkpoint_path`. Do not reuse a
 compressor checkpoint with a different base model unless it was trained for that
 model and its layer/head dimensions match.
 

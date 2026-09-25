@@ -56,16 +56,16 @@
 
 > 注：对于所有基于已有数据集构造的任务，我们均选用原有数据集的验证集或测试集的数据（VCSUM任务除外）
 
-- [HotpotQA](https://hotpotqa.github.io/), [2WikiMultihopQA](https://aclanthology.org/2020.coling-main.580/), [MuSiQue](https://arxiv.org/abs/2108.00573)和[DuReader](https://github.com/baidu/DuReader)任务基于原始的数据集构建，并进行相关处理使其适用于长文本评测。具体地，对于验证集中的问题，我们会选取包含答案的evidence passage和若干干扰的文章，这些文章和原始的问题共同组成了相关任务的输入。
+- [HotpotQA](https://hotpotqa.github.io/), [2WikiMultihopQA](https://aclanthology.org/2020.coling-main.580/), MuSiQue和[DuReader](https://github.com/baidu/DuReader)任务基于原始的数据集构建，并进行相关处理使其适用于长文本评测。具体地，对于验证集中的问题，我们会选取包含答案的evidence passage和若干干扰的文章，这些文章和原始的问题共同组成了相关任务的输入。
 - MultiFiedQA-zh和MultiFieldQA-en任务由约10种来源的长文本数据组成，包含Latex论文、裁判文书、政府工作报告和谷歌索引的PDF文档等。对于每篇长文本，我们邀请了若干博士生和硕士生来进行标注，即基于长文本提问，并给出正确的答案。为了更好地进行自动化评测，我们要求标注员尽可能提出有确定性答案的问题。
-- [NarrativeQA](https://arxiv.org/pdf/1712.07040.pdf), [Qasper](https://arxiv.org/pdf/2105.03011.pdf), [GovReport](https://arxiv.org/pdf/2104.02112.pdf)，[QMSum](https://arxiv.org/pdf/2104.05938.pdf)和[MultiNews](https://aclanthology.org/P19-1102.pdf)任务直接使用原论文提供的数据。在具体的构建中，我们使用[ZeroSCROLLS](https://www.zero.scrolls-benchmark.com/)提供的模板来将对应的数据转换为纯文本的输入。
-- [VCSUM](https://arxiv.org/abs/2305.05280)任务基于原始的数据集构建，我们针对该数据设计了相应的模板将对应的数据转换为纯文本的输入。
-- [TriviaQA](https://nlp.cs.washington.edu/triviaqa/)任务参考[CoLT5](https://arxiv.org/abs/2303.09752)的方式进行构建，即会提供若干基于文档进行问答的样例，并要求语言模型基于新的文档回答相关问题。
+- NarrativeQA, Qasper, GovReport，QMSum和[MultiNews](https://aclanthology.org/P19-1102.pdf)任务直接使用原论文提供的数据。在具体的构建中，我们使用[ZeroSCROLLS](https://www.zero.scrolls-benchmark.com/)提供的模板来将对应的数据转换为纯文本的输入。
+- VCSUM任务基于原始的数据集构建，我们针对该数据设计了相应的模板将对应的数据转换为纯文本的输入。
+- [TriviaQA](https://nlp.cs.washington.edu/triviaqa/)任务参考CoLT5的方式进行构建，即会提供若干基于文档进行问答的样例，并要求语言模型基于新的文档回答相关问题。
 - [SAMSum](https://aclanthology.org/D19-5409.pdf)，[TREC](https://aclanthology.org/C02-1150.pdf)和[LSHT](http://tcci.ccf.org.cn/conference/2014/dldoc/evatask6.pdf)任务基于原始的数据集构建。对于验证集中的每个问题，我们采样训练集中的若干数据组成Few-shot样例。这些样例会和验证集中的问题共同组成该任务的输入。
 - PassageRetrieval-en任务基于英文维基进行构造。对于每条数据，我们随机采样30段英文维基的段落，并选取其中一段进行摘要（使用GPT-3.5-Turbo）。该任务要求模型给出摘要应该对应哪个的原始段落。
 - PassageCount任务基于英文维基进行构造。对于每条数据，我们随机采样若干英文维基的段落，并将其中的每个段落随机重复若干次，最后将段落随机打乱。该任务要求模型判断给定的若干的段落中不重复的段落一共有几个。
-- PassageRetrieval-zh任务基于[C4](https://arxiv.org/abs/1910.10683)进行构造。对于每条数据，我们随机采样若干段来自于C4的中文段落，并选取其中一段进行摘要（使用GPT-3.5-Turbo）。该任务要求模型给出摘要对应的那个原始段落名称。
-- [LCC](https://arxiv.org/abs/2306.14893)任务我们基于原始的代码补全数据集采样构建。[RepoBench-P](https://arxiv.org/abs/2306.03091)任务中我们选取了原数据集最具挑战性的XF-F（Cross-File-First）设定，并且参考原文中的Oracle-Filled场景，对于每一条原始数据我们随机抽取包括有效跨文件代码片段（gold snippet）在内的多个跨文件代码片段，将其拼接后作为输入，要求模型从其中利用有效的跨文件代码以补全当前文件中的代码。
+- PassageRetrieval-zh任务基于C4进行构造。对于每条数据，我们随机采样若干段来自于C4的中文段落，并选取其中一段进行摘要（使用GPT-3.5-Turbo）。该任务要求模型给出摘要对应的那个原始段落名称。
+- LCC任务我们基于原始的代码补全数据集采样构建。RepoBench-P任务中我们选取了原数据集最具挑战性的XF-F（Cross-File-First）设定，并且参考原文中的Oracle-Filled场景，对于每一条原始数据我们随机抽取包括有效跨文件代码片段（gold snippet）在内的多个跨文件代码片段，将其拼接后作为输入，要求模型从其中利用有效的跨文件代码以补全当前文件中的代码。
 
 # LongBench-E数据统计
 | 任务              |      任务类型  |      0-4k数据量  |     4-8k数据量                                       |8k+数据量|

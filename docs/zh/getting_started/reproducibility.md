@@ -1,6 +1,6 @@
 # 可复现性
 
-使用本页的稳定 checklist 复现 SparseEngine 实验。不要把本地 run ledger 放入仓库；面向仓库的结果需要证据时，应引用原始 run artifact path。已完成的正式结果必须提交到 `scripts/official_experiments/<experiment>/`；私有记录不能替代该精简结果包。
+使用本页的稳定 checklist 复现 SparseEngine 实验。不要把本地 run ledger 放入仓库；报告结果时应记录可复现所需的原始产物和配置。
 
 ## 环境
 
@@ -24,7 +24,7 @@ README 包含当前安装命令。预期 baseline 为：
 
 ## 模型与 Checkpoint
 
-Base model 与 DeltaKV compressor checkpoint 必须匹配。公开 compressor checkpoint 列在 README 的 [DeltaKV checkpoint 下载](README.md#deltakv-checkpoint)一节。
+Base model 与 DeltaKV compressor checkpoint 必须匹配。运行基于 compressor 的方法时，提供匹配的本地 checkpoint。
 
 将下载后的本地目录作为 `deltakv_checkpoint_path` 传入。当前 loader 读取本地 `model.safetensors` 文件；不要假设所有位置都可以直接传入 Hugging Face repo ID。
 

@@ -2,14 +2,14 @@
 
 > SparseEngine vendors the runtime subset only. The upstream benchmark code is
 > intentionally omitted; use `../../benchmark/` for repository-owned runs.
-[[Paper](https://arxiv.org/abs/2407.21118)]
+[Paper]
 
 <div align='center'>
 <img width="100%" alt="image" src="img/palu_idea.png"> 
 </div>
 
 ## Updates
-- [2024.11.03]: We updated our [arXiv](https://arxiv.org/pdf/2407.21118) with latency evaluation on quantization integration. Check it out!
+- [2024.11.03]: We updated our arXiv with latency evaluation on quantization integration. Check it out!
 - [2024.08.01]:🚀 Palu ver. 1 is released.
 
 ## TL;DR
@@ -17,10 +17,10 @@ Palu is a KV-Cache compression framework that utilizes low-rank projection to co
 
 ## Abstract
 Palu is a pioneer KV-Cache compression framework that reduce the hidden dimenssion of KV-Cache via low-rank projection.
-Different from [MLA in DeepSeek-V2](https://arxiv.org/abs/2405.04434) that requires a large-scale training from scratch, Palu works with existing LLMs such as Llama3, Mistral, in a post-training manner.
+Different from MLA in DeepSeek-V2 that requires a large-scale training from scratch, Palu works with existing LLMs such as Llama3, Mistral, in a post-training manner.
 To achieve this, Palu decomposes the linear layers into low-rank matrices, caches the smaller intermediate states, and reconstructs the full keys and values on the fly. To improve accuracy, compression rate, and efficiency, Palu further encompasses (1) a medium-grained low-rank decomposition scheme, (2) an efficient rank search algorithm, (3) matrix fusion for quantization friendliness enhancements, and (4) co-designed GPU kernels. 
 
-Our extensive experiments with popular LLMs show that Palu can compress KV-Cache by more than 91.25% while maintaining a significantly better accuracy (up to 1.19 lower perplexity) than state-of-the-art KV-Cache quantization methods at a similar or even higher memory usage. For more details, please refer to our [paper](https://arxiv.org/abs/2407.21118).
+Our extensive experiments with popular LLMs show that Palu can compress KV-Cache by more than 91.25% while maintaining a significantly better accuracy (up to 1.19 lower perplexity) than state-of-the-art KV-Cache quantization methods at a similar or even higher memory usage. For more details, please refer to our paper.
 
 ## Todo Lists
 - [ ] Upgrade `transformers>=4.43.3`, for Llama3.1 support
@@ -73,6 +73,5 @@ If you find this work useful, please consider citing our paper:
       eprint={2407.21118},
       archivePrefix={arXiv},
       primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2407.21118}, 
 }
 ```

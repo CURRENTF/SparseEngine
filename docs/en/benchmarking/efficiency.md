@@ -3,9 +3,8 @@
 [简体中文](../../zh/benchmarking/efficiency.md) | English
 
 This runbook owns measurement definitions, entrypoints, and support limits.
-Keep experiment-specific parameters, sweeps, and replot instructions in
-[scripts/official_experiments/](../../../scripts/official_experiments/).
-New defaults do not retroactively change historical protocols.
+Record experiment-specific parameters, sweeps, and replot instructions with each
+reported result. New defaults do not retroactively change historical protocols.
 
 ## Entrypoints and Minimal Example
 
@@ -47,9 +46,8 @@ equal work or quality.
 
 Continuous windows require explicit `--scenario fixed --prompt-length-jitter 0
 --output-length-jitter 0 --decode-only-steps 256 --decode-only-warmup-steps 32`.
-These are not ordinary request-mode defaults. For a capacity sweep and its smoke,
-use the [sparse decode efficiency experiment entrypoint](../../../scripts/official_experiments/sparse_decode_efficiency/README.md#boundary-sync-rerun);
-do not copy timing runners. Cover periodic scoring/eviction, extending the
+These are not ordinary request-mode defaults. For a capacity sweep, reuse the
+shared probe and metrics. Cover periodic scoring/eviction, extending the
 window uniformly across comparisons when necessary.
 
 Additional entrypoints:
@@ -228,14 +226,13 @@ storage errors, and user interruption stop the entire queue.
 Changed contracts, hardware, or
 Graph/backend policies require new baselines, preserving the old data.
 
-Keep scripts, reusable configurations, plotting code, and the compact official
-result package under `scripts/official_experiments/<experiment>/`. The committed
-package contains only the device, launch arguments, final results, and Git commit,
-plus the compact JSON/CSV needed to reproduce an official table or figure. Do not
+Keep scripts, reusable configurations, plotting code, and a compact result
+package together when recording a new experiment. Record the device, launch
+arguments, final results, Git commit, and the JSON/CSV needed to reproduce a
+reported table or figure. Do not
 store working-tree state, patches, source snapshots, source hashes, or recovery
-material. Keep large raw outputs/logs on persistent data storage outside Git. A
-Research-Vault record may index private or transient evidence, but it does not
-replace the repository result package. Do not use tmp or overwrite old runs.
+material. Keep large raw outputs/logs on persistent data storage outside Git.
+Do not use tmp or overwrite old runs.
 
 | Symptom | Action |
 | --- | --- |

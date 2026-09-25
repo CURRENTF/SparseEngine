@@ -45,8 +45,7 @@ python scripts/benchmarks/bench_sparse_engine.py \
 
 ## Compressor 训练
 
-Compressor 训练代码由独立仓库
-[CURRENTF/DeltaKV](https://github.com/CURRENTF/DeltaKV) 维护。请在该仓库中准备训练数据、训练 compressor checkpoint 和运行训练消融实验；SparseEngine 仅消费兼容 checkpoint，用于推理和 benchmark。
+Compressor 训练代码不包含在本仓库中；SparseEngine 仅消费兼容 checkpoint，用于推理和 benchmark。
 
 ## 在 LongBench 上评估
 

@@ -74,29 +74,7 @@ basis、profile 判断和 route；warmup 期间不会下载 Hub kernel。当前 
 
 ## DeltaKV Checkpoint
 
-基于 compressor 的 DeltaKV run 需要本地 checkpoint 目录。传入 `deltakv_checkpoint_path` 前，请下载与 base model 匹配的 compressor。
-
-| Base model | Compressor checkpoint |
-| --- | --- |
-| `Qwen/Qwen2.5-7B-Instruct-1M` | [`JitaiHao/Qwen2.5-7B-Instruct-1M-Compressor`](https://huggingface.co/JitaiHao/Qwen2.5-7B-Instruct-1M-Compressor) |
-| `Qwen/Qwen2.5-32B-Instruct` | [`JitaiHao/Qwen2.5-32B-Instruct-Compressor`](https://huggingface.co/JitaiHao/Qwen2.5-32B-Instruct-Compressor) |
-| `meta-llama/Llama-3.1-8B-Instruct` | [`JitaiHao/Llama-3.1-8B-Instruct-Compressor`](https://huggingface.co/JitaiHao/Llama-3.1-8B-Instruct-Compressor) |
-
-```bash
-export DELTAKV_CKPT_ROOT=<CHECKPOINT_ROOT>/compressor
-mkdir -p "$DELTAKV_CKPT_ROOT"
-
-huggingface-cli download JitaiHao/Qwen2.5-7B-Instruct-1M-Compressor \
-  --local-dir "$DELTAKV_CKPT_ROOT/Qwen2.5-7B-Instruct-1M-Compressor"
-
-huggingface-cli download JitaiHao/Qwen2.5-32B-Instruct-Compressor \
-  --local-dir "$DELTAKV_CKPT_ROOT/Qwen2.5-32B-Instruct-Compressor"
-
-huggingface-cli download JitaiHao/Llama-3.1-8B-Instruct-Compressor \
-  --local-dir "$DELTAKV_CKPT_ROOT/Llama-3.1-8B-Instruct-Compressor"
-```
-
-将下载后的本地目录用作 `deltakv_checkpoint_path`。除非 compressor 是针对另一个 base model 训练且 layer/head dimension 匹配，否则不要跨 base model 复用 compressor checkpoint。
+基于 compressor 的 DeltaKV run 需要与 base model 匹配的本地 checkpoint 目录。将该目录用作 `deltakv_checkpoint_path`。除非 compressor 是针对另一个 base model 训练且 layer/head dimension 匹配，否则不要跨 base model 复用 compressor checkpoint。
 
 ## 最小用法
 

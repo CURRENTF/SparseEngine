@@ -101,9 +101,9 @@ prefill 和 decode 的完整 attention 层列表可以不同。异构 Gemma 4 KV
 独立的 `enable_omnikv_offload` 仍可启用。
 
 > [!NOTE]
-> 两种 score-free decode contract 的论文来源不同。[SnapKV 论文](https://arxiv.org/abs/2404.14469)
+> 两种 score-free decode contract 的论文来源不同。SnapKV 论文
 > 使用 prompt 末尾的 observation window 选择 prompt KV；增加 decode-time
-> 重新评分和淘汰属于 SparseEngine 增强。[H2O 论文](https://arxiv.org/abs/2306.14048)
+> 重新评分和淘汰属于 SparseEngine 增强。H2O 论文
 > 则定义了跨连续 decode step 的动态保留策略。SparseEngine 对中间 chunk 的 H2O
 > 压缩是自己提出的 prefill 扩展。最终 prompt 压缩虽然发生在 final-prefill boundary，
 > 但它准备的是生成阶段消费的短 cache，因此属于 decode contract。可选的在线评分更新

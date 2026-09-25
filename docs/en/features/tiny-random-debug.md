@@ -47,7 +47,7 @@ Use the project-root uv environment:
 CUDA_VISIBLE_DEVICES=5,6 \
 PYTHONPATH="$PWD:$PWD/src" \
 .venv/bin/python scripts/benchmarks/bench_sparse_engine.py \
-  --model_path /data2/pretrain_models/Qwen3-8B \
+  --model_path <MODEL_ROOT>/Qwen3-8B \
   --lengths 128 \
   --batch_sizes 1 \
   --methods vanilla \
