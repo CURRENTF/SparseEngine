@@ -17,6 +17,7 @@ wandb/
 /benchmark/scbench/results/
 /reference/
 /benchmark/results/
+/benchmark/kernel_profiles/
 /dev_docs/
 docs/dev-notes/
 /scratch
