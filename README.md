@@ -201,3 +201,5 @@ This project is inspired by and/or references ideas and implementation technique
   year={2025}
 }
 ```
+
+If SparseEngine has helped you, please give it a [Star on GitHub](https://github.com/CURRENTF/SparseEngine); it means a lot to us.

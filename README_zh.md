@@ -170,3 +170,5 @@ pip install --no-build-isolation -e ".[deepepv1]"
   year={2025}
 }
 ```
+
+如果 SparseEngine 帮到了你，请在 [GitHub 点个 Star](https://github.com/CURRENTF/SparseEngine)，这对我们意义重大。
