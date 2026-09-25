@@ -148,7 +148,6 @@ class QuestPageScoreDispatch(TritonQuestPageScoreProvider):
             "tensorcore_rejection": self.tensorcore_rejection,
             "tensorcore_page_tile": 64,
             "tensorcore_dim_tile": self.tensorcore.block_dim,
-            "evidence": "benchmark/kernel_profiles/quest_qwen3_h100/README.md",
         }
 
     def score(self, query, page_max, page_min, page_table):
