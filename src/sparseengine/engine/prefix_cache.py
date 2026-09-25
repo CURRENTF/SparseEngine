@@ -826,9 +826,11 @@ class RadixPrefixIndex:
         self._clock = 0
         self._mutation_epoch = 0
         self._capacity_epoch = 0
+        self._resident_payload_epoch = 0
         self._lookup_epoch = 0
         self._insert_epoch = 0
         self._remove_epoch = 0
+        self._removed_block_ids_for_capacity: set[bytes] | None = set()
         self._freeable_cache_epoch = -1
         self._freeable_block_ids_cache: frozenset[bytes] = frozenset()
         self._freeable_ids: set[bytes] | None = None
@@ -890,12 +892,27 @@ class RadixPrefixIndex:
         return self._capacity_epoch
 
     @property
+    def resident_payload_epoch(self) -> int:
+        """Changes to existing blocks' device residency or physical payloads."""
+        return self._resident_payload_epoch
+
+    @property
     def insert_epoch(self) -> int:
         return self._insert_epoch
 
     @property
     def remove_epoch(self) -> int:
         return self._remove_epoch
+
+    def take_removed_block_ids_for_capacity(self) -> set[bytes] | None:
+        """Return removals since the last weighted capacity query.
+
+        None means the bounded journal overflowed and callers must rebuild.
+        """
+        removed = self._removed_block_ids_for_capacity
+        if removed is None or removed:
+            self._removed_block_ids_for_capacity = set()
+        return removed
 
     def _mark_mutated(self) -> None:
         self._mutation_epoch += 1
@@ -934,6 +951,7 @@ class RadixPrefixIndex:
             return
         for block in blocks:
             self._validate_indexed_block(block)
+        self._resident_payload_epoch += 1
         self._mark_capacity_mutated()
 
     def _mark_inserted(self, *, capacity_changed: bool) -> None:
@@ -944,8 +962,12 @@ class RadixPrefixIndex:
         else:
             self._mark_mutated()
 
-    def _mark_removed(self) -> None:
+    def _mark_removed(self, stable_block_id: bytes) -> None:
         self._remove_epoch += 1
+        if self._removed_block_ids_for_capacity is not None:
+            self._removed_block_ids_for_capacity.add(stable_block_id)
+            if len(self._removed_block_ids_for_capacity) > 4096:
+                self._removed_block_ids_for_capacity = None
         self._lookup_epoch += 1
         self._mark_capacity_mutated()
 
@@ -1296,6 +1318,7 @@ class RadixPrefixIndex:
                     "Prefix H2D promotion must preserve a device-resident path from the radix root."
                 )
         block.residency.device_present = True
+        self._resident_payload_epoch += 1
         block.residency.transfer = PrefixTransferKind.H2D
         block.residency.validate()
         self._refresh_freeable_path(block.stable_block_id)
@@ -1315,6 +1338,7 @@ class RadixPrefixIndex:
         if self.device_child_count(block.stable_block_id) != 0:
             raise RuntimeError("Cannot abort H2D while a device-resident child depends on the block.")
         block.residency.device_present = False
+        self._resident_payload_epoch += 1
         block.residency.transfer = None
         block.residency.validate()
         self._refresh_freeable_path(block.stable_block_id)
@@ -1506,6 +1530,7 @@ class RadixPrefixIndex:
                     f"block={block.stable_block_id.hex()[:16]} weight={weight}."
                 )
             block.residency.device_present = False
+            self._resident_payload_epoch += 1
             block.residency.validate()
             demoted.append(block)
             demoted_weight += weight
@@ -1671,7 +1696,7 @@ class RadixPrefixIndex:
                 self._blocked_freeable_children[block.parent_block_id] -= 1
                 self._refresh_freeable_path(block.parent_block_id)
         self._record_routing_remove(stable_block_id)
-        self._mark_removed()
+        self._mark_removed(stable_block_id)
         return block
 
     def rollback_inserted_leaf(self, block: PrefixCacheBlock) -> None:

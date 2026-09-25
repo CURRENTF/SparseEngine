@@ -226,9 +226,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         self.seq_id_to_cached_pages: dict[int, set[int]] = {}
         self._scheduler_capacity_snapshot_depth = 0
         self._scheduler_freeable_block_ids: frozenset[bytes] | None = None
-        self._prefix_resident_pages_cache: tuple[
-            RadixPrefixIndex, int, dict[int, tuple[frozenset[bytes], int]]
-        ] | None = None
         self._scheduler_reclaimable_pages: int | None = None
         self._prefill_metadata_full_pages = False
 
@@ -550,28 +547,15 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             if self._prefix_offload_enabled()
             else self._prefix_freeable_block_ids_for_capacity()
         )
-        return int(self._prefix_resident_pages_for_ids(block_ids) * self.page_size)
+        return int(self._prefix_resident_pages_for_ids(block_ids, view="evictable") * self.page_size)
 
-    def _prefix_resident_pages_for_ids(self, block_ids: frozenset[bytes]) -> int:
-        if self.prefix_cache is None:
-            return 0
-        cache = getattr(self, "_prefix_resident_pages_cache", None)
-        epoch = self.prefix_cache.capacity_epoch
-        if cache is None or cache[0] is not self.prefix_cache or cache[1] != epoch:
-            cache = (self.prefix_cache, epoch, {})
-            self._prefix_resident_pages_cache = cache
-        totals = cache[2]
-        key = id(block_ids)
-        if key in totals:
-            return totals[key][1]
-        total = sum(
-            self._quest_payload(block).resident_tokens(self.page_size) // self.page_size
-            for block_id in block_ids
-            if (block := self.prefix_cache.get_block(block_id)) is not None
-            and block.residency.device_present
-        )
-        totals[key] = (block_ids, int(total))
-        return int(total)
+    def _prefix_resident_pages_for_ids(
+        self, block_ids: frozenset[bytes], *, view: str = "explicit"
+    ) -> int:
+        return self._prefix_resident_weight_for_ids(block_ids, view=view)
+
+    def _prefix_block_capacity_weight(self, block: PrefixCacheBlock) -> int:
+        return self._quest_payload(block).resident_tokens(self.page_size) // self.page_size
 
     def _prefix_freeable_block_ids_for_capacity(self) -> frozenset[bytes]:
         if self.prefix_cache is None:
@@ -610,7 +594,7 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             if self._prefix_offload_enabled()
             else self._prefix_freeable_block_ids_for_capacity()
         )
-        reclaimable_pages = self._prefix_resident_pages_for_ids(block_ids)
+        reclaimable_pages = self._prefix_resident_pages_for_ids(block_ids, view="reclaimable")
         if self._scheduler_capacity_snapshot_depth > 0:
             self._scheduler_reclaimable_pages = reclaimable_pages
         return int(reclaimable_pages)
@@ -1607,7 +1591,7 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         getattr(self, "_prefix_write_through_candidates", {}).clear()
 
     def _on_prefix_cache_reset(self) -> None:
-        self._prefix_resident_pages_cache = None
+        self._prefix_resident_weight_cache = None
         controller = getattr(self, "prefix_offload_controller", None)
         if controller is not None:
             controller.prefix_cache = self._require_prefix_cache()

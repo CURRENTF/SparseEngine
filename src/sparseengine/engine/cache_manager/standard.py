@@ -161,9 +161,6 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
         self.seq_id_to_cached_ranges: dict[int, list[tuple[int, int]]] = {}
         self._scheduler_capacity_snapshot_depth = 0
         self._scheduler_freeable_block_ids: frozenset[bytes] | None = None
-        self._prefix_resident_slots_cache: tuple[
-            RadixPrefixIndex, int, dict[int, tuple[frozenset[bytes], int]]
-        ] | None = None
         self._scheduler_reclaimable_slots: int | None = None
         self._init_prefix_cache_runtime()
         self.prefix_offload_controller: PrefixOffloadController | None = None
@@ -561,34 +558,15 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
             if self._prefix_offload_enabled()
             else self._prefix_freeable_block_ids_for_capacity()
         )
-        return self._prefix_resident_slots_for_ids(block_ids)
+        return self._prefix_resident_slots_for_ids(block_ids, view="evictable")
 
-    def _prefix_resident_slots_for_ids(self, block_ids: frozenset[bytes]) -> int:
-        if self.prefix_cache is None:
-            return 0
-        # Index capacity epochs cover membership, references, priority,
-        # transfers and payload compaction. Keep weighted totals across
-        # scheduler passes as well as the index's immutable ID sets.
-        cache = getattr(self, "_prefix_resident_slots_cache", None)
-        epoch = self.prefix_cache.capacity_epoch
-        if cache is None or cache[0] is not self.prefix_cache or cache[1] != epoch:
-            cache = (self.prefix_cache, epoch, {})
-            self._prefix_resident_slots_cache = cache
-        totals = cache[2]
-        # The index reuses these immutable sets within an epoch. Identity keys
-        # avoid linear equality checks between equal offload capacity views;
-        # retaining each set prevents object-ID reuse while it is cached.
-        key = id(block_ids)
-        if key in totals:
-            return totals[key][1]
-        total = 0
-        for block_id in block_ids:
-            block = self.prefix_cache.get_block(block_id)
-            if block is None or not block.residency.device_present:
-                continue
-            total += self._block_resident_tokens_or_full(block)
-        totals[key] = (block_ids, int(total))
-        return int(total)
+    def _prefix_resident_slots_for_ids(
+        self, block_ids: frozenset[bytes], *, view: str = "explicit"
+    ) -> int:
+        return self._prefix_resident_weight_for_ids(block_ids, view=view)
+
+    def _prefix_block_capacity_weight(self, block: PrefixCacheBlock) -> int:
+        return self._block_resident_tokens_or_full(block)
 
     def _prefix_freeable_block_ids_for_capacity(self) -> frozenset[bytes]:
         if self.prefix_cache is None:
@@ -629,7 +607,7 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
             if self._prefix_offload_enabled()
             else self._prefix_freeable_block_ids_for_capacity()
         )
-        reclaimable_slots = self._prefix_resident_slots_for_ids(block_ids)
+        reclaimable_slots = self._prefix_resident_slots_for_ids(block_ids, view="reclaimable")
         if self._scheduler_capacity_snapshot_depth > 0:
             self._scheduler_reclaimable_slots = reclaimable_slots
         return reclaimable_slots
@@ -641,7 +619,7 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
         ):
             return 0
         return self._prefix_resident_slots_for_ids(
-            self.prefix_cache.evictable_block_ids()
+            self.prefix_cache.evictable_block_ids(), view="immediate"
         )
 
     def prefill_step_free_slots(self) -> int:
@@ -1472,7 +1450,7 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
         getattr(self, "_prefix_write_through_candidates", {}).clear()
 
     def _on_prefix_cache_reset(self) -> None:
-        self._prefix_resident_slots_cache = None
+        self._prefix_resident_weight_cache = None
         controller = getattr(self, "prefix_offload_controller", None)
         if controller is not None:
             controller.prefix_cache = self._require_prefix_cache()

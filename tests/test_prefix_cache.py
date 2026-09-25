@@ -666,7 +666,6 @@ def _make_quest_manager_for_prefix(page_size=2):
     manager.seq_id_to_cached_pages = {}
     manager._scheduler_capacity_snapshot_depth = 0
     manager._scheduler_freeable_block_ids = None
-    manager._prefix_resident_pages_cache = None
     manager._scheduler_reclaimable_pages = None
     manager.prefix_offload_controller = None
     manager._prefix_offload_step_h2d_operations = {}
@@ -2924,6 +2923,83 @@ def test_standard_capacity_reuses_weights_across_passes_and_invalidates_compacti
         assert manager.prompt_admission_free_slots() == 94
 
 
+def test_standard_capacity_membership_changes_reuse_unchanged_payload_weights():
+    manager = _make_standard_manager_for_prefix(block_size=2)
+    index = manager.prefix_cache
+    first_id = _insert_tokens(index, [1, 2])
+    first = index.get_block(first_id)
+    with patch.object(manager, "_block_resident_tokens_or_full",
+                      wraps=manager._block_resident_tokens_or_full) as weight:
+        assert manager.prompt_admission_free_slots() == 92
+        for _ in range(3):
+            index.acquire_block_ref(first)
+            assert manager.prompt_admission_free_slots() == 90
+            index.release_block_ref(first)
+            assert manager.prompt_admission_free_slots() == 92
+        assert weight.call_count == 1
+        _insert_tokens(index, [3, 4])
+        assert manager.prompt_admission_free_slots() == 94
+        assert weight.call_count == 2
+
+
+def test_standard_capacity_deletion_keeps_surviving_payload_weights():
+    manager = _make_standard_manager_for_prefix(block_size=2)
+    index = manager.prefix_cache
+    _insert_tokens(index, [1, 2])
+    _insert_tokens(index, [3, 4])
+    with patch.object(manager, "_block_resident_tokens_or_full",
+                      wraps=manager._block_resident_tokens_or_full) as weight:
+        assert manager.prompt_admission_free_slots() == 94
+        assert weight.call_count == 2
+
+        evicted = index.evict_until_freeable(1)
+        assert len(evicted) == 1
+        assert manager.prompt_admission_free_slots() == 92
+        assert weight.call_count == 2
+
+        block_id = _insert_tokens(index, list(evicted[0].token_ids))
+        assert block_id == evicted[0].stable_block_id
+        index.get_block(block_id).payload = StandardPrefixBlockPayload(
+            token_slots=torch.tensor([10], dtype=torch.int32), retained_offsets=(0,)
+        )
+        assert manager.prompt_admission_free_slots() == 93
+        assert weight.call_count == 3
+
+
+def test_standard_cached_weights_follow_residency_and_transfer_rollback():
+    manager = _make_standard_manager_for_prefix(block_size=2)
+    index = manager.prefix_cache
+    block_id = _insert_tokens(index, [1, 2])
+    block = index.get_block(block_id)
+    ids = frozenset({block_id})
+    assert manager._prefix_resident_slots_for_ids(ids) == 2
+    index.begin_d2h(block)
+    index.finish_d2h(block)
+    assert index.demote_device_until_freeable(1) == [block]
+    assert manager._prefix_resident_slots_for_ids(ids) == 0
+    index.begin_h2d(block)
+    assert manager._prefix_resident_slots_for_ids(ids) == 2
+    index.abort_h2d(block)
+    assert manager._prefix_resident_slots_for_ids(ids) == 0
+    index.begin_h2d(block)
+    index.finish_h2d(block)
+    assert manager._prefix_resident_slots_for_ids(ids) == 2
+
+
+def test_standard_cached_weights_refresh_reinserted_stable_id():
+    manager = _make_standard_manager_for_prefix(block_size=2)
+    index = manager.prefix_cache
+    block_id = _insert_tokens(index, [1, 2])
+    assert manager.prompt_admission_free_slots() == 92
+    index.evict_until_freeable(1)
+    assert _insert_tokens(index, [1, 2]) == block_id
+    index.get_block(block_id).payload = StandardPrefixBlockPayload(
+        token_slots=torch.tensor([10], dtype=torch.int32), retained_offsets=(0,)
+    )
+    # No intermediate capacity query between deletion and reinsertion.
+    assert manager.prompt_admission_free_slots() == 91
+
+
 def test_standard_capacity_cache_does_not_cross_index_replacement():
     # Equal epochs and IDs in a rebuilt index do not imply equal payload sizes.
     manager = _make_standard_manager_for_prefix(block_size=2)
@@ -4570,3 +4646,47 @@ def test_deltakv_staging_overflow_does_not_claim_row_or_advance_cursor(staging_c
     assert list(manager.free_rows) == [0]
     assert manager._deltakv_less_memory_full_prefill_staging_offset == 0
     assert torch.all(manager.full_layer_slots_map == -1)
+
+
+def test_standard_old_capacity_view_does_not_cache_absent_block_weight():
+    manager = _make_standard_manager_for_prefix(block_size=2)
+    index = manager.prefix_cache
+    block_id = _insert_tokens(index, [1, 2])
+    snapshot = index.freeable_block_ids()
+    assert manager._prefix_resident_slots_for_ids(snapshot) == 2
+    index.evict_until_freeable(1)
+    assert manager._prefix_resident_slots_for_ids(snapshot) == 0
+    assert _insert_tokens(index, [1, 2]) == block_id
+    assert manager._prefix_resident_slots_for_ids(snapshot) == 2
+
+
+def test_quest_capacity_reuses_weights_across_reference_changes():
+    manager = _make_quest_manager_for_prefix(page_size=2)
+    index = manager.prefix_cache
+    block_id = index.stable_block_id([1, 2], None)
+    block = PrefixCacheBlock(
+        stable_block_id=block_id, parent_block_id=None, block_size=2,
+        logical_block_idx=0, token_ids=(1, 2),
+        payload=QuestPrefixBlockPayload(
+            block_slot=3, token_slots=torch.tensor([6, 7], dtype=torch.int32),
+        ),
+    )
+    index.insert_block(block)
+    with patch.object(manager, "_prefix_block_capacity_weight",
+                      wraps=manager._prefix_block_capacity_weight) as weight:
+        assert manager._prefix_evictable_slots() == 2
+        for _ in range(3):
+            index.acquire_block_ref(block)
+            assert manager._prefix_evictable_slots() == 0
+            index.release_block_ref(block)
+            assert manager._prefix_evictable_slots() == 2
+        assert weight.call_count == 1
+        assert manager._prefix_step_reclaimable_pages() == 1
+        assert weight.call_count == 1
+    index.begin_d2h(block)
+    index.finish_d2h(block)
+    index.demote_device_until_freeable(1)
+    assert manager._prefix_evictable_slots() == 0
+    index.begin_h2d(block)
+    index.finish_h2d(block)
+    assert manager._prefix_evictable_slots() == 2
