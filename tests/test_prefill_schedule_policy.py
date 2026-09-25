@@ -919,10 +919,42 @@ class PrefillPolicyConfigTest(unittest.TestCase):
         for max_decoding_seqs in (64, 80, 128, 256, 1024):
             with self.subTest(max_decoding_seqs=max_decoding_seqs):
                 sizes = _default_decode_cuda_graph_capture_sizes(max_decoding_seqs)
-                self.assertLessEqual(len(sizes), 32)
+                self.assertEqual(len(sizes), 32)
                 self.assertEqual(sizes[:8], list(range(1, 9)))
                 self.assertEqual(sizes[-1], max_decoding_seqs)
                 self.assertEqual(sizes, sorted(set(sizes)))
+
+    def test_decode_cuda_graph_auto_plan_uses_full_budget_and_prioritizes_small_batches(self):
+        self.assertEqual(_default_decode_cuda_graph_capture_sizes(16), list(range(1, 17)))
+        self.assertEqual(_default_decode_cuda_graph_capture_sizes(32), list(range(1, 33)))
+        self.assertEqual(
+            _default_decode_cuda_graph_capture_sizes(48),
+            list(range(1, 17)) + list(range(18, 49, 2)),
+        )
+        self.assertEqual(
+            _default_decode_cuda_graph_capture_sizes(64),
+            list(range(1, 17)) + list(range(19, 65, 3)),
+        )
+        self.assertEqual(
+            _default_decode_cuda_graph_capture_sizes(128),
+            list(range(1, 9)) + list(range(13, 129, 5)),
+        )
+
+    def test_decode_cuda_graph_auto_plan_respects_custom_capture_budget(self):
+        for limit in (1, 4, 16, 48):
+            with self.subTest(limit=limit):
+                sizes = _default_decode_cuda_graph_capture_sizes(64, limit)
+                self.assertEqual(len(sizes), limit)
+                self.assertEqual(sizes[-1], 64)
+                self.assertEqual(sizes, sorted(set(sizes)))
+
+        cfg = self.make_config(
+            sparse_method="omnikv",
+            decode_graph=True,
+            max_decoding_seqs=64,
+            decode_graph_startup_capture_limit=16,
+        )
+        self.assertEqual(len(cfg.decode_graph_capture_sizes), 16)
 
     def test_decode_static_batch_capacity_uses_reachable_padding_bucket(self):
         cases = (
