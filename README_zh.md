@@ -19,10 +19,6 @@ H100 80GB，128K 输入 / 2K 输出。从上到下依次展示：各方法最大
 
 SparseEngine 是一个从设计之初就以稀疏性为核心原则的推理框架。它并非简单地在传统 KV 缓存之上叠加稀疏方法，而是重新设计缓存布局、控制流程和内核，使多种稀疏机制能够清晰地接入框架。
 
-> **说明：** DeltaKV 压缩器训练代码由独立仓库维护。本仓库仅保留
-> `src/sparseengine/` 下的原生 DeltaKV 推理实现，不包含 DeltaKV 训练代码或
-> Hugging Face reference implementation。
-
 ## 核心运行原则
 
 - `LLM(...)`、`Config`、JSON 配置、benchmark manifest 与内部代码使用完全相同的 runtime 参数名。统一使用 `sparse_method`；旧字段 alias 不再接受。

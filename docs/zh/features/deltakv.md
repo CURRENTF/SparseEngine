@@ -1,7 +1,6 @@
 # DeltaKV
 
-DeltaKV 为长上下文推理压缩 KV cache。本仓库只包含原生 SparseEngine
-inference path 和原生 benchmark 集成。
+DeltaKV 为长上下文推理压缩 KV cache。
 
 ## 推理
 
@@ -43,10 +42,6 @@ python scripts/benchmarks/bench_sparse_engine.py \
   --hyper_params '{"gpu_memory_utilization":0.9,"engine_prefill_chunk_size":512,"max_num_seqs_in_batch":2,"max_decoding_seqs":2,"max_num_batched_tokens":2048,"full_attention_layers":"0,1","sink_keep_tokens":4,"recent_keep_tokens":32,"decode_keep_tokens":64,"deltakv_checkpoint_path":"<COMPRESSOR_ROOT>/Qwen2.5-7B-Instruct-1M-Compressor","deltakv_center_ratio":0.1,"deltakv_neighbor_count":1,"deltakv_latent_dim":256,"deltakv_latent_quant_bits":4,"full_layer_kv_quant_bits":4,"enable_full_layer_kivi_quant":true,"deltakv_full_pool_reserve_ratio":0.2}'
 ```
 
-## Compressor 训练
-
-Compressor 训练代码不包含在本仓库中；SparseEngine 仅消费兼容 checkpoint，用于推理和 benchmark。
-
 ## 在 LongBench 上评估
 
 `benchmark/long_bench/pred.py` 运行 LongBench prediction，并将 JSONL 输出写入本地 output directory。
@@ -71,7 +66,6 @@ python benchmark/long_bench/pred.py \
 
 ## Checkpoint
 
-- 公开 compressor checkpoint 列在[快速开始](../getting_started/README.md#deltakv-checkpoint)中。
 - `deltakv_checkpoint_path` 可以指向本地目录或单个 checkpoint 文件。
 - loader 优先扫描 `*.safetensors`，随后扫描 `*.bin` 和 `*.pt`。
 - SparseEngine loader 不支持 split-KV checkpoint（`k_compress_*` / `v_compress_*`）。

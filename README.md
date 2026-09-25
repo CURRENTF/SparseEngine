@@ -20,10 +20,6 @@ at the same concurrency, with vLLM at 0%. Ours denotes SparseEngine.
 
 SparseEngine is an inference framework built with sparsity as the first design principle. Instead of layering sparse methods on top of a conventional KV cache, it rethinks cache layout, controller flow, and kernels so that multiple sparse mechanisms can plug in cleanly.
 
-> **Note:** DeltaKV compressor training code is maintained separately. This repository only
-> keeps the native DeltaKV inference implementation under `src/sparseengine/`;
-> it does not include DeltaKV training code or an HF reference implementation.
-
 ## Key Runtime Principles
 
 - Runtime parameter names are identical across `LLM(...)`, `Config`, JSON
