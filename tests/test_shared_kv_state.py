@@ -28,3 +28,17 @@ def test_bounded_prefix_window_and_carry_copy_matches_accounting():
     with pytest.raises(ValueError, match="not owned"):
         pool.release(prefix)
     assert pool.num_free_rows == 2
+
+
+
+def test_mutable_rows_bind_reserved_pages_without_duplicating_windows():
+    # Two page-64 blocks have the same byte size as one page-128 window row.
+    page_bytes = ((584*64+575)//576)*576
+    arena = torch.ones(8, page_bytes, dtype=torch.uint8)
+    windows = arena[:6].view(3, 2*page_bytes)
+    pool = SharedKVStateRows(num_rows=3, reserved_rows=1, compress_ratios=(0,),
+                            device=torch.device("cpu"), window_storage={0: windows})
+    row = pool.allocate()
+    assert pool.windows[0].data_ptr() == arena.data_ptr()
+    assert not bool(arena[row*2:row*2+2].any())
+    assert bool(arena[6:].all())

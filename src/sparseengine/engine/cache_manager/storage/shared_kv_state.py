@@ -26,7 +26,7 @@ class SharedKVStateRows:
         return len(ratios)*window_bytes + carry_bytes + index_bytes
 
     def __init__(self, *, num_rows, reserved_rows, compress_ratios, device,
-                 window_size=128, with_index=True):
+                 window_size=128, with_index=True, window_storage=None):
         self.row_bytes = self.bytes_per_row(compress_ratios, window_size=window_size,
                                           with_index=with_index)
         if not 0 <= reserved_rows < num_rows:
@@ -35,8 +35,17 @@ class SharedKVStateRows:
         self.reserved_rows = reserved_rows
         self.window_size = window_size
         window_bytes = ((584*window_size+575)//576)*576
-        self.windows = {layer: torch.zeros(num_rows, window_bytes, dtype=torch.uint8, device=device)
-                        for layer in range(len(compress_ratios))}
+        if window_storage is None:
+            self.windows = {layer: torch.zeros(num_rows, window_bytes, dtype=torch.uint8, device=device)
+                            for layer in range(len(compress_ratios))}
+        else:
+            self.windows = dict(window_storage)
+            if set(self.windows) != set(range(len(compress_ratios))):
+                raise ValueError("Window storage must cover every shared KV layer")
+            for tensor in self.windows.values():
+                if (tensor.shape != (num_rows, window_bytes) or tensor.dtype != torch.uint8
+                        or tensor.device != torch.device(device) or not tensor.is_contiguous()):
+                    raise ValueError("Bound window storage differs from the mutable-row contract")
         self.carry = {layer: CompressionStatePool(num_rows=num_rows, ratio=ratio, head_dim=512,
                                                  device=device)
                       for layer, ratio in enumerate(compress_ratios) if ratio}
