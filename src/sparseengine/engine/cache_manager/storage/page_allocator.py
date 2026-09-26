@@ -42,6 +42,10 @@ class PhysicalPageAllocator:
                 raise ValueError(f"Physical page {page} is not allocated")
         return counts
 
+    def reference_count(self, page: int) -> int:
+        self._counts((page,))
+        return self._references[page]
+
     def retain_pages(self, pages):
         for page, count in self._counts(pages).items():
             self._references[page] += count
