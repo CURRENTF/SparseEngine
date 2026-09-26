@@ -52,8 +52,7 @@ SparseEngine is an inference framework built with sparsity as the first design p
 ## Core Sparse Methods
 
 SparseEngine supports physical eviction, logical masking, query-aware selection,
-and KV compression. The main method families are `streamingllm`,
-`snapkv`, `h2o`, `pyramidkv`, `omnikv`, `quest`, `retroinfer`, and `deltakv`.
+and KV compression. The table below lists all registered cache/decode methods.
 
 | Method | Type | Short Description |
 | --- | --- | --- |
@@ -65,10 +64,15 @@ and KV compression. The main method families are `streamingllm`,
 | `quest` | Query-aware selection | Uses decode-time query-aware page selection while keeping prefill dense. |
 | `retroinfer` | Query-aware cluster retrieval | Experimental GPU-only method that keeps full KV on GPU, reads top clusters exactly, and estimates the next ranked clusters. |
 | `deltakv` / `deltakv-*` | Hybrid compression | Keeps a small full-precision pool and stores older context through DeltaKV compression or related ablations. |
+| `kvzip` | Physical eviction | Scores context reconstruction, then selects and compacts prompt KV after prefill, sharing retained token positions across layers and heads. |
+| `rkv` | Physical eviction | Scores attention importance and KV redundancy jointly, sharing token selection across layers and periodically compacting KV. |
+| `skipkv` | Selective KV storage | Compresses prompt KV with SnapKV, then skips or removes selected KV during generation based on non-execution markers or sentence redundancy. |
+| `palu` | Low-rank KV compression | Keeps all tokens using offline-calibrated low-rank K/V factors, with fused reconstruction during decode. |
+| `kivi` | KV quantization | Keeps all tokens with asymmetric integer quantization of K per channel and V per within-token channel group; currently experimental. |
+| `turboquant` | KV quantization | Keeps all tokens with fixed-seed orthogonal rotation and non-uniform scalar quantization of KV; currently experimental. |
+| `fp8_kv` | KV quantization | Keeps all tokens in E4M3, with separate dynamic K/V scales per token and KV head. |
 
-Other registered cache methods include `kvzip`, `rkv`, `skipkv`, `palu`, and
-quantized KV (`kivi`, `turboquant`, `fp8_kv`). Their model, checkpoint, and
-runtime restrictions differ; see [Supported Models](docs/en/features/supported-models.md),
+Model, checkpoint, and runtime restrictions differ across methods; see
 [Core Sparse Methods](docs/en/features/sparse-methods.md),
 [Palu](docs/en/features/palu.md), and
 [Quantized KV Cache](docs/en/features/quantized-kv.md).
