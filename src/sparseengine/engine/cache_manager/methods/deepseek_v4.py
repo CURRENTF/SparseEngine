@@ -401,6 +401,27 @@ class DeepSeekV4CacheManager(CacheManager):
     def free_part_slots(self, layer_idx, seq, keep_indices):
         raise TypeError("Native shared KV does not prune its physical compression history")
 
+    def prefix_cache_match(self, token_ids):
+        token_ids = [int(token) for token in token_ids]
+        usable = usable_prefix_cache_tokens(len(token_ids), self.prefix_cache_block_size)
+        hit, last, blocks = (0, None, 0)
+        if self.prefix_cache is not None:
+            hit, last, blocks = self.prefix_cache.match_longest_prefix(
+                token_ids, max_usable_tokens=usable)
+        return {
+            "supported": True,
+            "enabled": self.prefix_cache is not None,
+            "method": "deepseek_v4",
+            "block_size": self.prefix_cache_block_size,
+            "prompt_tokens": len(token_ids),
+            "usable_tokens": usable,
+            "matched_tokens": hit,
+            "matched_blocks": blocks,
+            "match_ratio": 0.0 if usable <= 0 else hit / usable,
+            "last_block_id": None if last is None else last.hex(),
+            "live_blocks": 0 if self.prefix_cache is None else len(self.prefix_cache),
+        }
+
     def refresh_prefix_cache_hit(self, seq):
         self.clear_prefix_cache_hit(seq)
         seq.prefix_cache_enabled = self.enable_prefix_caching

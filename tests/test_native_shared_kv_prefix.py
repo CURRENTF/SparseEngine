@@ -88,3 +88,21 @@ def test_decode_reservation_counts_shared_tail_copy_only_when_group_publishes():
     assert cache.prefill_capacity_after_decode_reservations(
         free, {"ratio_4": 1}, admission=False) == free-cache.page_size*4
     cache.free_seq(seq.seq_id)
+
+
+def test_native_prefix_match_reports_only_published_reusable_tokens():
+    cache, seq = native_prefix_owner()
+    assert cache.prefix_cache_match(seq.token_ids)["matched_tokens"] == 0
+    cache._freeze_prefix_snapshot(seq)
+    assert cache.prefix_cache_match(seq.token_ids)["matched_tokens"] == 0
+    retired_seq, tokens, record = cache._async_prefix_records[0]
+    cache._record_frozen_prefix_materialization(retired_seq, tokens, record)
+    cache.publish_pending_prefix_blocks([seq])
+    result = cache.prefix_cache_match(seq.token_ids)
+    assert result["supported"] and result["enabled"]
+    assert result["matched_tokens"] == 16
+    assert result["matched_blocks"] == 1
+    assert result["match_ratio"] == 1.0
+    cache.free_seq(seq.seq_id)
+    cache.reset_prefix_cache()
+    assert cache.prefix_cache_match(seq.token_ids)["matched_tokens"] == 0
