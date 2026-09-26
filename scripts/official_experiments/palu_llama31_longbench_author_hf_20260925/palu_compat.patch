@@ -1,0 +1,55 @@
+diff --git a/palu/model/modules/svd_linear.py b/palu/model/modules/svd_linear.py
+index 64372d4..a090b05 100644
+--- a/palu/model/modules/svd_linear.py
++++ b/palu/model/modules/svd_linear.py
+@@ -1,7 +1,6 @@
+ import torch
+ import torch.nn as nn
+ from .quant import Quantizer
+-from .hadamard_utils import apply_hadamard
+ 
+ def _per_head_whiten_decomposition_from_weight(weight, scaling_diag_matrix, rank):
+     original_dtype = weight.dtype
+@@ -154,6 +153,7 @@ class HeadwiseLowRankModule(nn.Module):
+     
+     
+     def fused_hadamard_matrix(self):
++        from .hadamard_utils import apply_hadamard
+         total_ranks = 0
+         for i in range(self.num_groups):
+             # Apply Q to VT
+@@ -233,4 +233,4 @@ class HeadwiseLowRankModule(nn.Module):
+         assert new_module.VT.weight.data.shape == VT_weight.shape
+         new_module.VT.weight.data = VT_weight
+         
+-        return new_module
+\ No newline at end of file
++        return new_module
+diff --git a/palu/model/svd_llama/configuration_palu_llama.py b/palu/model/svd_llama/configuration_palu_llama.py
+index b33104b..47d9a06 100644
+--- a/palu/model/svd_llama/configuration_palu_llama.py
++++ b/palu/model/svd_llama/configuration_palu_llama.py
+@@ -1,4 +1,5 @@
+ from transformers.configuration_utils import PretrainedConfig
++from transformers.modeling_rope_utils import rope_config_validation
+ from transformers.utils import logging
+ 
+ logger = logging.get_logger(__name__)
+@@ -151,6 +152,10 @@ class PaluLlamaConfig(PretrainedConfig):
+         if self.rope_scaling is None:
+             return
+ 
++        if isinstance(self.rope_scaling, dict) and self.rope_scaling.get("rope_type") == "llama3":
++            rope_config_validation(self)
++            return
++
+         if not isinstance(self.rope_scaling, dict) or len(self.rope_scaling) != 2:
+             raise ValueError(
+                 "`rope_scaling` must be a dictionary with with two fields, `type` and `factor`, "
+@@ -163,4 +168,4 @@ class PaluLlamaConfig(PretrainedConfig):
+                 f"`rope_scaling`'s type field must be one of ['linear', 'dynamic'], got {rope_scaling_type}"
+             )
+         if rope_scaling_factor is None or not isinstance(rope_scaling_factor, float) or rope_scaling_factor <= 1.0:
+-            raise ValueError(f"`rope_scaling`'s factor field must be a float > 1, got {rope_scaling_factor}")
+\ No newline at end of file
++            raise ValueError(f"`rope_scaling`'s factor field must be a float > 1, got {rope_scaling_factor}")

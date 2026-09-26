@@ -1,0 +1,227 @@
+{
+  "date": "2026-09-26",
+  "model": "GLM-4.7-Flash-FP8",
+  "hardware": "8 x NVIDIA GeForce RTX 4090 (48 GiB)",
+  "code_base_commit": "7b32be0fa67fc06d0df8bfabab5a2700f8825591",
+  "topology": "8 independent TP1/EP1/DP1 workers; total DP8",
+  "methods": {
+    "streamingllm": {
+      "runtime": {
+        "sparse_method": "streamingllm",
+        "sink_keep_tokens": 8,
+        "recent_keep_tokens": 4096,
+        "decode_keep_tokens": 0,
+        "tensor_parallel_size": 1,
+        "expert_parallel_size": 1,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.9,
+        "engine_prefill_chunk_size": 4096,
+        "max_num_batched_tokens": 32768,
+        "max_num_seqs_in_batch": 16,
+        "max_decoding_seqs": 16,
+        "decode_graph": false,
+        "enable_prefix_caching": false,
+        "max_model_len": 131072
+      },
+      "longbench_v1": {
+        "status": "success",
+        "samples": 3750,
+        "overall_category_avg": 48.18,
+        "category_scores": {
+          "SDQA": 34.68,
+          "MDQA": 41.67,
+          "SUM": 26.4,
+          "FewShot": 69.2,
+          "Syn": 53.0,
+          "Code": 64.12
+        }
+      },
+      "longbench_v2": {
+        "status": "success",
+        "samples": 503,
+        "successful_samples": 501,
+        "parse_failed_samples": 2,
+        "failed_samples": 0,
+        "correct": 163,
+        "accuracy": 32.40556660039761,
+        "by_domain": {
+          "Code Repository Understanding": {
+            "samples": 50,
+            "correct": 16,
+            "accuracy": 32.0
+          },
+          "Long In-context Learning": {
+            "samples": 81,
+            "correct": 28,
+            "accuracy": 34.5679012345679
+          },
+          "Long Structured Data Understanding": {
+            "samples": 33,
+            "correct": 10,
+            "accuracy": 30.303030303030305
+          },
+          "Long-dialogue History Understanding": {
+            "samples": 39,
+            "correct": 9,
+            "accuracy": 23.076923076923077
+          },
+          "Multi-Document QA": {
+            "samples": 125,
+            "correct": 40,
+            "accuracy": 32.0
+          },
+          "Single-Document QA": {
+            "samples": 175,
+            "correct": 60,
+            "accuracy": 34.285714285714285
+          }
+        },
+        "by_official_length": {
+          "long": {
+            "samples": 108,
+            "correct": 29,
+            "accuracy": 26.85185185185185
+          },
+          "medium": {
+            "samples": 215,
+            "correct": 61,
+            "accuracy": 28.372093023255815
+          },
+          "short": {
+            "samples": 180,
+            "correct": 73,
+            "accuracy": 40.55555555555556
+          }
+        },
+        "by_difficulty": {
+          "easy": {
+            "samples": 192,
+            "correct": 64,
+            "accuracy": 33.333333333333336
+          },
+          "hard": {
+            "samples": 311,
+            "correct": 99,
+            "accuracy": 31.832797427652732
+          }
+        }
+      },
+      "raw_artifacts": {
+        "v1": "/root/autodl-fs/outputs/Sparse-vLLM/glm47-fp8-streamingllm-dp8-20260926/v1_full",
+        "v2": "/root/autodl-fs/outputs/Sparse-vLLM/glm47-fp8-streamingllm-dp8-20260926/combined"
+      }
+    },
+    "pyramidkv": {
+      "runtime": {
+        "sparse_method": "pyramidkv",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 4096,
+        "pyramidkv_start_layer": 0,
+        "pyramidkv_start_ratio": 0.6,
+        "pyramidkv_least_ratio": 0.01,
+        "observation_window_size": 32,
+        "sparse_prefill_score_mode": "probability",
+        "long_prefill_offload_threshold": 16384,
+        "tensor_parallel_size": 1,
+        "expert_parallel_size": 1,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.9,
+        "engine_prefill_chunk_size": 4096,
+        "max_num_batched_tokens": 32768,
+        "max_num_seqs_in_batch": 16,
+        "max_decoding_seqs": 16,
+        "decode_graph": false,
+        "enable_prefix_caching": false,
+        "max_model_len": 131072
+      },
+      "longbench_v1": {
+        "status": "success",
+        "samples": 3750,
+        "overall_category_avg": 49.91,
+        "category_scores": {
+          "SDQA": 39.14,
+          "MDQA": 46.37,
+          "SUM": 26.22,
+          "FewShot": 70.09,
+          "Syn": 53.0,
+          "Code": 64.64
+        }
+      },
+      "longbench_v2": {
+        "status": "success",
+        "samples": 503,
+        "successful_samples": 503,
+        "parse_failed_samples": 0,
+        "failed_samples": 0,
+        "correct": 159,
+        "accuracy": 31.610337972167,
+        "by_domain": {
+          "Code Repository Understanding": {
+            "samples": 50,
+            "correct": 18,
+            "accuracy": 36.0
+          },
+          "Long In-context Learning": {
+            "samples": 81,
+            "correct": 28,
+            "accuracy": 34.5679012345679
+          },
+          "Long Structured Data Understanding": {
+            "samples": 33,
+            "correct": 8,
+            "accuracy": 24.242424242424242
+          },
+          "Long-dialogue History Understanding": {
+            "samples": 39,
+            "correct": 10,
+            "accuracy": 25.641025641025642
+          },
+          "Multi-Document QA": {
+            "samples": 125,
+            "correct": 33,
+            "accuracy": 26.4
+          },
+          "Single-Document QA": {
+            "samples": 175,
+            "correct": 62,
+            "accuracy": 35.42857142857143
+          }
+        },
+        "by_official_length": {
+          "long": {
+            "samples": 108,
+            "correct": 28,
+            "accuracy": 25.925925925925927
+          },
+          "medium": {
+            "samples": 215,
+            "correct": 62,
+            "accuracy": 28.837209302325583
+          },
+          "short": {
+            "samples": 180,
+            "correct": 69,
+            "accuracy": 38.333333333333336
+          }
+        },
+        "by_difficulty": {
+          "easy": {
+            "samples": 192,
+            "correct": 60,
+            "accuracy": 31.25
+          },
+          "hard": {
+            "samples": 311,
+            "correct": 99,
+            "accuracy": 31.832797427652732
+          }
+        }
+      },
+      "raw_artifacts": {
+        "v1": "/root/autodl-fs/outputs/Sparse-vLLM/glm47-fp8-pyramidkv-mla-dp8-20260926/v1_full",
+        "v2": "/root/autodl-fs/outputs/Sparse-vLLM/glm47-fp8-pyramidkv-mla-dp8-20260926/combined"
+      }
+    }
+  }
+}

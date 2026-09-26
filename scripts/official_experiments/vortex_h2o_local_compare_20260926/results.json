@@ -1,0 +1,24 @@
+{
+  "status": "completed",
+  "date": "2026-09-26",
+  "device": "NVIDIA H100 80GB HBM3, physical GPU 4, TP1/EP1/DP1",
+  "native_git_commit": "7b32be0fa67fc06d0df8bfabab5a2700f8825591",
+  "vortex_git_commit": "c016fdfc871130481c76e3beead83e8c2b54cb99",
+  "model": "Qwen3-30B-A3B-Instruct-2507-FP8; BF16 KV",
+  "workload": "fixed batch 4; 32768 input tokens and 512 output tokens per request; seed 42; prefix cache off; one workload warmup and three measured workloads",
+  "metric": "mean output tokens divided by complete workload elapsed time, token/s",
+  "results": [
+    {"engine": "SparseEngine", "method": "vanilla", "mean": 221.5598, "sample_sd": 1.1110, "source_run": "native_vanilla_formal"},
+    {"engine": "SparseEngine", "method": "h2o", "mean": 295.8054, "sample_sd": 0.3657, "source_run": "native_h2o_formal"},
+    {"engine": "Vortex", "method": "paper_dense", "mean": 188.8124, "sample_sd": 0.1277, "source_run": "vortex_dense_formal"},
+    {"engine": "Vortex", "method": "paper_h2o", "mean": 79.3821, "sample_sd": 0.0776, "source_run": "vortex_paper_h2o_formal"}
+  ],
+  "validation": {
+    "measured_requests_per_case": 12,
+    "matched_prompt_digests_across_all_four_cases": 12,
+    "generated_tokens_per_request": 512,
+    "all_request_statuses": "success",
+    "new_graph_captures_during_measurement": 0,
+    "eager_decode_steps_during_measurement": 0
+  }
+}

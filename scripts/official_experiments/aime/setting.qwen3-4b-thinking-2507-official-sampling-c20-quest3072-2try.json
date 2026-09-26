@@ -1,0 +1,57 @@
+{
+  "protocol": "aime2024_pass1_qwen3_4b_thinking_official_sampling_2try_c20_quest3072_v1",
+  "model": "Qwen3-4B-Thinking-2507",
+  "engine": {
+    "tensor_parallel_size": 1,
+    "expert_parallel_size": 1,
+    "data_parallel_size": 1,
+    "gpu_memory_utilization": 0.95,
+    "max_model_len": 41984,
+    "max_num_seqs_in_batch": 20,
+    "max_decoding_seqs": 20,
+    "max_num_seqs_in_gpu": 20,
+    "decode_reservation_tokens": 1024,
+    "max_num_batched_tokens": 65536,
+    "engine_prefill_chunk_size": 4096,
+    "decode_graph": true,
+    "decode_graph_capture_sizes": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      20
+    ],
+    "sparse_attn_score_dtype": "float32",
+    "enable_prefix_cache_offload": false
+  },
+  "evaluation": {
+    "task": "aime2024",
+    "dataset": "Maxwell-Jia/AIME_2024",
+    "split": "train",
+    "expected_samples": 30,
+    "batch_size": 60,
+    "max_new_tokens": 40960,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0,
+    "seed": 42,
+    "enable_thinking": true,
+    "prompt_style": "deepseek",
+    "math_verify_version": "0.9.0",
+    "repetitions": 2
+  },
+  "methods": {
+    "quest": {
+      "sparse_method": "quest",
+      "enable_prefix_caching": false,
+      "prefix_cache_mode": "auto",
+      "sink_keep_tokens": 16,
+      "recent_keep_tokens": 64,
+      "decode_keep_tokens": 2992,
+      "quest_chunk_size": 16,
+      "quest_skip_layers": 2
+    }
+  }
+}

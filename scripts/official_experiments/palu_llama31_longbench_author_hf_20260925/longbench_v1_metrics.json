@@ -1,0 +1,34 @@
+{
+  "status": "success",
+  "samples": 3750,
+  "failed_samples": 0,
+  "task_scores": {
+    "narrativeqa": 22.64,
+    "qasper": 38.58,
+    "multifieldqa_en": 47.88,
+    "hotpotqa": 46.74,
+    "2wikimqa": 37.57,
+    "musique": 23.6,
+    "gov_report": 28.52,
+    "qmsum": 23.49,
+    "multi_news": 23.8,
+    "trec": 67.0,
+    "triviaqa": 88.24,
+    "samsum": 42.2,
+    "passage_count": 2.0,
+    "passage_retrieval_en": 92.0,
+    "lcc": 38.63,
+    "repobench-p": 39.7
+  },
+  "category_scores": {
+    "SDQA": 36.37,
+    "MDQA": 35.97,
+    "SUM": 25.27,
+    "FewShot": 65.81,
+    "Syn": 47.0,
+    "Code": 39.17
+  },
+  "overall_category_avg": 41.6,
+  "scorer_commit": "2e00731f8d0bff23dc4325161044d0ed8af94c1e",
+  "scorer_script_sha256": "5e609d3edc98bb2bc588fcb45117486652a8038f9590f9e973e01ad6cf30a2c5"
+}

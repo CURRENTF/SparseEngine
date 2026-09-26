@@ -1,0 +1,101 @@
+{
+  "experiment": "Qwen3-4B-Thinking-2507 AIME 2024 official sampling, 2 tries, C24 plus Vortex QuEST",
+  "model": "Qwen3-4B-Thinking-2507",
+  "sparseengine_git_commit": "7b32be0fa67fc06d0df8bfabab5a2700f8825591",
+  "vortex_git_commit": "ab9ac68c7b9b81f6ba17752741f9e9d92444bf56",
+  "setting_sha256": "fed60de78ab3fab3e0a7e29229dacee167e5af2d71aa5be0ab803a6690d43254",
+  "normalized_dataset_sha256": "bfe60715bc6fd32f1f6438c9a479cd5b6f4daaaa6aa6255b375b81a7ea84c136",
+  "vortex_inputs_sha256": "cb269f382ebd5fdded3d4fa8824611f0f68856d44ec2472462b2a3ce7ff35022",
+  "device": "NVIDIA H100 80GB HBM3",
+  "gpu_uuid": "GPU-566a0ffb-6f93-413f-cdf1-bab7f7acd20e",
+  "samples_per_method": 60,
+  "baseline": "vanilla",
+  "time_metric": "one blocking generation call for all 60 requests; excludes model startup, prompt assembly, and scoring",
+  "methods": {
+    "vanilla": {
+      "correct": 49,
+      "total": 60,
+      "trial_correct": [
+        26,
+        23
+      ],
+      "at_least_one_correct_per_problem": 26,
+      "status_counts": {
+        "success": 60
+      },
+      "engine": "SparseEngine",
+      "max_concurrency": 24,
+      "generation_elapsed_s": 1125.0257065538317,
+      "completion_tokens": 1166114,
+      "decode_graph_active": true,
+      "scheduler_recompute_preemptions_logged": 0,
+      "artifacts": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c24_gpu2_20260925/native/vanilla/vanilla/benchmark/math_bench/pred/aime/None_0925_1417",
+      "manifest": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c24_gpu2_20260925/native/vanilla/manifest.json",
+      "direct_time_speedup_vs_vanilla": 1.0
+    },
+    "omnikv": {
+      "correct": 48,
+      "total": 60,
+      "trial_correct": [
+        25,
+        23
+      ],
+      "at_least_one_correct_per_problem": 25,
+      "status_counts": {
+        "success": 60
+      },
+      "engine": "SparseEngine",
+      "max_concurrency": 24,
+      "generation_elapsed_s": 747.0687432880513,
+      "completion_tokens": 1287947,
+      "decode_graph_active": true,
+      "scheduler_recompute_preemptions_logged": 0,
+      "artifacts": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c24_gpu2_20260925/native/omnikv/omnikv/benchmark/math_bench/pred/aime/None_0925_1436",
+      "manifest": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c24_gpu2_20260925/native/omnikv/manifest.json",
+      "direct_time_speedup_vs_vanilla": 1.505919925925812
+    },
+    "quest": {
+      "correct": 38,
+      "total": 60,
+      "trial_correct": [
+        19,
+        19
+      ],
+      "at_least_one_correct_per_problem": 21,
+      "status_counts": {
+        "success": 60
+      },
+      "engine": "SparseEngine",
+      "max_concurrency": 24,
+      "generation_elapsed_s": 1269.913881384302,
+      "completion_tokens": 1396306,
+      "decode_graph_active": true,
+      "scheduler_recompute_preemptions_logged": 3,
+      "artifacts": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c24_gpu2_20260925/native/quest/quest/benchmark/math_bench/pred/aime/None_0925_1449",
+      "manifest": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c24_gpu2_20260925/native/quest/manifest.json",
+      "direct_time_speedup_vs_vanilla": 0.8859070863352315
+    },
+    "vortex_quest": {
+      "correct": 44,
+      "total": 60,
+      "trial_correct": [
+        22,
+        22
+      ],
+      "at_least_one_correct_per_problem": 23,
+      "status_counts": {
+        "success": 60
+      },
+      "engine": "Vortex/SGLang",
+      "max_concurrency": 24,
+      "generation_elapsed_s": 1262.3162429747172,
+      "completion_tokens": 1187277,
+      "cuda_graph_active": true,
+      "kv_pool_retraction_events_logged": 3,
+      "operator_path": "FlashInfer paged GQA decode; Triton QuEST indexer; flashinfer/default CUB-sort topk_output (vortex_max_topk_val unset)",
+      "artifacts": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c24_gpu2_20260925/vortex_quest",
+      "manifest": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c24_gpu2_20260925/vortex_quest/manifest.json",
+      "direct_time_speedup_vs_vanilla": 0.8912391905079564
+    }
+  }
+}

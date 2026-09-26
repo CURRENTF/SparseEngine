@@ -1,0 +1,72 @@
+{
+  "status": "success",
+  "samples": 503,
+  "evaluated_samples": 503,
+  "successful_samples": 484,
+  "parse_failed_samples": 19,
+  "failed_samples": 0,
+  "correct": 149,
+  "accuracy": 29.62226640159046,
+  "by_domain": {
+    "Code Repository Understanding": {
+      "samples": 50,
+      "correct": 16,
+      "accuracy": 32.0
+    },
+    "Long In-context Learning": {
+      "samples": 81,
+      "correct": 20,
+      "accuracy": 24.691358024691358
+    },
+    "Long Structured Data Understanding": {
+      "samples": 33,
+      "correct": 9,
+      "accuracy": 27.272727272727273
+    },
+    "Long-dialogue History Understanding": {
+      "samples": 39,
+      "correct": 5,
+      "accuracy": 12.820512820512821
+    },
+    "Multi-Document QA": {
+      "samples": 125,
+      "correct": 39,
+      "accuracy": 31.2
+    },
+    "Single-Document QA": {
+      "samples": 175,
+      "correct": 60,
+      "accuracy": 34.285714285714285
+    }
+  },
+  "by_difficulty": {
+    "easy": {
+      "samples": 192,
+      "correct": 62,
+      "accuracy": 32.291666666666664
+    },
+    "hard": {
+      "samples": 311,
+      "correct": 87,
+      "accuracy": 27.974276527331188
+    }
+  },
+  "by_official_length": {
+    "long": {
+      "samples": 108,
+      "correct": 26,
+      "accuracy": 24.074074074074073
+    },
+    "medium": {
+      "samples": 215,
+      "correct": 60,
+      "accuracy": 27.906976744186046
+    },
+    "short": {
+      "samples": 180,
+      "correct": 63,
+      "accuracy": 35.0
+    }
+  },
+  "scorer_script_sha256": "3065605b295f180d36386e5b7fd6c856031aeaf2e9abfa580be4bdc8aaed8dbb"
+}

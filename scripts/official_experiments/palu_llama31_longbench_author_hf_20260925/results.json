@@ -1,0 +1,17 @@
+{
+  "status": "verified_complete",
+  "method": "authors_original_palu_hf_model",
+  "source_commit": "bb22666e2ef96707e8dd21d93fc00146c2e0d615",
+  "longbench_v1": {
+    "metric": "overall_category_avg",
+    "samples": 3750,
+    "author_hf_palu": 41.6,
+    "sparseengine_palu": 41.77
+  },
+  "longbench_v2": {
+    "metric": "accuracy",
+    "samples": 503,
+    "author_hf_palu": 27.037773359840955,
+    "sparseengine_palu": 28.031809145129223
+  }
+}

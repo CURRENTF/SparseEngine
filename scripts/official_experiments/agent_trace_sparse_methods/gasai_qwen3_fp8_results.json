@@ -1,0 +1,495 @@
+{
+  "workload": "100 Gasai agent trajectories sampled with seed 42; Qwen3 FP8 forced-token replay",
+  "model": "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8",
+  "trace_manifest_sha256": "4126a043d03dfc394ffaa10b6b8ebc5fc8cae31cfa52b6e48c60c802e6ec455c",
+  "forced_workload_sha256": "4d6ebda674123e274fe0c3807f279786afca5e43ad83be58d29446b235c34bda",
+  "request_count": 5210,
+  "completion_tokens": 1036727,
+  "git_commit": "a07c3e30be63646137cc6aeeff131adc987afe5d",
+  "device": {
+    "gpus": [
+      {
+        "index": 0,
+        "uuid": "GPU-c5d6545f-72cb-d358-a6ae-ba46749580b4",
+        "name": "NVIDIA H20",
+        "memory_total": "97871 MiB"
+      },
+      {
+        "index": 1,
+        "uuid": "GPU-a0905c19-918c-afce-da66-44abdc1d2c5e",
+        "name": "NVIDIA H20",
+        "memory_total": "97871 MiB"
+      }
+    ],
+    "gpu_indices": "0,1"
+  },
+  "replay_protocol": {
+    "entrypoint": "scripts/official_experiments/agent_trace_sparse_methods/queue_matrix.sh",
+    "topology": "TP2/EP2/DP1",
+    "force_recorded_responses": true,
+    "require_cache_hit": true,
+    "synthetic_think_time_max_s": 2,
+    "synthetic_think_time_seed": 42,
+    "request_timeout_s": 900,
+    "elapsed_time_boundary": "complete replay wall time after measured server readiness; model load and CUDA graph capture excluded"
+  },
+  "artifact_root": "gasai_agent_5k_random100_seed42_qwen_fp8_20260925",
+  "valid_results": [
+    {
+      "label": "Vanilla",
+      "method": "vanilla-prefix",
+      "variant": "standard",
+      "concurrency": 32,
+      "artifact_subdir": "qwen3_30b_a3b_fp8_vanilla-prefix_c32",
+      "served_model_name": "qwen3_30b_a3b_fp8-vanilla-prefix",
+      "engine_kwargs": {
+        "tensor_parallel_size": 2,
+        "expert_parallel_size": 2,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.95,
+        "max_model_len": 202752,
+        "max_num_seqs_in_batch": 32,
+        "max_decoding_seqs": 32,
+        "max_num_seqs_in_gpu": 48,
+        "decode_reservation_tokens": 1024,
+        "max_num_batched_tokens": 65536,
+        "engine_prefill_chunk_size": 4096,
+        "decode_graph": true,
+        "decode_graph_capture_sizes": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          24,
+          32
+        ],
+        "sparse_attn_score_dtype": "float32",
+        "enable_prefix_cache_offload": false,
+        "sparse_method": "vanilla",
+        "enable_prefix_caching": true,
+        "prefix_cache_mode": "radix"
+      },
+      "final_result": {
+        "status": "success",
+        "request_count": 5210,
+        "elapsed_s": 2993.7016173359007,
+        "latency_s_p50": 8.235854704864323,
+        "latency_s_p95": 50.46170932878745,
+        "latency_s_p99": 117.74446475489049,
+        "output_token_throughput_tps": 346.30271567364315,
+        "cache_reuse": {
+          "successful_requests_with_cached_tokens": 5209,
+          "cached_tokens": 167929488,
+          "max_cached_tokens": 112288,
+          "chain_resumed_requests": 0,
+          "chain_recovery_requests": 0
+        },
+        "completion_tokens": 1036727
+      },
+      "preemption_evidence": {
+        "source": "worker_load_after_replay.json",
+        "total_preemptions": 0,
+        "total_recompute_replays": 0
+      }
+    },
+    {
+      "label": "QuEST",
+      "method": "quest-prefix",
+      "variant": "tp2_ep2_prefix_gate_expanded",
+      "concurrency": 32,
+      "artifact_subdir": "retry_prefix_tp2ep2_20260925/run/qwen3_30b_a3b_fp8_quest-prefix_c32",
+      "served_model_name": "qwen3_30b_a3b_fp8-quest-prefix",
+      "engine_kwargs": {
+        "tensor_parallel_size": 2,
+        "expert_parallel_size": 2,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.95,
+        "max_model_len": 202752,
+        "max_num_seqs_in_batch": 32,
+        "max_decoding_seqs": 32,
+        "max_num_seqs_in_gpu": 48,
+        "decode_reservation_tokens": 1024,
+        "max_num_batched_tokens": 65536,
+        "engine_prefill_chunk_size": 4096,
+        "decode_graph": true,
+        "decode_graph_capture_sizes": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          24,
+          32
+        ],
+        "sparse_attn_score_dtype": "float32",
+        "enable_prefix_cache_offload": false,
+        "sparse_method": "quest",
+        "enable_prefix_caching": true,
+        "prefix_cache_mode": "radix",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 1472,
+        "quest_chunk_size": 16,
+        "quest_skip_layers": 2
+      },
+      "final_result": {
+        "status": "success",
+        "request_count": 5210,
+        "elapsed_s": 3532.428783863783,
+        "latency_s_p50": 9.56867508077994,
+        "latency_s_p95": 57.854185322811844,
+        "latency_s_p99": 134.91732658424414,
+        "output_token_throughput_tps": 293.4884362667956,
+        "cache_reuse": {
+          "successful_requests_with_cached_tokens": 5209,
+          "cached_tokens": 167927568,
+          "max_cached_tokens": 112288,
+          "chain_resumed_requests": 0,
+          "chain_recovery_requests": 0
+        },
+        "completion_tokens": 1036727
+      },
+      "preemption_evidence": {
+        "source": "worker_load_after_replay.json",
+        "total_preemptions": 0,
+        "total_recompute_replays": 0
+      }
+    },
+    {
+      "label": "OmniKV",
+      "method": "omnikv-prefix",
+      "variant": "tp2_ep2_prefix_gate_expanded",
+      "concurrency": 32,
+      "artifact_subdir": "retry_prefix_tp2ep2_20260925/run/qwen3_30b_a3b_fp8_omnikv-prefix_c32",
+      "served_model_name": "qwen3_30b_a3b_fp8-omnikv-prefix",
+      "engine_kwargs": {
+        "tensor_parallel_size": 2,
+        "expert_parallel_size": 2,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.95,
+        "max_model_len": 202752,
+        "max_num_seqs_in_batch": 32,
+        "max_decoding_seqs": 32,
+        "max_num_seqs_in_gpu": 48,
+        "decode_reservation_tokens": 1024,
+        "max_num_batched_tokens": 65536,
+        "engine_prefill_chunk_size": 4096,
+        "decode_graph": true,
+        "decode_graph_capture_sizes": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          24,
+          32
+        ],
+        "sparse_attn_score_dtype": "float32",
+        "enable_prefix_cache_offload": false,
+        "sparse_method": "omnikv",
+        "enable_prefix_caching": true,
+        "prefix_cache_mode": "radix",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 1472,
+        "full_attention_layers": "auto"
+      },
+      "final_result": {
+        "status": "success",
+        "request_count": 5210,
+        "elapsed_s": 1837.359518667683,
+        "latency_s_p50": 4.753149381373078,
+        "latency_s_p95": 29.948008198384198,
+        "latency_s_p99": 68.73051312471735,
+        "output_token_throughput_tps": 564.2483082199163,
+        "cache_reuse": {
+          "successful_requests_with_cached_tokens": 5209,
+          "cached_tokens": 167928528,
+          "max_cached_tokens": 112288,
+          "chain_resumed_requests": 0,
+          "chain_recovery_requests": 0
+        },
+        "completion_tokens": 1036727
+      },
+      "preemption_evidence": {
+        "source": "worker_load_after_replay.json",
+        "total_preemptions": 0,
+        "total_recompute_replays": 0
+      }
+    },
+    {
+      "label": "SnapKV 16K",
+      "method": "snapkv-chain",
+      "variant": "decode_eviction",
+      "concurrency": 52,
+      "artifact_subdir": "retry_snapkv16_c52_20260925/run/qwen3_30b_a3b_fp8_snapkv-chain_c52",
+      "served_model_name": "qwen3_30b_a3b_fp8-snapkv-chain",
+      "engine_kwargs": {
+        "tensor_parallel_size": 2,
+        "expert_parallel_size": 2,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.95,
+        "max_model_len": 202752,
+        "max_num_seqs_in_batch": 52,
+        "max_decoding_seqs": 52,
+        "max_num_seqs_in_gpu": 78,
+        "decode_reservation_tokens": 1024,
+        "max_num_batched_tokens": 65536,
+        "engine_prefill_chunk_size": 4096,
+        "decode_graph": true,
+        "decode_graph_capture_sizes": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          24,
+          32,
+          48,
+          52
+        ],
+        "sparse_attn_score_dtype": "float32",
+        "enable_prefix_cache_offload": false,
+        "sparse_method": "snapkv",
+        "enable_prefix_caching": true,
+        "prefix_cache_mode": "chain",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 15808,
+        "snapkv_window_size": 32,
+        "snapkv_num_full_layers": 0,
+        "sparse_prefill_score_mode": "probability",
+        "snapkv_decode_eviction": true,
+        "snapkv_decode_eviction_interval": 1024
+      },
+      "final_result": {
+        "status": "success",
+        "request_count": 5210,
+        "elapsed_s": 1800.2337936665863,
+        "latency_s_p50": 7.706974472850561,
+        "latency_s_p95": 46.997094341833154,
+        "latency_s_p99": 114.09645529206834,
+        "output_token_throughput_tps": 575.8846454540047,
+        "cache_reuse": {
+          "successful_requests_with_cached_tokens": 5110,
+          "cached_tokens": 167945185,
+          "max_cached_tokens": 112292,
+          "chain_resumed_requests": 5110,
+          "chain_recovery_requests": 0
+        },
+        "completion_tokens": 1036727
+      },
+      "preemption_evidence": {
+        "source": "worker_load_after_replay.json",
+        "total_preemptions": 0,
+        "total_recompute_replays": 0
+      }
+    },
+    {
+      "label": "SnapKV 8K",
+      "method": "snapkv-chain",
+      "variant": "decode_eviction_budget_8192",
+      "concurrency": 72,
+      "artifact_subdir": "retry_snapkv_20260925/snapkv_8k_c72/qwen3_30b_a3b_fp8_snapkv-chain_c72",
+      "served_model_name": "qwen3_30b_a3b_fp8-snapkv-chain",
+      "engine_kwargs": {
+        "tensor_parallel_size": 2,
+        "expert_parallel_size": 2,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.95,
+        "max_model_len": 202752,
+        "max_num_seqs_in_batch": 72,
+        "max_decoding_seqs": 72,
+        "max_num_seqs_in_gpu": 108,
+        "decode_reservation_tokens": 1024,
+        "max_num_batched_tokens": 65536,
+        "engine_prefill_chunk_size": 4096,
+        "decode_graph": true,
+        "decode_graph_capture_sizes": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          24,
+          32,
+          48,
+          64,
+          72
+        ],
+        "sparse_attn_score_dtype": "float32",
+        "enable_prefix_cache_offload": false,
+        "sparse_method": "snapkv",
+        "enable_prefix_caching": true,
+        "prefix_cache_mode": "chain",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 7616,
+        "snapkv_window_size": 32,
+        "snapkv_num_full_layers": 0,
+        "sparse_prefill_score_mode": "probability",
+        "snapkv_decode_eviction": true,
+        "snapkv_decode_eviction_interval": 1024
+      },
+      "final_result": {
+        "status": "success",
+        "request_count": 5210,
+        "elapsed_s": 1333.7993130879477,
+        "latency_s_p50": 7.227630763314664,
+        "latency_s_p95": 42.71949232909829,
+        "latency_s_p99": 105.0367491296955,
+        "output_token_throughput_tps": 777.2736046773182,
+        "cache_reuse": {
+          "successful_requests_with_cached_tokens": 5110,
+          "cached_tokens": 167945185,
+          "max_cached_tokens": 112292,
+          "chain_resumed_requests": 5110,
+          "chain_recovery_requests": 0
+        },
+        "completion_tokens": 1036727
+      },
+      "preemption_evidence": {
+        "source": "worker_load_after_replay.json",
+        "total_preemptions": 0,
+        "total_recompute_replays": 0
+      }
+    },
+    {
+      "label": "H2O",
+      "method": "h2o-chain",
+      "variant": "tp2_ep2_prefix_gate_expanded",
+      "concurrency": 80,
+      "artifact_subdir": "retry_prefix_tp2ep2_20260925/run/qwen3_30b_a3b_fp8_h2o-chain_c80",
+      "served_model_name": "qwen3_30b_a3b_fp8-h2o-chain",
+      "engine_kwargs": {
+        "tensor_parallel_size": 2,
+        "expert_parallel_size": 2,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.95,
+        "max_model_len": 202752,
+        "max_num_seqs_in_batch": 80,
+        "max_decoding_seqs": 80,
+        "max_num_seqs_in_gpu": 120,
+        "decode_reservation_tokens": 1024,
+        "max_num_batched_tokens": 65536,
+        "engine_prefill_chunk_size": 4096,
+        "decode_graph": true,
+        "decode_graph_capture_sizes": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          24,
+          32,
+          48,
+          64,
+          80
+        ],
+        "sparse_attn_score_dtype": "float32",
+        "enable_prefix_cache_offload": false,
+        "sparse_method": "h2o",
+        "enable_prefix_caching": true,
+        "prefix_cache_mode": "chain",
+        "h2o_prefill_budget": 16384,
+        "h2o_decode_budget": 8192,
+        "h2o_prefill_score_window": 128,
+        "h2o_decode_eviction": true,
+        "h2o_decode_eviction_interval": 128,
+        "h2o_recent_ratio": 0.5,
+        "sparse_prefill_score_mode": "probability"
+      },
+      "final_result": {
+        "status": "success",
+        "request_count": 5210,
+        "elapsed_s": 1502.058734239079,
+        "latency_s_p50": 9.889114674180746,
+        "latency_s_p95": 55.88824122962545,
+        "latency_s_p99": 128.90245295306636,
+        "output_token_throughput_tps": 690.2040355467129,
+        "cache_reuse": {
+          "successful_requests_with_cached_tokens": 5110,
+          "cached_tokens": 167945185,
+          "max_cached_tokens": 112292,
+          "chain_resumed_requests": 5110,
+          "chain_recovery_requests": 0
+        },
+        "completion_tokens": 1036727
+      },
+      "preemption_evidence": {
+        "source": "worker_load_after_replay.json",
+        "total_preemptions": 0,
+        "total_recompute_replays": 0
+      }
+    }
+  ],
+  "diagnostic_results": [
+    {
+      "label": "SnapKV 16K diagnostic",
+      "method": "snapkv-chain",
+      "variant": "decode_eviction_16k_diagnostic",
+      "concurrency": 32,
+      "artifact_subdir": "retry_snapkv_20260925/snapkv_16k_c32/qwen3_30b_a3b_fp8_snapkv-chain_c32",
+      "served_model_name": "qwen3_30b_a3b_fp8-snapkv-chain",
+      "engine_kwargs": {
+        "tensor_parallel_size": 2,
+        "expert_parallel_size": 2,
+        "data_parallel_size": 1,
+        "gpu_memory_utilization": 0.95,
+        "max_model_len": 202752,
+        "max_num_seqs_in_batch": 32,
+        "max_decoding_seqs": 32,
+        "max_num_seqs_in_gpu": 48,
+        "decode_reservation_tokens": 1024,
+        "max_num_batched_tokens": 65536,
+        "engine_prefill_chunk_size": 4096,
+        "decode_graph": true,
+        "decode_graph_capture_sizes": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          24,
+          32
+        ],
+        "sparse_attn_score_dtype": "float32",
+        "enable_prefix_cache_offload": false,
+        "sparse_method": "snapkv",
+        "enable_prefix_caching": true,
+        "prefix_cache_mode": "chain",
+        "sink_keep_tokens": 64,
+        "recent_keep_tokens": 512,
+        "decode_keep_tokens": 15808,
+        "snapkv_window_size": 32,
+        "snapkv_num_full_layers": 0,
+        "sparse_prefill_score_mode": "probability",
+        "snapkv_decode_eviction": true,
+        "snapkv_decode_eviction_interval": 1024
+      },
+      "final_result": {
+        "status": "success",
+        "request_count": 5210,
+        "elapsed_s": 1832.0433478299528,
+        "latency_s_p50": 4.802297545131296,
+        "latency_s_p95": 30.309017999423684,
+        "latency_s_p99": 71.32105066105713,
+        "output_token_throughput_tps": 565.8856277762196,
+        "cache_reuse": {
+          "successful_requests_with_cached_tokens": 5110,
+          "cached_tokens": 167945185,
+          "max_cached_tokens": 112292,
+          "chain_resumed_requests": 5110,
+          "chain_recovery_requests": 0
+        },
+        "completion_tokens": 1036727
+      },
+      "preemption_evidence": {
+        "source": "worker_load_after_replay.json",
+        "total_preemptions": 0,
+        "total_recompute_replays": 0
+      }
+    }
+  ]
+}

@@ -301,3 +301,88 @@ class MlaLatentStorage:
 
     def accounting_tensors(self) -> tuple[torch.Tensor, ...]:
         return self._require_caches()
+
+
+class LayerVaryingMlaLatentStorage:
+    """MLA storage with a separate physical slot count for each KV layer."""
+
+    layout = CacheLayout.MLA_LATENT
+
+    def __init__(
+        self,
+        *,
+        kv_lora_rank: int,
+        rope_dim: int,
+        dtype: torch.dtype,
+        validate_runtime_invariants: bool = False,
+    ) -> None:
+        self.kv_lora_rank = int(kv_lora_rank)
+        self.rope_dim = int(rope_dim)
+        self.dtype = dtype
+        self.validate_runtime_invariants = bool(validate_runtime_invariants)
+        self.layers: list[MlaLatentStorage] = []
+
+    def allocate_layers(self, *, slot_counts: list[int], device: torch.device) -> None:
+        if not slot_counts or any(int(count) <= 0 for count in slot_counts):
+            raise ValueError(f"MLA layer slot counts must be positive: {slot_counts}.")
+        self.layers = []
+        for count in slot_counts:
+            storage = MlaLatentStorage(
+                kv_lora_rank=self.kv_lora_rank,
+                rope_dim=self.rope_dim,
+                dtype=self.dtype,
+                validate_runtime_invariants=self.validate_runtime_invariants,
+            )
+            storage.allocate(num_layers=1, num_slots=int(count), device=device)
+            self.layers.append(storage)
+
+    def _layer(self, layer_idx: int) -> MlaLatentStorage:
+        layer_idx = int(layer_idx)
+        if not 0 <= layer_idx < len(self.layers):
+            raise IndexError(f"MLA KV layer {layer_idx} is outside [0, {len(self.layers)}).")
+        return self.layers[layer_idx]
+
+    def layer_payload(self, layer_idx: int) -> MlaLatentPayload:
+        return self._layer(layer_idx).layer_payload(0)
+
+    def component_specs(self, layer_idx: int) -> tuple[CacheComponentSpec, ...]:
+        return self._layer(layer_idx).component_specs(0)
+
+    def component_tensors(self, layer_idx: int) -> tuple[torch.Tensor, ...]:
+        return self._layer(layer_idx).component_tensors(0)
+
+    def validate_slot_mapping(self, slot_mapping: torch.Tensor) -> None:
+        self._layer(0).validate_slot_mapping(slot_mapping)
+
+    def validate_slot_mappings(self, slot_mappings: tuple[torch.Tensor, ...]) -> None:
+        if len(slot_mappings) != len(self.layers):
+            raise ValueError(
+                "MLA layer slot mapping count does not match storage: "
+                f"mappings={len(slot_mappings)} layers={len(self.layers)}."
+            )
+        for storage, mapping in zip(self.layers, slot_mappings):
+            storage.validate_slot_mappings((mapping,))
+
+    def store(
+        self, layer_idx: int, slot_mapping: torch.Tensor, payload: AttentionCacheWrite
+    ) -> None:
+        self._layer(layer_idx).store(0, slot_mapping, payload)
+
+    def copy_slots(
+        self,
+        layer_idx: int,
+        source_slots: torch.Tensor,
+        destination_slots: torch.Tensor,
+    ) -> None:
+        self._layer(layer_idx).copy_slots(0, source_slots, destination_slots)
+
+    def slot_capacity(self) -> int:
+        return max(storage.slot_capacity() for storage in self.layers)
+
+    def bytes_per_slot_per_layer(self) -> int:
+        if self.layers:
+            return self.layers[0].bytes_per_slot_per_layer()
+        return int((self.kv_lora_rank + self.rope_dim) * torch.tensor([], dtype=self.dtype).element_size())
+
+    def accounting_tensors(self) -> tuple[torch.Tensor, ...]:
+        return tuple(tensor for layer in self.layers for tensor in layer.accounting_tensors())

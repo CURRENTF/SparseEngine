@@ -19,6 +19,13 @@ recipe=scripts/official_experiments/chain_cache_miniswe/run.py
 snapkv_decode_eviction=${AGENT_TRACE_SNAPKV_DECODE_EVICTION:-0}
 snapkv_total_budget=${AGENT_TRACE_SNAPKV_TOTAL_BUDGET:-0}
 h2o_swelite_setting=${AGENT_TRACE_H2O_SWELITE_SETTING:-0}
+skip_smoke=${AGENT_TRACE_SKIP_SMOKE:-0}
+request_timeout_s=${AGENT_TRACE_REQUEST_TIMEOUT_S:-900}
+allow_preemptions=${AGENT_TRACE_ALLOW_PREEMPTIONS:-0}
+completion_target=${AGENT_TRACE_COMPLETION_TARGET:-0}
+if [[ -f "$data_root/skip_smoke" ]]; then
+  skip_smoke=1
+fi
 
 cd "$repo_root"
 if [[ -n ${VENV_ACTIVATE:-} ]]; then
@@ -41,7 +48,15 @@ status() {
 }
 
 server_pid=
+replay_pid=
 phase=
+stop_replay() {
+  if [[ -n "$replay_pid" ]]; then
+    kill -TERM "$replay_pid" 2>/dev/null || true
+    wait "$replay_pid" || true
+    replay_pid=
+  fi
+}
 stop_server() {
   if [[ -n "$server_pid" ]]; then
     if [[ -e "$run_root/$method/$phase/server_process.json" ]]; then
@@ -51,7 +66,7 @@ stop_server() {
     server_pid=
   fi
 }
-trap 'stop_server coordinator_failure' EXIT INT TERM
+trap 'stop_replay; stop_server coordinator_failure' EXIT INT TERM
 
 wait_gpu_release() {
   local attempt
@@ -157,6 +172,26 @@ if [[ "$mode" != smoke-only && "$mode" != full ]]; then
   echo "Mode must be smoke-only or full" >&2
   exit 2
 fi
+if [[ "$skip_smoke" != 0 && "$skip_smoke" != 1 ]]; then
+  echo "AGENT_TRACE_SKIP_SMOKE must be 0 or 1" >&2
+  exit 2
+fi
+if [[ ! "$request_timeout_s" =~ ^[0-9]+$ ]] || (( request_timeout_s < 1 )); then
+  echo "AGENT_TRACE_REQUEST_TIMEOUT_S must be a positive integer" >&2
+  exit 2
+fi
+if [[ "$allow_preemptions" != 0 && "$allow_preemptions" != 1 ]]; then
+  echo "AGENT_TRACE_ALLOW_PREEMPTIONS must be 0 or 1" >&2
+  exit 2
+fi
+if [[ ! "$completion_target" =~ ^[0-9]+$ ]]; then
+  echo "AGENT_TRACE_COMPLETION_TARGET must be a nonnegative integer" >&2
+  exit 2
+fi
+if [[ "$mode" == smoke-only && "$skip_smoke" == 1 ]]; then
+  echo "smoke-only mode conflicts with skip_smoke" >&2
+  exit 2
+fi
 if [[ -e "$case_root/status.tsv" ]]; then
   echo "Case already started; refusing to overwrite: $case_root" >&2
   exit 1
@@ -179,7 +214,13 @@ setting = json.loads(Path("scripts/official_experiments/chain_cache_miniswe/sett
 if int(sys.argv[2]):
     method = setting["methods"]["snapkv-chain"]
     method["snapkv_decode_eviction"] = True
-    method["decode_eviction_interval"] = SparseMethodConfig().decode_eviction_interval
+    config = SparseMethodConfig()
+    interval_key = (
+        "snapkv_decode_eviction_interval"
+        if hasattr(config, "snapkv_decode_eviction_interval")
+        else "decode_eviction_interval"
+    )
+    method[interval_key] = getattr(config, interval_key)
     total_budget = int(sys.argv[4])
     if total_budget:
         selected = total_budget - int(method["sink_keep_tokens"]) - int(method["recent_keep_tokens"])
@@ -209,7 +250,10 @@ assert config['max_num_seqs_in_batch']==config['max_decoding_seqs']==c
 assert config['max_num_seqs_in_gpu']==r
 if int(sys.argv[4]):
     assert config['snapkv_decode_eviction'] is True
-    assert config['decode_eviction_interval'] == 1024
+    interval_key = ('snapkv_decode_eviction_interval'
+                    if 'snapkv_decode_eviction_interval' in config
+                    else 'decode_eviction_interval')
+    assert config[interval_key] == 1024
     if int(sys.argv[6]):
         assert (config['sink_keep_tokens'] + config['recent_keep_tokens']
                 + config['decode_keep_tokens']) == int(sys.argv[6])
@@ -227,6 +271,7 @@ if int(sys.argv[5]):
 PY
 status "prepared"
 
+if [[ "$skip_smoke" == 0 ]]; then
 start_server smoke
 python - "$trace_dir" "$model_label-$method" "$model_path" "$method" "$port" "$case_root/smoke.json" <<'PY'
 import json,sys,time
@@ -271,6 +316,9 @@ Path(output).write_text(json.dumps({'status':'success','requests':results})+'\n'
 PY
 status "smoke_passed"
 stop_server requested_by_operator
+else
+  status "smoke_skipped_by_request"
+fi
 if [[ "$mode" == smoke-only ]]; then
   exit 0
 fi
@@ -278,21 +326,45 @@ fi
 wait_gpu_release
 start_server full
 status "replay_running"
-python benchmark/sparseengine_regression/run_suite.py --layer agent_trace \
+replay_command=(python benchmark/sparseengine_regression/run_suite.py --layer agent_trace \
   --agent_trace "$trace_dir" --agent_api_base "http://127.0.0.1:$port/v1" \
   --agent_server_manifest "$run_root/$method/full/server_manifest.json" \
-  --agent_concurrency "$concurrency" --agent_request_timeout 900 \
+  --agent_concurrency "$concurrency" --agent_request_timeout "$request_timeout_s" \
   --agent_synthetic_think_time_max_s 2 --agent_synthetic_think_time_seed 42 \
   --agent_force_recorded_responses \
   --agent_forced_workload "$forced_workload" \
   --agent_require_cache_hit \
-  --output_root "$case_root" --run_id replay
+  --output_root "$case_root" --run_id replay)
+if (( completion_target > 0 )); then
+  "${replay_command[@]}" &
+  replay_pid=$!
+  if ! python scripts/official_experiments/agent_trace_sparse_methods/summarize_completion_target.py \
+      --server-log "$run_root/$method/full/server.log" \
+      --client-pid "$replay_pid" --target "$completion_target" \
+      --method "$method" --concurrency "$concurrency" \
+      --trace-manifest "$trace_dir/manifest.json" \
+      --forced-workload "$forced_workload" \
+      --output "$case_root/partial_${completion_target}_summary.json"; then
+    kill -TERM "$replay_pid" 2>/dev/null || true
+    wait "$replay_pid" || true
+    status "completion_target_failed"
+    exit 1
+  fi
+  wait "$replay_pid" || true
+  replay_pid=
+  curl --fail --silent --show-error --noproxy '*' --max-time 10 \
+    "http://127.0.0.1:$port/v1/worker/load" > "$case_root/worker_load_after_target.json"
+  status "completion_target_${completion_target}_reached"
+  stop_server requested_by_operator
+  exit 0
+fi
+"${replay_command[@]}"
 curl --fail --silent --show-error --noproxy '*' --max-time 10 \
   "http://127.0.0.1:$port/v1/worker/load" > "$case_root/worker_load_after_replay.json"
-python - "$case_root/worker_load_after_replay.json" <<'PY'
+python - "$case_root/worker_load_after_replay.json" "$allow_preemptions" <<'PY'
 import json,sys
 load=json.load(open(sys.argv[1]))
-if load["total_preemptions"] or load["total_recompute_replays"]:
+if not int(sys.argv[2]) and (load["total_preemptions"] or load["total_recompute_replays"]):
     raise ValueError(
         "Replay did not sustain its configured concurrency without active-request "
         f"preemption: preemptions={load['total_preemptions']} "

@@ -83,8 +83,13 @@ PY
   fi
   active_case_pid=
   if [[ ${AGENT_TRACE_ARCHIVE_REQUEST_LOGS:-0} == 1 ]]; then
+    case_root="$output_root/${model_label}_${method}_c${concurrency}"
+    if [[ ! -f "$case_root/status.tsv" ]]; then
+      record "$model_label" "$case_spec" failed_before_prepare
+      continue
+    fi
     if ! bash "$script_dir/archive_case_requests.sh" \
-        "$output_root/${model_label}_${method}_c${concurrency}" "$method"; then
+        "$case_root" "$method"; then
       record "$model_label" "$case_spec" archive_failed
       exit 1
     fi

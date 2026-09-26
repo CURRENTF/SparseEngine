@@ -1,0 +1,101 @@
+{
+  "metadata": {
+    "model": "Llama-3.1-8B-Instruct",
+    "device": "NVIDIA H100 80GB HBM3",
+    "native_base_commit": "7b32be0fa67fc06d0df8bfabab5a2700f8825591",
+    "author_commit": "03f912c6e917c380d9d90c5ec85bb0f161ba53ef",
+    "scorer_commit": "2e00731f8d0bff23dc4325161044d0ed8af94c1e",
+    "dtype": "bfloat16",
+    "decode": "greedy",
+    "method": "RetroInfer GPU-only",
+    "retrieval_ratio": 0.018,
+    "estimation_ratio": 0.232
+  },
+  "benchmarks": {
+    "v1": {
+      "samples": 3750,
+      "metric": "overall_category_avg",
+      "native": 50.78,
+      "author": 50.6,
+      "native_minus_author": 0.18,
+      "category_scores": {
+        "SDQA": {
+          "native": 43.61,
+          "author": 43.38
+        },
+        "MDQA": {
+          "native": 46.54,
+          "author": 46.43
+        },
+        "SUM": {
+          "native": 28.85,
+          "author": 28.95
+        },
+        "FewShot": {
+          "native": 69.35,
+          "author": 69.37
+        },
+        "Syn": {
+          "native": 55.88,
+          "author": 55.55
+        },
+        "Code": {
+          "native": 60.45,
+          "author": 59.92
+        }
+      }
+    },
+    "v2": {
+      "samples": 503,
+      "metric": "accuracy",
+      "native": 29.22465208747515,
+      "author": 29.62226640159046,
+      "native_minus_author": -0.3976,
+      "correct": {
+        "native": 147,
+        "author": 149
+      },
+      "parse_failed": {
+        "native": 24,
+        "author": 23
+      },
+      "length_scores": {
+        "long": {
+          "native": 27.77777777777778,
+          "author": 28.703703703703702
+        },
+        "medium": {
+          "native": 26.511627906976745,
+          "author": 26.976744186046513
+        },
+        "short": {
+          "native": 33.333333333333336,
+          "author": 33.333333333333336
+        }
+      }
+    }
+  },
+  "capacity_probe": {
+    "16": {
+      "samples": 64,
+      "successful_samples": 64,
+      "wall_seconds_including_startup": 88.48,
+      "sampled_gpu_util_mean_percent": 47.6,
+      "gpu_util_samples": 60
+    },
+    "24": {
+      "samples": 64,
+      "successful_samples": 64,
+      "wall_seconds_including_startup": 75.27,
+      "sampled_gpu_util_mean_percent": 55.3,
+      "gpu_util_samples": 51
+    },
+    "32": {
+      "samples": 64,
+      "successful_samples": 64,
+      "wall_seconds_including_startup": 76.54,
+      "sampled_gpu_util_mean_percent": 53.6,
+      "gpu_util_samples": 52
+    }
+  }
+}

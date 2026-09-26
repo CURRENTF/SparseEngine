@@ -1,0 +1,41 @@
+{
+  "model": "/data2/pretrain_models/Qwen3-4B-Thinking-2507",
+  "seed": 42,
+  "sampling": {
+    "max_new_tokens": 40960,
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0
+  },
+  "engine_args": {
+    "context_length": 41984,
+    "vortex_max_seq_lens": 41984,
+    "max_running_requests": 25,
+    "mem_fraction_static": 0.9,
+    "vortex_block_size": 16,
+    "vortex_topk_val": 128,
+    "vortex_topk_ratio": 0.0,
+    "vortex_block_reserved_bos": 1,
+    "vortex_block_reserved_eos": 4,
+    "vortex_layers_skip": [
+      0,
+      1
+    ],
+    "vortex_module_name": "gqa_quest_sparse_attention",
+    "vortex_workload_chunk_size": 32,
+    "disable_radix_cache": true,
+    "cuda_graph_bs": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      24,
+      25
+    ],
+    "chunked_prefill_size": 4096,
+    "max_prefill_tokens": 65536
+  },
+  "flow_git_commit": "ab9ac68c7b9b81f6ba17752741f9e9d92444bf56"
+}

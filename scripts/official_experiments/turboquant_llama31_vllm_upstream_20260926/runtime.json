@@ -1,0 +1,34 @@
+{
+  "engine": "vllm",
+  "engine_version": "0.20.2",
+  "engine_git_tag_commit": "bc150f50299199599673614f80d12a196f377655",
+  "torch_version": "2.11.0+cu130",
+  "model": "Llama-3.1-8B-Instruct",
+  "model_dtype": "bfloat16",
+  "gpu": "6 x NVIDIA GeForce RTX 4090 48 GiB",
+  "parallelism": "DP6, TP1, one sample at a time per GPU",
+  "kv_cache_dtype": "turboquant_4bit_nc",
+  "gpu_memory_utilization": 0.5,
+  "max_model_len": 131072,
+  "max_num_seqs": 1,
+  "max_num_batched_tokens": 4096,
+  "enable_chunked_prefill": true,
+  "enable_prefix_caching": false,
+  "enforce_eager": true,
+  "seed": 42,
+  "v1_sampling": {
+    "temperature": 0,
+    "top_p": 1,
+    "top_k": 1,
+    "generation_lengths": "official per-task limits"
+  },
+  "v2_sampling": {
+    "temperature": 0.1,
+    "top_p": 1,
+    "top_k": 0,
+    "max_new_tokens": 128,
+    "seed_per_sample": "42 + eval_index",
+    "prompt_truncation": "official pre-chat middle truncation at 120000 tokens"
+  },
+  "launch_pattern": "CUDA_VISIBLE_DEVICES=<gpu> python run_tq_vllm_baseline.py --model <model> --input <benchmark>-shard-<gpu>.jsonl --output-dir <run>/<benchmark>/shard-<gpu> --benchmark <v1|v2>"
+}

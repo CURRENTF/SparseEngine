@@ -1,0 +1,108 @@
+{
+  "experiment": "Qwen3-4B-Thinking-2507 AIME 2024 official sampling, 2 tries, C20 plus Vortex QuEST",
+  "model": "Qwen3-4B-Thinking-2507",
+  "sparseengine_git_commit": "7b32be0fa67fc06d0df8bfabab5a2700f8825591",
+  "vortex_git_commit": "ab9ac68c7b9b81f6ba17752741f9e9d92444bf56",
+  "setting_sha256": "144d9d0837ab44296df818ebfe2daf211b46d9395f1726785d83b3b95b1b53dd",
+  "normalized_dataset_sha256": "bfe60715bc6fd32f1f6438c9a479cd5b6f4daaaa6aa6255b375b81a7ea84c136",
+  "vortex_inputs_sha256": "cb269f382ebd5fdded3d4fa8824611f0f68856d44ec2472462b2a3ce7ff35022",
+  "device": "NVIDIA H100 80GB HBM3",
+  "gpu_uuid": "GPU-566a0ffb-6f93-413f-cdf1-bab7f7acd20e",
+  "samples_per_method": 60,
+  "baseline": "vanilla",
+  "time_metric": "one blocking generate/model call for all 60 requests, excluding startup, prompt assembly, and scoring",
+  "methods": {
+    "vanilla": {
+      "engine": "SparseEngine",
+      "gpu": 2,
+      "max_concurrency": 20,
+      "correct": 51,
+      "total": 60,
+      "trial_correct": [
+        24,
+        27
+      ],
+      "at_least_one_correct_per_problem": 27,
+      "status_counts": {
+        "success": 60
+      },
+      "generation_elapsed_s": 1135.1385012879036,
+      "completion_tokens": 1183274,
+      "artifacts": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c20_gpu2_20260925/native/vanilla/vanilla/benchmark/math_bench/pred/aime/None_0925_1303",
+      "scheduler_recompute_preemptions_logged": 0,
+      "decode_graph_active": true,
+      "manifest": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c20_gpu2_20260925/native/vanilla/manifest.json",
+      "direct_time_speedup_vs_vanilla": 1.0
+    },
+    "omnikv": {
+      "engine": "SparseEngine",
+      "gpu": 2,
+      "max_concurrency": 20,
+      "correct": 48,
+      "total": 60,
+      "trial_correct": [
+        25,
+        23
+      ],
+      "at_least_one_correct_per_problem": 26,
+      "status_counts": {
+        "success": 60
+      },
+      "generation_elapsed_s": 804.2324282703921,
+      "completion_tokens": 1290855,
+      "artifacts": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c20_gpu2_20260925/native/omnikv/omnikv/benchmark/math_bench/pred/aime/None_0925_1323",
+      "scheduler_recompute_preemptions_logged": 0,
+      "decode_graph_active": true,
+      "manifest": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c20_gpu2_20260925/native/omnikv/manifest.json",
+      "direct_time_speedup_vs_vanilla": 1.4114557699807861
+    },
+    "quest": {
+      "engine": "SparseEngine",
+      "gpu": 2,
+      "max_concurrency": 20,
+      "correct": 40,
+      "total": 60,
+      "trial_correct": [
+        19,
+        21
+      ],
+      "at_least_one_correct_per_problem": 23,
+      "status_counts": {
+        "success": 60
+      },
+      "generation_elapsed_s": 907.1561199231073,
+      "completion_tokens": 1414757,
+      "artifacts": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c20_gpu2_20260925/native/quest/quest/benchmark/math_bench/pred/aime/None_0925_1337",
+      "scheduler_recompute_preemptions_logged": 0,
+      "decode_graph_active": true,
+      "manifest": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c20_gpu2_20260925/native/quest/manifest.json",
+      "direct_time_speedup_vs_vanilla": 1.25131548622978
+    },
+    "vortex_quest": {
+      "engine": "Vortex/SGLang",
+      "gpu": 2,
+      "max_concurrency": 20,
+      "correct": 45,
+      "total": 60,
+      "trial_correct": [
+        24,
+        21
+      ],
+      "at_least_one_correct_per_problem": 25,
+      "status_counts": {
+        "success": 59,
+        "parse_failed": 1
+      },
+      "generation_elapsed_s": 1231.0984554453753,
+      "completion_tokens": 1121130,
+      "artifacts": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c20_gpu2_20260925/vortex_quest",
+      "total_retractions": 0,
+      "length_capped_requests": 6,
+      "cuda_graph_active": true,
+      "prompt_token_lengths_match": 60,
+      "operator_path": "FlashInfer paged GQA decode; Triton QuEST indexer; flashinfer/default CUB-sort topk_output (vortex_max_topk_val unset)",
+      "manifest": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c20_gpu2_20260925/vortex_quest/manifest.json",
+      "direct_time_speedup_vs_vanilla": 0.9220533875799916
+    }
+  }
+}

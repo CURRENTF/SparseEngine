@@ -1,0 +1,9 @@
+{
+  "checkpoint": "/root/autodl-fs/checkpoints/palu/llama31_8b_whitened_g1_r96_author_hf_20260925",
+  "group_size": 1,
+  "key_rank": 96,
+  "value_rank": 96,
+  "factorization": "grouped_svd_whitened",
+  "model_class": "palu.model.svd_llama.PaluLlamaForCausalLM",
+  "source_commit": "bb22666e2ef96707e8dd21d93fc00146c2e0d615"
+}

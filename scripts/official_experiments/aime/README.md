@@ -129,6 +129,29 @@ including Vanilla, start fresh in the 60-request run.
 The validated GPU3/4/5 result package is in
 [`results/2026-09-25-qwen3-4b-thinking-official-sampling-2try-c32c64/RESULTS.md`](results/2026-09-25-qwen3-4b-thinking-official-sampling-2try-c32c64/RESULTS.md).
 
+`setting.qwen3-4b-thinking-2507-official-sampling-c25-2try.json` reruns
+Vanilla, OmniKV and QuEST with the same 60-request protocol and method
+parameters, setting all three sequence limits to 25 and capturing the 25-way
+decode Graph bucket. The GPU3 launcher runs Vanilla then QuEST; GPU4 runs
+OmniKV. Each method still receives all 60 requests in one `model()` call.
+The matched Vortex QuEST run and C25 results are in
+[`results/2026-09-25-qwen3-4b-thinking-official-sampling-2try-c25-vortex-quest/RESULTS.md`](results/2026-09-25-qwen3-4b-thinking-official-sampling-2try-c25-vortex-quest/RESULTS.md).
+
+The matched GPU2 C20 and C24 runs use the same 60-request protocol. Their
+results are in
+[`C20/RESULTS.md`](results/2026-09-25-qwen3-4b-thinking-official-sampling-2try-c20-vortex-quest/RESULTS.md)
+and
+[`C24/RESULTS.md`](results/2026-09-25-qwen3-4b-thinking-official-sampling-2try-c24-vortex-quest/RESULTS.md).
+The additional C20 SparseEngine QuEST run raises its total sparse-layer budget
+from 2128 to 3072 tokens while keeping all other C20 parameters; see
+[`QuEST 3072/RESULTS.md`](results/2026-09-25-qwen3-4b-thinking-official-sampling-2try-c20-quest3072/RESULTS.md).
+
+The pinned official R-KV vLLM port was run at C60 on the same 60 AIME requests;
+see [`official vLLM R-KV C60/RESULTS.md`](results/2026-09-25-qwen3-4b-thinking-official-vllm-rkv-c60/RESULTS.md).
+The local HiSparse QuEST C20 run completed with a quality anomaly; its result
+and diagnostic boundary are in
+[`HiSparse QuEST C20/RESULTS.md`](results/2026-09-25-qwen3-4b-thinking-hisparse-quest-c20/RESULTS.md).
+
 ## Run
 
 Activate the inference environment first (including its compiler executables).

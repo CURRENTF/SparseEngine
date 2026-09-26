@@ -1,0 +1,32 @@
+{
+  "status": "success",
+  "samples": 3750,
+  "failed_samples": 0,
+  "overall_category_avg": 50.34,
+  "category_scores": {
+    "SDQA": 43.53,
+    "MDQA": 46.42,
+    "SUM": 29.06,
+    "FewShot": 68.81,
+    "Syn": 54.62,
+    "Code": 59.61
+  },
+  "task_scores": {
+    "narrativeqa": 30.37,
+    "qasper": 44.77,
+    "multifieldqa_en": 55.46,
+    "hotpotqa": 57.21,
+    "2wikimqa": 48.81,
+    "musique": 33.23,
+    "gov_report": 34.36,
+    "qmsum": 25.94,
+    "multi_news": 26.88,
+    "trec": 71.5,
+    "triviaqa": 91.23,
+    "samsum": 43.7,
+    "passage_count": 9.75,
+    "passage_retrieval_en": 99.5,
+    "lcc": 63.4,
+    "repobench-p": 55.81
+  }
+}

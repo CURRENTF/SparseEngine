@@ -16,7 +16,9 @@ The trace manifest SHA-256 is
 | Method and setting | C | Resident rows | Complete replay | Output tok/s | Time vs Vanilla C40 |
 |---|---:|---:|---:|---:|---:|
 | Vanilla, radix prefix cache | 40 | 60 | 5,884.06 s | 302.01 | 1.00× |
+| QuEST, radix prefix cache | 32 | 48 | 5,530.32 s | 321.33 | 1.06×* |
 | OmniKV, radix prefix cache | 40 | 60 | 3,745.13 s | 474.50 | **1.57×** |
+| SnapKV 16K, Chain Cache, decode eviction | 52 | 78 | 4,919.70 s | 361.21 | 1.20×* |
 | H2O, Chain Cache, probability score, decode eviction | 80 | 120 | 4,250.30 s | 418.10 | 1.38×* |
 | H2O, Chain Cache, FP32 logits, no decode eviction | 80 | 120 | 2,909.18 s | 610.85 | **2.02×*** |
 
@@ -24,10 +26,11 @@ Every listed run completed 8,000 requests and the same 1,777,061 output
 tokens, with observed prefix or chain reuse, zero active-request preemptions,
 zero recompute replays, and no HTTP 500/503. Output tok/s includes the whole
 replay wall time and synthetic pauses. The OmniKV versus Vanilla C40 result is
-matched by concurrency and common engine settings. Asterisked C80 ratios use
-Vanilla C40 as the denominator by request; there is no valid Vanilla C80 run
-on this trace. The two H2O C80 variants differ in more than score mode and
-eviction: the logits variant uses 16K rather than 4K prefill chunks and
+matched by concurrency and common engine settings. Asterisked C32, C52, and
+C80 ratios use Vanilla C40 as the denominator; there are no valid Vanilla
+C32, C52, or C80 runs on this trace. The two H2O C80 variants differ in more
+than score mode and eviction: the logits variant uses 16K rather than 4K
+prefill chunks and
 `favor_min_decoding_seqs=48` rather than the default 60. Its complete replay
 is 1.46× faster than the probability/eviction variant; that ratio describes
 the combined configuration change.
@@ -42,10 +45,12 @@ limits KV retained at the end of each prefill; decode KV can then grow until
 the next prefill boundary.
 
 QuEST C40 finished all requests but had 13 active-request preemptions, so it
-is excluded from accepted throughput comparisons. SnapKV C80 without decode
+is excluded from accepted throughput comparisons; the valid QuEST C32 rerun
+is listed above. SnapKV C80 without decode
 eviction failed with chain-capacity errors. The decode-eviction C80 rerun
 encountered preemptions and request timeouts and was stopped before full replay;
-neither SnapKV run supplies an accepted throughput point. Large request logs
+neither C80 SnapKV run supplies an accepted throughput point. The valid C52
+SnapKV rerun is listed above. Large request logs
 remain under the recorded persistent output roots. Compact launch arguments,
 cache reuse, latency percentiles, GPU identifiers, and validity evidence are
 in [results.json](results.json).

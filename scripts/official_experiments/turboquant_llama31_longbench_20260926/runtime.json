@@ -1,0 +1,13 @@
+{
+  "tensor_parallel_size": 1,
+  "gpu_memory_utilization": 0.9,
+  "decode_graph": true,
+  "engine_prefill_chunk_size": 4096,
+  "max_num_batched_tokens": 32768,
+  "max_num_seqs_in_batch": 1,
+  "max_num_seqs_in_gpu": 1,
+  "enable_prefix_caching": false,
+  "kv_quant_page_size": 32,
+  "turboquant_bits": 4,
+  "turboquant_seed": 0
+}

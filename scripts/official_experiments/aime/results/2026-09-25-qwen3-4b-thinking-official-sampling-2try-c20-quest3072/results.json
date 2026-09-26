@@ -1,0 +1,49 @@
+{
+  "experiment": "Qwen3-4B-Thinking-2507 AIME 2024 official sampling, 2 tries, C20 SparseEngine QuEST total budget 3072",
+  "model": "Qwen3-4B-Thinking-2507",
+  "sparseengine_git_commit": "7b32be0fa67fc06d0df8bfabab5a2700f8825591",
+  "setting_sha256": "d4159ae4af185bf426d80babe977755ef2b470d55fe6ca943f7a84b8065ae23b",
+  "normalized_dataset_sha256": "bfe60715bc6fd32f1f6438c9a479cd5b6f4daaaa6aa6255b375b81a7ea84c136",
+  "device": "NVIDIA H100 80GB HBM3",
+  "gpu_uuid": "GPU-566a0ffb-6f93-413f-cdf1-bab7f7acd20e",
+  "samples_per_method": 60,
+  "time_metric": "one blocking generation call for all 60 requests; excludes model startup, prompt assembly, and scoring",
+  "quest_budget": {
+    "sink_keep_tokens": 16,
+    "recent_keep_tokens": 64,
+    "decode_keep_tokens": 2992,
+    "total_keep_tokens": 3072,
+    "quest_chunk_size": 16,
+    "quest_skip_layers": 2
+  },
+  "methods": {
+    "quest3072": {
+      "correct": 46,
+      "total": 60,
+      "trial_correct": [
+        23,
+        23
+      ],
+      "at_least_one_correct_per_problem": 24,
+      "status_counts": {
+        "success": 60
+      },
+      "engine": "SparseEngine",
+      "max_concurrency": 20,
+      "generation_elapsed_s": 879.5677581559867,
+      "completion_tokens": 1278597,
+      "decode_graph_active": true,
+      "scheduler_recompute_preemptions_logged": 0,
+      "artifacts": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c20_quest3072_gpu2_20260925/full/quest/benchmark/math_bench/pred/aime/None_0925_1536",
+      "manifest": "/data2/haojitai/outputs/Sparse-vLLM/aime_qwen3_4b_official_sampling_2try_c20_quest3072_gpu2_20260925/full/manifest.json",
+      "direct_time_speedup_vs_c20_vanilla": 1.2905640193857502
+    }
+  },
+  "matched_c20_reference": {
+    "results_package": "../2026-09-25-qwen3-4b-thinking-official-sampling-2try-c20-vortex-quest/results.json",
+    "vanilla_generation_elapsed_s": 1135.1385012879036,
+    "quest2128_correct": 40,
+    "quest2128_generation_elapsed_s": 907.1561199231073,
+    "quest2128_completion_tokens": 1414757
+  }
+}

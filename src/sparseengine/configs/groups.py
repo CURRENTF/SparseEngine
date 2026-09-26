@@ -55,6 +55,14 @@ class SparseMethodConfig:
     quest_token_budget: int = field(init=False)
     quest_skip_layers: int = 2
 
+    retroinfer_sink_tokens: int = 4
+    retroinfer_recent_tokens: int = 64
+    retroinfer_retrieval_ratio: float = 0.018
+    retroinfer_estimation_ratio: float = 0.232
+    retroinfer_avg_cluster_size: int = 16
+    retroinfer_min_index_tokens: int = 16384
+    retroinfer_update_tokens: int = 1024
+
     observation_window_size: int = 32
     snapkv_num_full_layers: int = 0
     snapkv_decode_eviction: bool = False

@@ -31,6 +31,7 @@ RUNTIME_BINDINGS: dict[str, type[SparseMethodRuntime]] = {
     "pyramidkv": PyramidKVRuntime,
     "omnikv": OmniKVRuntime,
     "quest": PassThroughRuntime,
+    "retroinfer": PassThroughRuntime,
     "rkv": RKVRuntime,
     "skipkv": SkipKVRuntime,
     "deltakv": DeltaKVRuntime,

@@ -1,0 +1,82 @@
+{
+  "status": "success",
+  "samples": 503,
+  "evaluated_samples": 503,
+  "successful_samples": 481,
+  "parse_failed_samples": 22,
+  "failed_samples": 0,
+  "correct": 148,
+  "accuracy": 29.423459244532804,
+  "by_difficulty": {
+    "easy": {
+      "samples": 192,
+      "correct": 61,
+      "accuracy": 31.770833333333332
+    },
+    "hard": {
+      "samples": 311,
+      "correct": 87,
+      "accuracy": 27.974276527331188
+    }
+  },
+  "by_official_length": {
+    "long": {
+      "samples": 108,
+      "correct": 29,
+      "accuracy": 26.85185185185185
+    },
+    "medium": {
+      "samples": 215,
+      "correct": 57,
+      "accuracy": 26.511627906976745
+    },
+    "short": {
+      "samples": 180,
+      "correct": 62,
+      "accuracy": 34.44444444444444
+    }
+  },
+  "by_token_bucket": {
+    "all": {
+      "samples": 503,
+      "correct": 148,
+      "accuracy": 29.423459244532804
+    }
+  },
+  "by_domain": {
+    "Code Repository Understanding": {
+      "samples": 50,
+      "correct": 16,
+      "accuracy": 32.0
+    },
+    "Long In-context Learning": {
+      "samples": 81,
+      "correct": 18,
+      "accuracy": 22.22222222222222
+    },
+    "Long Structured Data Understanding": {
+      "samples": 33,
+      "correct": 10,
+      "accuracy": 30.303030303030305
+    },
+    "Long-dialogue History Understanding": {
+      "samples": 39,
+      "correct": 4,
+      "accuracy": 10.256410256410257
+    },
+    "Multi-Document QA": {
+      "samples": 125,
+      "correct": 43,
+      "accuracy": 34.4
+    },
+    "Single-Document QA": {
+      "samples": 175,
+      "correct": 57,
+      "accuracy": 32.57142857142857
+    }
+  },
+  "data_sha256": "15d61c22d92c96900b3c4948b6aeea218d3214b676a65df48e7b8555604c7fe2",
+  "upstream_commit": "2e00731f8d0bff23dc4325161044d0ed8af94c1e",
+  "protocol": "official_0shot_direct_all_pre_chat_middle",
+  "shard_count": 4
+}

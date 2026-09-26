@@ -1,0 +1,23 @@
+{
+  "sparse_method": "delta_compressed_quant_kivi_full_fp8_ref",
+  "hf_prefill_chunk_size": 8192,
+  "full_attention_layers": "0,2,7,13,16,26",
+  "sink_keep_tokens": 8,
+  "recent_keep_tokens": 128,
+  "decode_keep_tokens": 2048,
+  "prefill_keep_tokens": 4096,
+  "deltakv_latent_dim": 512,
+  "deltakv_center_ratio": 0.1,
+  "stride_alpha": 0.001,
+  "deltakv_neighbor_count": 4,
+  "deltakv_latent_quant_bits": 4,
+  "deltakv_latent_quant_group_size": 32,
+  "full_layer_kv_quant_bits": 4,
+  "full_layer_kivi_group_size": 32,
+  "full_layer_kivi_residual_length": 32,
+  "cluster_metric": "l2",
+  "use_cluster": true,
+  "use_compression": true,
+  "chunk_prefill_accel_omnikv": false,
+  "pool_kernel_size": 1
+}

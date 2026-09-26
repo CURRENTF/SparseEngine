@@ -1,0 +1,17 @@
+{
+  "sparse_method": "retroinfer",
+  "decode_graph": false,
+  "enable_prefix_caching": false,
+  "gpu_memory_utilization": 0.9,
+  "max_num_seqs_in_batch": 16,
+  "max_num_seqs_in_gpu": 16,
+  "max_num_batched_tokens": 8192,
+  "engine_prefill_chunk_size": 4096,
+  "retroinfer_min_index_tokens": 8192,
+  "retroinfer_update_tokens": 1024,
+  "retroinfer_avg_cluster_size": 16,
+  "retroinfer_retrieval_ratio": 0.018,
+  "retroinfer_estimation_ratio": 0.232,
+  "retroinfer_sink_tokens": 4,
+  "retroinfer_recent_tokens": 64
+}
