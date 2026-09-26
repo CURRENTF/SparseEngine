@@ -1408,7 +1408,7 @@ if __name__ == "__main__":
     print("==== Results ====")
     print(json.dumps(results, indent=2))
 
-    # 记录评测信息到日志文件
+
     os.makedirs(BASE_PATH, exist_ok=True)
     log_path = os.path.join(BASE_PATH, "scbench_eval.log")
     with open(log_path, "a", encoding="utf-8") as f:
@@ -1417,7 +1417,7 @@ if __name__ == "__main__":
         f.write(f"Args: {json.dumps(vars(args), indent=2)}\n")
         f.write("-" * 80 + "\n")
 
-    # 记录结果到日志
+
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"Evaluation Results:\n")
         f.write(json.dumps(results, indent=4, ensure_ascii=False))

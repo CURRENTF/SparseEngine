@@ -190,7 +190,7 @@ def _finalize_model_config(config, model_spec: ModelSpec) -> None:
     )
 
     if config.max_num_seqs_in_batch > 32:
-        logger.warning('max_num_seqs_in_batch 过大或许会占用太多显存')
+        logger.warning('A large max_num_seqs_in_batch may consume excessive device memory')
 
 
 def load_and_validate_model(config) -> None:

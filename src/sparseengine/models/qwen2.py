@@ -249,8 +249,8 @@ class Qwen2Model(nn.Module):
         self.embed_tokens = VocabParallelEmbedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([Qwen2DecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        
-        # 稀疏策略控制器，由 ModelRunner 动态注入
+
+
         self.sparse_controller = None
 
     def forward(
@@ -268,7 +268,7 @@ class Qwen2Model(nn.Module):
             self.debug_last_hidden_states = {
                 -1: hidden_states[-1:].detach().clone(),
             }
-        
+
         for i, layer in enumerate(self.layers):
             context.now_layer_idx = i
             hidden_states, residual = layer(positions, hidden_states, residual)
@@ -282,11 +282,11 @@ class Qwen2Model(nn.Module):
             if debug_layers is not None and i in debug_layers:
                 layer_output = hidden_states if residual is None else hidden_states + residual
                 self.debug_last_hidden_states[int(i)] = layer_output[-1:].detach().clone()
-            
-            # 回调控制器执行稀疏逻辑
+
+
             if self.sparse_controller is not None:
                 self.sparse_controller.on_layer_end(i, context)
-                
+
         hidden_states, _ = self.norm(hidden_states, residual)
         if debug_layers is not None:
             self.debug_last_hidden_states[self.config.num_hidden_layers] = hidden_states[-1:].detach().clone()

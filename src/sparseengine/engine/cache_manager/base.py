@@ -80,10 +80,7 @@ def _debug_value_summary(value: Any) -> Any:
 
 @dataclass
 class LayerBatchStates:
-    """存储当前 Batch 在特定层的前向计算状态。
-
-    仅包含与物理存储和基本前向元数据相关的字段。
-    """
+    """Physical storage and forward metadata for a batch at one layer."""
 
     slot_mapping: torch.Tensor | None = None
     context_lens: torch.Tensor | None = None
@@ -391,7 +388,7 @@ AttentionKeyMaterializer = Callable[[AttentionKeyComputeView], torch.Tensor]
 
 
 class CacheManager(ABC):
-    """每个 Rank 只有一个 CacheManager，内部管理所有层的物理槽位和 KV Cache。"""
+    """Own physical KV slots and cache storage for all layers on one rank."""
 
     validate_runtime_invariants = False
 
@@ -613,7 +610,7 @@ class CacheManager(ABC):
         return create_manager(StandardCacheManager)
 
     def _get_available_slots_info(self) -> tuple[int, int]:
-        """返回 (可用显存字节数, 每层每 token 的字节数)"""
+        """Return available memory bytes and per-layer bytes per token."""
         config = self.config
         hf_config = config.hf_config
         slot_bytes_per_layer = self.attention_cache_bytes_per_slot_per_layer()
@@ -905,7 +902,7 @@ class CacheManager(ABC):
 
     @abstractmethod
     def allocate_kv_cache(self):
-        """自动计算并物理分配 KV Cache 张量"""
+        """Calculate capacity and allocate physical KV cache tensors."""
         raise NotImplementedError
 
     @abstractmethod

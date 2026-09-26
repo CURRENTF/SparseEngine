@@ -812,14 +812,14 @@ def worker(
     if rank == 0:
         _record_effective_runtime_config(generate_fn=model, out_root=out_root)
     graph_status_before = _decode_cuda_graph_status(generate_fn=model, rank=rank)
-    
+
     for dataset in datasets:
         data_path = get_longbench_data_path(dataset, args.e)
         if not os.path.isfile(data_path):
             raise FileNotFoundError(
                 f"LongBench dataset file not found for dataset '{dataset}': {data_path}"
             )
-        
+
         with open(data_path, "r", encoding="utf-8") as handle:
             data = [json.loads(line) for line in handle if line.strip()]
         for source_idx, row in enumerate(data):
@@ -883,10 +883,10 @@ def worker(
                 row["_longbench_prompt_tokens"] = int(item.prompt_tokens)
                 selected_data.append(row)
             data = selected_data
-        
+
         data_subset = data[rank::world_size]
         if not data_subset: continue
-        
+
         dataset_info = {
             'dataset': dataset,
             'prompt_format': dataset2prompt[dataset],
@@ -895,7 +895,7 @@ def worker(
             'out_path': os.path.join(worker_out_root, f"{dataset}.jsonl"),
             'out_root': worker_out_root,
         }
-        
+
         get_pred(
             rank,
             data_subset,
@@ -1171,7 +1171,7 @@ def main() -> None:
         if args.worker_rank < 0:
             _merge_operator_runtime_stats(out_root, world_size=args.ws)
             phase = "metric"
-            # 记录评测信息到日志文件
+
             log_path = os.path.join(out_root, "longbench_eval.log")
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -1180,8 +1180,8 @@ def main() -> None:
                 f.write(f"Args: {json.dumps(vars(args), indent=2)}\n")
                 f.write("-" * 80 + "\n")
 
-            # 自动运行评测并记录日志
-            print(f"正在对 {out_root} 进行自动评测...")
+
+            print(f"Running automatic evaluation for {out_root}...")
             eval_cmd = [
                 sys.executable,
                 "benchmark/long_bench/eval.py",
@@ -1192,7 +1192,7 @@ def main() -> None:
 
             subprocess.run(eval_cmd, check=True)
 
-            # 读取评测结果并写入日志
+
             result_path = os.path.join(out_root, "result.json")
             if not os.path.exists(result_path):
                 raise FileNotFoundError(
@@ -1205,7 +1205,7 @@ def main() -> None:
                 f.write(f"Evaluation Results ({'LongBench-E' if args.e else 'LongBench'}):\n")
                 f.write(json.dumps(scores, indent=4, ensure_ascii=False))
                 f.write("\n" + "="*80 + "\n\n")
-            print(f"评测结果已成功写入日志: {log_path}")
+            print(f"Evaluation results saved to: {log_path}")
             _write_run_status(out_root, "success")
     except subprocess.CalledProcessError as error:
         failure_status = "metric_failed" if phase == "metric" else (

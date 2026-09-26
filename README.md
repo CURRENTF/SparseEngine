@@ -3,8 +3,6 @@
 
 </div>
 
-<p align="center">English | <a href="README_zh.md">简体中文</a></p>
-
 A sparse-first inference engine for long-context LLM serving.
 
 <div align="center">
@@ -173,7 +171,6 @@ New sparse methods should keep persistent physical cache state in
 `src/sparseengine/engine/cache_manager/`, keep logical orchestration behind a
 `SparseMethodRuntime`, and keep `src/sparseengine/layers/attention.py` generic.
 See the [sparse method runtime architecture](docs/en/design/sparse-method-runtime.md).
-
 
 ## License
 

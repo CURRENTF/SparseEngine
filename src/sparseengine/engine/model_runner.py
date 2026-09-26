@@ -289,10 +289,7 @@ def select_master_port() -> int:
 
 
 class ModelRunner:
-    """
-    负责模型执行的类。每个 GPU Rank 进程都拥有一个 ModelRunner 实例。
-    主要职责：权重加载、显存分配 (KV Cache)、槽位管理 (Rank-Local)、前向计算。
-    """
+    """Execute the model on one rank; own weight loading, KV allocation, local slots, and forward execution."""
 
     def __init__(
         self,
@@ -323,7 +320,7 @@ class ModelRunner:
         self.platform.init_backend()
         self.device = self.platform.get_device(rank)
 
-        # 初始化分布式环境并绑定对应的设备
+
         self.platform.set_device(self.device)
         if self.platform.enum is platforms.PlatformEnum.CUDA:
             validate_required_cuda_kernel_families()
@@ -364,7 +361,7 @@ class ModelRunner:
         # Start a new lifecycle before model construction so KV sizing observes
         # only this engine's model load and persistent allocations.
         self.platform.reset_peak_memory_stats(self.device)
-        
+
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(hf_config.dtype)
         torch.set_default_device(self.device)
@@ -466,14 +463,14 @@ class ModelRunner:
         if callable(warmup_moe):
             warmup_moe()
         lock_workspace_manager()
-        
+
         self.sampler = Sampler()
         self._tokenizer_metadata: tuple[tuple[int, ...], tuple[int, ...] | None] | None = None
 
         # DeltaKV cache allocation depends on latent dimension / compressor architecture.
         # Sync those fields from the compressor checkpoint before creating CacheManager.
         sync_deltakv_config_from_checkpoint(config)
-        
+
         has_linear_layers = bool(getattr(config.runtime_layout, "linear_attention_layer_indices", ()))
         state_spec_provider = getattr(self.model, "recurrent_state_spec", None)
         if has_linear_layers and not callable(state_spec_provider):
@@ -522,18 +519,18 @@ class ModelRunner:
         torch.set_default_device(None)
         torch.set_default_dtype(default_dtype)
 
-        # TP 场景下的多进程指令同步
+
         if self.parallel_context.attn_tp_size > 1:
             if not self.tp_shm_name:
                 raise ValueError("tp_shm_name is required when attention TP > 1.")
             if self.parallel_context.attn_tp_rank == 0:
-                # Rank 0 创建共享内存用于发送方法调用指令
+
                 self.shm = SharedMemory(name=self.tp_shm_name, create=True, size=TP_SHM_SIZE)
                 self.parallel_context.attn_tp.barrier(
                     device_ids=self.platform.barrier_device_ids(rank)
                 )
             else:
-                # 其他 Rank 监听共享内存中的方法调用指令
+
                 self.parallel_context.attn_tp.barrier(
                     device_ids=self.platform.barrier_device_ids(rank)
                 )
@@ -789,7 +786,7 @@ class ModelRunner:
         self._compilation_guard.arm()
 
     def exit(self):
-        """释放资源并注销分布式进程组"""
+        """Release resources and shut down worker processes or distributed state."""
         guard = getattr(self, "_compilation_guard", None)
         if guard is not None:
             guard.close()
@@ -819,7 +816,7 @@ class ModelRunner:
         dist.destroy_process_group()
 
     def loop(self):
-        """子进程的主循环：监听共享内存，解析并执行来自 Rank 0 的方法指令"""
+        """Receive and execute rank-zero commands from shared memory."""
         while True:
             method_name, args = self.read_shm()
             try:
@@ -838,7 +835,7 @@ class ModelRunner:
                 break
 
     def read_shm(self):
-        """反序列化共享内存中的方法名和参数"""
+        """Deserialize a method name and arguments from shared memory."""
         assert self.parallel_context.attn_tp_size > 1 and self.parallel_context.attn_tp_rank > 0
         command_event, _ = self.event
         command_event.wait()
@@ -849,7 +846,7 @@ class ModelRunner:
 
     @cpu_timing.timed
     def write_shm(self, method_name, *args, wait_for_read: bool = True):
-        """序列化方法名 and 参数并写入共享内存"""
+        """Serialize a method name and arguments into shared memory."""
         assert self.parallel_context.attn_tp_size > 1 and self.parallel_context.attn_tp_rank == 0
         data = pickle.dumps([method_name, *args])
         n = len(data)
@@ -878,7 +875,7 @@ class ModelRunner:
                 time.sleep(0.0001)
 
     def call(self, method_name, *args):
-        """RPC 风格的调用：如果是 Rank 0 则先广播指令，然后所有进程执行本地逻辑"""
+        """Broadcast commands on rank zero, then execute the method on every rank."""
         synchronizes_status = method_name in TP_RPC_STATUS_SYNC_METHODS
         if self.parallel_context.attn_tp_size > 1 and self.parallel_context.attn_tp_rank == 0:
             # A status-synchronized RPC already waits for every worker before
@@ -1113,11 +1110,11 @@ class ModelRunner:
             )
 
     def load_deltakv_compressors(self):
-        """加载 DeltaKV 压缩器权重"""
+        """Load DeltaKV compressor weights."""
         method = str(self.config.sparse_method or "")
         if not method.startswith('deltakv') or self.config.deltakv_checkpoint_path is None:
             return
-        
+
         logger.info(f"Loading DeltaKV compressors from {self.config.deltakv_checkpoint_path}")
         from sparseengine.utils.loader import load_deltakv_compressors_to_cache_manager
 
@@ -1190,7 +1187,7 @@ class ModelRunner:
             asynchronous.assert_releasable(seq_ids)
 
     def free_slots(self, seq_id: int):
-        """通知 CacheManager 释放该序列占用的物理显存位子"""
+        """Release a sequence's physical slots through the cache manager."""
         self._assert_cache_release((seq_id,))
         with profiler.record("model_free_slots"):
             if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1":
@@ -2106,7 +2103,7 @@ class ModelRunner:
 
     @cpu_timing.timed
     def prepare_step(self, seqs: list[Sequence], is_prefill: bool):
-        """准备前向上下文并设置 Context"""
+        """Prepare and install the forward context."""
         input_ids, positions, cu_seqlens_q = self.runtime_state.prepare_step(seqs, is_prefill)
         set_context(
             is_prefill,
@@ -2123,7 +2120,7 @@ class ModelRunner:
         return input_ids, positions
 
     def prepare_sample(self, seqs: list[Sequence]):
-        """准备采样超参数"""
+        """Prepare sampling parameters."""
         size = len(seqs)
         buffers = getattr(self, "_sampling_buffers", None)
         upload_done = getattr(self, "_sampling_upload_done", None)
@@ -2419,7 +2416,7 @@ class ModelRunner:
     @torch.inference_mode()
     @cpu_timing.timed
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool):
-        """物理执行逻辑：统一使用 Eager 模式"""
+        """Execute the model forward pass."""
         _stage = 'prefill' if is_prefill else 'decode'
         with profiler.record(f"model_run_model_{_stage}"):
             if is_prefill and self._prefill_inputs_embeds is not None:
@@ -2522,7 +2519,7 @@ class ModelRunner:
         seqs: list[Sequence],
         is_prefill: bool,
     ) -> tuple[list[int], tuple[list[float | None], list[dict[int, float] | None]] | None]:
-        """单步执行主逻辑"""
+        """Execute one inference step."""
         asynchronous = getattr(self, "_async_execution", None)
         if asynchronous is not None and not getattr(self, "_async_submitting", False):
             asynchronous.prepare_synchronous_execution()
@@ -2569,19 +2566,19 @@ class ModelRunner:
                 finally:
                     reset_context()
 
-            # 1. 准备前向上下文
+
             ctx = get_context()
             input_ids, positions = self.prepare_step(seqs, is_prefill)
-            
-            # 2. 准备稀疏化状态
+
+
             with profiler.record("model_sparse_prepare"):
                 ctx.sparse_controller = self.sparse_controller
                 self.sparse_controller.prepare_forward(seqs, is_prefill)
-            
-            # 3. 前向计算
+
+
             logits = self.run_model(input_ids, positions, is_prefill)
-            
-            # 4. Token 采样 (仅 Rank 0)
+
+
             with profiler.record("model_sampler"):
                 if self.parallel_context.attn_tp_rank == 0:
                     sampling_logits = self._apply_sampling_penalties(logits, seqs)
@@ -2601,7 +2598,7 @@ class ModelRunner:
             if token_ids is not None and not getattr(self, "_async_submitting", False):
                 token_ids = token_ids.tolist()
 
-            # 5. 后置稀疏处理 (如 SnapKV 驱逐)
+
             self._post_sparse_forward(seqs, is_prefill)
 
             reset_context()

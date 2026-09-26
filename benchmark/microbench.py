@@ -506,12 +506,12 @@ def benchmark_task(method, length, bs, args, results_dict):
         from benchmark.vllm_microbench import benchmark_decode_stage
         benchmark_decode_stage(method, length, bs, args, results_dict)
         return
-    # 为每个子进程重置显存统计
+
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.empty_cache()
-    
+
     print(f"\n>>> Starting: {method.upper()} | Context: {length} | Batch: {bs}...")
-    
+
     base_hyper_params = args.hyper_params_dict
     synchronize_step_timing = bool(
         getattr(args, "synchronize_step_timing", False)
@@ -547,7 +547,7 @@ def benchmark_task(method, length, bs, args, results_dict):
             f"for sparse_method={normalized_method!r}, tensor_parallel_size={tensor_parallel_size}."
         )
         return
-    
+
     llm = None
     resolved_engine_config: dict[str, Any] = {}
     step_rows = []
@@ -571,7 +571,7 @@ def benchmark_task(method, length, bs, args, results_dict):
         hyper_params.pop("max_model_len", None)
         hyper_params.setdefault("max_num_seqs_in_batch", int(bs))
         hyper_params.setdefault("max_decoding_seqs", int(bs))
-        
+
         from sparseengine import LLM, SamplingParams
         engine_kwargs = {
             **hyper_params,
@@ -600,10 +600,10 @@ def benchmark_task(method, length, bs, args, results_dict):
         actual_decode_peak = 0
         wave_decode_gap_steps = int(getattr(args, "wave_decode_gap_steps", 0) or 0)
 
-        # --- 关键修改：重置并开始正式测量 ---
+
         from sparseengine.utils.profiler import profiler
         profiler.reset()
-        
+
         torch.cuda.synchronize()
 
         prefill_tokens = 0
@@ -625,7 +625,7 @@ def benchmark_task(method, length, bs, args, results_dict):
             raise ValueError(
                 "max_decode_steps_after_full must exceed decode_warmup_steps_after_full when both are set."
             )
-        
+
         t_start = perf_counter()
         decode_started = False
 
@@ -705,7 +705,7 @@ def benchmark_task(method, length, bs, args, results_dict):
                 completed_outputs.extend(finished_outputs)
                 step_rows.append({"tokens": num_tokens, "elapsed_s": step_dt, "measured": False})
             _observe_prefix_cache_hits(llm, prefix_hits_by_seq_id)
-            
+
             if num_tokens > 0:
                 prefill_tokens += num_tokens
                 prefill_times.append(step_dt)
@@ -829,7 +829,7 @@ def benchmark_task(method, length, bs, args, results_dict):
             if decode_bs_after_full
             else (decode_tokens / len(decode_times) if decode_times else 0)
         )
-        
+
         stage_mode = (
             f" | AdmissionWave: {admission_wave_size}"
             f" | WaveGapSteps: {wave_decode_gap_steps}"
@@ -840,7 +840,7 @@ def benchmark_task(method, length, bs, args, results_dict):
         )
         if window is None:
             print(f"[{method.upper()}] First observed token: {ttft:.2f}s | Prefill step: {prefill_tp or 0.0:.2f} tok/s | Decode step: {decode_tp or 0.0:.2f} tok/s | Decode execution proxy: {avg_itl:.2f}ms | AvgBS: {avg_active_bs:.1f} | Mem: {peak_mem:.2f} GB{stage_mode}")
-        
+
         results_dict[(method, length, bs)] = {
             "method": method,
             "sparse_method": normalized_method,
@@ -1038,7 +1038,7 @@ def main():
         default=None,
         help="Optional directory for run_info.json, performance.jsonl, aggregate_metrics.json, and report.md.",
     )
-    
+
     args = parser.parse_args()
     args.engine_kwargs_dict = _load_json_arg(args.engine_kwargs)
     if args.engine == "sparseengine" and (args.engine_kwargs_dict or args.backend_label):
@@ -1057,7 +1057,7 @@ def main():
         args.hyper_params_dict = _build_engine_hyper_params(args)
     except ValueError as e:
         parser.error(str(e))
-    
+
     test_lengths = [int(x) for x in args.lengths.split(",")]
     test_methods = args.methods.split(",")
     test_batch_sizes = [int(x) for x in args.batch_sizes.split(",")]
@@ -1080,13 +1080,13 @@ def main():
                     synchronize_step_timing=bool(args.synchronize_step_timing),
                 )
 
-    # 打印最终报表
+
     print(f"\n\n{'='*140}")
     decode_column = "DecWindowTP" if args.decode_window_steps else "DecStepTP"
     print(f"{ 'Method':<12} {'Len':<8} {'BS':<4} {'First(s)':<10} {'PreStepTP':<12} {decode_column:<12} {'Proxy(ms)':<10} {'AvgBS':<8} {'Mem(GB)':<10} {'Speedup'}")
     print("-" * 140)
-    
-    # 获取 Vanilla 作为基准计算加速比 (按 length 和 BS 匹配)
+
+
     vanilla_stats = {}
     for length in test_lengths:
         for bs in test_batch_sizes:
@@ -1113,7 +1113,7 @@ def main():
                     )
                     jsonl_rows.append(row)
                     continue
-                
+
                 ttft = res["ttft"]
                 pre_tp = res["prefill_tp"]
                 dec_tp = res["decode_tp"]
@@ -1121,9 +1121,9 @@ def main():
                 avg_bs = res["avg_bs"]
                 mem = res["mem"]
                 has_queued = res.get("has_queued", False)
-                
+
                 bs_str = f"{bs}*" if has_queued else f"{bs}"
-                
+
                 speedup = None if args.decode_window_steps else 1.0
                 if (length, bs) in vanilla_stats:
                     vanilla_decode_tp = float(vanilla_stats[(length, bs)])

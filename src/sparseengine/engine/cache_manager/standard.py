@@ -2192,7 +2192,7 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
         }
 
     def free_part_slots(self, layer_idx: int, seq: Sequence, keep_indices: torch.Tensor):
-        raise ValueError('不需要实现该方法')
+        raise ValueError('This method is not required')
 
     def _prepare_prefill(self, seqs: list[Sequence]):
         with profiler.record("cache_prepare_prefill"):

@@ -18,13 +18,7 @@ from sparseengine.utils.profiler import cpu_timing
 
 
 class Scheduler:
-    """
-    请求调度器，负责管理待处理 (waiting) 和正在运行 (running) 的序列。
-    主要职责：
-    1. 决定每一轮 (step) GPU 应该处理哪些序列。
-    2. 实现分块 Prefill (Chunked Prefill) 以处理长序列。
-    3. 管理逻辑显存额度，并在显存不足时触发抢占 (Preemption/Eviction)。
-    """
+    """Manage waiting and running requests, chunked prefill, memory budgets, and preemption."""
 
     def __init__(
         self,
@@ -58,9 +52,7 @@ class Scheduler:
             fallback_eos_token_id=self.eos,
         )
 
-        
-        # memory_oracle 引用 Rank 0 的 CacheManager，作为全局显存余量参考。
-        # 对多层异构预算，采用更保守的可用空间估计。
+
         self.memory_oracle = memory_oracle
         self.decode_capacity_reclaimer = decode_capacity_reclaimer
         self.prefill_capacity_reclaimer = prefill_capacity_reclaimer
@@ -70,7 +62,7 @@ class Scheduler:
             if prefix_cache_hit_refresher is None
             else prefix_cache_hit_refresher
         )
-        
+
         self.waiting: deque[Sequence] = deque()
         self.decoding: deque[Sequence] = deque()
         self._admission_defer_warned_seq_ids: set[int] = set()
@@ -181,11 +173,11 @@ class Scheduler:
         return None
 
     def is_finished(self):
-        """判断所有请求是否已处理完成"""
+        """Return whether all requests have completed."""
         return len(self.waiting) == 0 and len(self.decoding) == 0
 
     def add(self, seq: Sequence):
-        """将新请求加入等待队列"""
+        """Add a request to the waiting queue."""
         if self.is_finished():
             self.phase = "prefill"
             self._phase_started_at = time.monotonic()
@@ -399,7 +391,7 @@ class Scheduler:
                 len(self.decoding),
             )
         else:
-            victim.num_prefilled_tokens = 0  # 重置进度，下次回来重新跑 Prefill
+            victim.num_prefilled_tokens = 0
         for survivor in self.decoding:
             survivor.decode_progress_checkpoint = int(
                 survivor.num_completion_tokens
@@ -419,7 +411,7 @@ class Scheduler:
             scheduled_seqs.clear()
         preempted_seqs.append(victim)
         self.total_preemptions += 1
-        logger.warning(f'驱逐请求 id = {victim.seq_id} | slots={self.memory_oracle.free_slot_stats()}')
+        logger.warning(f'Evicting request id = {victim.seq_id} | slots={self.memory_oracle.free_slot_stats()}')
         return [], False, preempted_seqs
 
     def _eligible_decode_batch(self) -> list[Sequence]:
@@ -489,12 +481,7 @@ class Scheduler:
         return result
 
     def _schedule_impl(self, *, allow_prefill_reclaim: bool = True) -> tuple[list[Sequence], bool, list[Sequence]]:
-        """
-        核心调度逻辑。
-        返回：(本次要运行的序列列表, 是否是 Prefill 阶段, 本次被抢占的序列列表)
-        
-        注意：目前为了简化算子实现，单次 step 不支持 Prefill 和 Decode 混合。
-        """
+        """Return sequences to run, the prefill flag, and preempted sequences. A step runs either prefill or decode."""
         scheduled_seqs = []
         preempted_seqs = []
         num_batched_seqs = 0
@@ -526,7 +513,7 @@ class Scheduler:
                     self._phase_reason = "no_prefill" if not self.waiting else "decode_affinity"
                     return batch, False, []
 
-        # 逻辑可用空间计数器，用于在本轮调度中预估显存占用
+
         physical_free_count = self.memory_oracle.num_free_slots
         if self.waiting:
             reserved_prefill = self._reserved_prefill_tokens()
@@ -566,7 +553,7 @@ class Scheduler:
                 self.waiting, key=lambda seq: self._prefill_wait_since[seq.seq_id]
             ))
 
-        # --- 阶段 1: Prefill 调度 ---
+
         # Affinity may already have selected decode above.
         prefill_mode_order: list[tuple[int, str, object]] = []
         replay_waiting = [seq for seq in self.waiting if seq.is_recompute_replay]
@@ -621,11 +608,11 @@ class Scheduler:
                             int(candidate_step_free_count),
                         )
 
-                    # 异常处理：如果由于某种原因已经 prefill 完却还在 waiting 队列
-                    if remaining_prefill_tokens <= 0:
-                        raise ValueError('BUG：理论上不应该在 waiting 里')
 
-                    # 确定本次 Chunk 的大小
+                    if remaining_prefill_tokens <= 0:
+                        raise ValueError('BUG: a completed prefill request must not remain in the waiting queue')
+
+
                     can_prefill_tokens = self._prefill_step_tokens(
                         seq=seq,
                         mode=target_mode,
@@ -669,13 +656,11 @@ class Scheduler:
                                 candidate_step_free_count,
                             )
                             blocked_prefill_step_failure = (seq, int(remaining_prefill_tokens), int(available))
-                        logger.debug(f'{can_prefill_tokens=} 结束 schedule prefill 请求')
+                        logger.debug(f'{can_prefill_tokens=} prefill scheduling complete')
                         self.waiting.append(seq)
                         continue
 
-                    # 逻辑显存分配检查：如果是新序列的起始，检查是否能容纳完整的 Prompt 长度。
-                    # 采用保守策略：预先逻辑占位整个 Prompt，即使后续可能会有稀疏逐出。
-                    # 只要我想尽可能地持续生成某个序列，那就应该提前都申请出来
+
                     if seq.num_prefilled_tokens == 0:
                         raw_costs = self.memory_oracle.prompt_admission_costs(seq)
                         shared_costs_fn = getattr(
@@ -798,7 +783,7 @@ class Scheduler:
                         for name, resources in shared_costs.items():
                             charged_shared_resources.setdefault(name, set()).update(resources)
 
-                    # 设置当前 Chunk 属性并标记状态
+
                     logger.debug(f'Add chunk prefill with {can_prefill_tokens} tokens.')
                     seq.current_chunk_size = can_prefill_tokens
                     num_batched_seqs += 1
@@ -816,7 +801,7 @@ class Scheduler:
             finally:
                 self.waiting.extendleft(reversed(skipped_prefill))
 
-        # 如果有 Prefill 请求被选中，直接返回，本次 step 只跑 Prefill。
+
         if scheduled_seqs:
             return scheduled_seqs, True, []
 
@@ -831,8 +816,8 @@ class Scheduler:
             )
 
         self._phase_reason = "prefill_unavailable" if self.waiting else "no_prefill"
-        # --- 阶段 2: Decode 调度 ---
-        # 只有在没有 Prefill 任务时才处理增量生成任务。
+
+
         decode_scan_budget = len(self.decoding)
         blocked_decode_victim: Sequence | None = None
         while (
@@ -846,7 +831,7 @@ class Scheduler:
                 self.decoding.append(seq)
                 continue
 
-            # 检查逻辑空间是否够塞下一个新 Token (Decode 步进)
+
             candidate_decode_free = min(
                 int(decode_logical_free_count),
                 int(self.memory_oracle.decode_step_free_slots_for(seq)),
@@ -868,9 +853,8 @@ class Scheduler:
                         blocked_decode_victim = seq
                     self.decoding.append(seq)
                     break
-                # 显存耗尽，触发驱逐/抢占逻辑
-                # 策略：牺牲当前 seq，并立刻返回，让上层先释放槽位再进入下一轮调度。
-                # 这样可以避免在一次 schedule() 调用中反复驱逐多个请求造成抖动。
+
+
                 return self._preempt_decode_victim(
                     seq,
                     scheduled_seqs,
@@ -994,8 +978,8 @@ class Scheduler:
                     "or shorten the prompt / generation budget."
                 )
             return [], False, preempted_seqs
-            
-        # 将被选中的 Decode 序列放回 running 队列以保持顺序
+
+
         self.decoding.extendleft(reversed(scheduled_seqs))
         if blocked_decode_victim is not None:
             # Retry the sequence that could not join this partial batch first.
@@ -1020,26 +1004,21 @@ class Scheduler:
         *,
         retain_finished: bool = False,
     ):
-        """
-        模型运行后的后处理工作。
-        1. 更新 Token 序列。
-        2. 更新 Prefill 进度。
-        3. 处理序列完成状态 (EOS 或 Max Tokens)。
-        """
+        """Update tokens and prefill progress, and handle EOS and token-limit completion."""
         token_logprobs = token_logprobs or [None] * len(seqs)
         top_logprobs = top_logprobs or [None] * len(seqs)
         if is_prefill:
             for seq, token_id, token_logprob, top_logprob in zip(seqs, token_ids, token_logprobs, top_logprobs):
                 seq.num_prefilled_tokens += seq.current_chunk_size
-                # 检查 Chunked Prefill 是否完成
+
                 if seq.num_prefilled_tokens < seq.num_prompt_tokens:
-                    # 没跑完，塞回等待队列头部下次继续
+
                     seq.status = SequenceStatus.WAITING
                     self._prefill_wait_since.setdefault(seq.seq_id, time.monotonic())
                     self.waiting.appendleft(seq)
                 else:
                     self.memory_oracle.complete_prefill_execution(seq)
-                    # Prefill 彻底结束，进入正常生成流程
+
                     seq.status = SequenceStatus.RUNNING
                     self.decoding.append(seq)
                     if seq.is_recompute_replay:
@@ -1053,9 +1032,9 @@ class Scheduler:
                                 seq.seq_id,
                             )
                         continue
-                    # 记录模型生成的第一个 Token
+
                     seq.append_token(token_id, token_logprob, top_logprob)
-                    # 检查是否命中结束条件
+
                     request_eos = resolve_eos_token_ids(
                         seq.eos_token_ids,
                         self.eos_token_ids,
@@ -1066,7 +1045,7 @@ class Scheduler:
                             self.decoding.remove(seq)
             return
 
-        # 处理 Decode 步骤
+
         for seq, token_id, token_logprob, top_logprob in zip(seqs, token_ids, token_logprobs, top_logprobs):
             if seq.is_recompute_decode:
                 # This forward rebuilt KV for an already accepted completion

@@ -449,7 +449,7 @@ class SnapKVCacheManager(CacheManager):
                         f"staging_slots={self.pyramidkv_prefill_staging_num_slots} "
                         f"required={staging_bytes / 1024**3:.2f}GiB."
                     )
-            # PyramidKV: 根据比例分配每层不同大小的 cache
+
             kv_layer_ids = list(self.runtime_layout.kv_idx_to_layer_idx)
             decode_horizon = max(
                 int(config.decode_reservation_tokens),
@@ -544,7 +544,7 @@ class SnapKVCacheManager(CacheManager):
                 f"row_slot_map_bytes={row_slot_map_bytes}"
             )
         else:
-            # 标准模式：所有层使用相同大小
+
             num_slots, _, row_slot_map_bytes = resolve_snapkv_cache_capacity(
                 available_bytes=available_memory,
                 slot_bytes_per_layer=slot_bytes_per_layer,

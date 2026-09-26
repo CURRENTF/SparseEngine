@@ -1,11 +1,4 @@
-"""
-DeltaKV 专用 Triton 内核
-
-包含以下优化操作:
-1. batch_l2_distance_topk: 批量 L2 距离计算 + TopK 选择
-2. batch_gather_mean: 批量 gather + mean 操作
-3. batch_reconstruct: 批量重建操作
-"""
+"""DeltaKV Triton kernels for batched L2 selection, gather-mean, and reconstruction."""
 
 import os
 
@@ -1860,9 +1853,9 @@ def full_layer_kivi_flash_decode_stage1_grouped(
 
 @triton.jit
 def _batch_l2_distance_kernel(
-    A,  # (B, N, D) - 待计算的 tokens
-    B,  # (B, M, D) - 参考 centers
-    Out,  # (B, N, M) - 输出距离矩阵
+    A,
+    B,
+    Out,
     N: tl.constexpr,
     M: tl.constexpr,
     D: tl.constexpr,
@@ -1873,10 +1866,7 @@ def _batch_l2_distance_kernel(
     BLOCK_M: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
-    """
-    计算批量 L2 距离: Out[b, n, m] = ||A[b, n] - B[b, m]||^2
-    使用分块计算: a_norm + b_norm - 2 * dot(a, b)
-    """
+    """Compute batched squared L2 distances with tiled norms and dot products."""
     batch_id = tl.program_id(0)
     block_n = tl.program_id(1)
     block_m = tl.program_id(2)
@@ -1888,36 +1878,36 @@ def _batch_l2_distance_kernel(
     mask_n = offs_n < N
     mask_m = offs_m < M
 
-    # 加载 A 块: (BLOCK_N, D)
+
     a_ptrs = A + batch_id * stride_ab + offs_n[:, None] * stride_an + offs_d[None, :]
     a = tl.load(a_ptrs, mask=mask_n[:, None] & (offs_d[None, :] < D), other=0.0)
 
-    # 加载 B 块: (BLOCK_M, D)
+
     b_ptrs = B + batch_id * stride_bb + offs_m[:, None] * stride_bm + offs_d[None, :]
     b = tl.load(b_ptrs, mask=mask_m[:, None] & (offs_d[None, :] < D), other=0.0)
 
-    # 计算 a_norm: (BLOCK_N,)
+
     a_norm = tl.sum(a * a, axis=1)
 
-    # 计算 b_norm: (BLOCK_M,)
+
     b_norm = tl.sum(b * b, axis=1)
 
-    # 计算 dot product: (BLOCK_N, BLOCK_M)
+
     dot = tl.dot(a, tl.trans(b))
 
-    # L2 距离: a_norm + b_norm - 2 * dot
+
     dist = a_norm[:, None] + b_norm[None, :] - 2.0 * dot
 
-    # 存储结果
+
     out_ptrs = Out + batch_id * stride_ob + offs_n[:, None] * stride_on + offs_m[None, :] * stride_om
     tl.store(out_ptrs, dist, mask=mask_n[:, None] & mask_m[None, :])
 
 
 @triton.jit(do_not_specialize=["stride_ib", "stride_ob"])
 def _batch_gather_mean_kernel(
-    Src,  # (num_centers, D) - 源数据
-    Indices,  # (B, N, K) - 索引
-    Out,  # (B, N, D) - 输出
+    Src,
+    Indices,
+    Out,
     K: tl.constexpr,
     D: tl.constexpr,
     stride_sb, stride_sd,
@@ -1925,9 +1915,7 @@ def _batch_gather_mean_kernel(
     stride_ob, stride_on, stride_od,
     BLOCK_D: tl.constexpr,
 ):
-    """
-    批量 gather + mean: Out[b, n] = mean(Src[Indices[b, n, k]] for k in range(K))
-    """
+    """Compute Out[b, n] = mean(Src[Indices[b, n, k]] for k in range(K))."""
     batch_id = tl.program_id(0)
     n_id = tl.program_id(1)
     block_d = tl.program_id(2)
@@ -1935,46 +1923,37 @@ def _batch_gather_mean_kernel(
     offs_d = block_d * BLOCK_D + tl.arange(0, BLOCK_D)
     mask_d = offs_d < D
 
-    # 累加 K 个 neighbors 的值
+
     acc = tl.zeros([BLOCK_D], dtype=tl.float32)
-    
+
     for k in range(K):
         idx = tl.load(Indices + batch_id * stride_ib + n_id * stride_in + k * stride_ik)
         src_ptrs = Src + idx * stride_sb + offs_d * stride_sd
         val = tl.load(src_ptrs, mask=mask_d, other=0.0)
         acc += val
 
-    # 计算均值
+
     mean_val = acc / K
 
-    # 存储结果
+
     out_ptrs = Out + batch_id * stride_ob + n_id * stride_on + offs_d * stride_od
     tl.store(out_ptrs, mean_val, mask=mask_d)
 
 
 @torch.no_grad()
 def batch_l2_distance(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """
-    计算批量 L2 距离
-    
-    Args:
-        a: (B, N, D) 待计算 tokens
-        b: (B, M, D) 参考 centers
-    
-    Returns:
-        dist: (B, N, M) L2 距离矩阵
-    """
+    """Return squared L2 distances of shape (B, N, M) between tokens a and centers b."""
     B, N, D = a.shape
     _, M, _ = b.shape
-    
+
     out = torch.empty((B, N, M), dtype=a.dtype, device=a.device)
-    
+
     BLOCK_N = min(32, triton.next_power_of_2(N))
     BLOCK_M = min(32, triton.next_power_of_2(M))
     BLOCK_D = triton.next_power_of_2(D)
-    
+
     grid = (B, triton.cdiv(N, BLOCK_N), triton.cdiv(M, BLOCK_M))
-    
+
     _batch_l2_distance_kernel[grid](
         a, b, out,
         N, M, D,
@@ -1985,7 +1964,7 @@ def batch_l2_distance(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         BLOCK_M=BLOCK_M,
         BLOCK_D=BLOCK_D,
     )
-    
+
     return out
 
 
@@ -1994,25 +1973,16 @@ def batch_gather_mean(
     src: torch.Tensor,
     indices: torch.Tensor,
 ) -> torch.Tensor:
-    """
-    批量 gather + mean 操作
-    
-    Args:
-        src: (num_centers, D) 源数据
-        indices: (B, N, K) 索引
-    
-    Returns:
-        out: (B, N, D) 输出
-    """
+    """Gather src by indices (B, N, K) and return their mean with shape (B, N, D)."""
     B, N, K = indices.shape
     D = src.shape[1]
-    
+
     out = torch.empty((B, N, D), dtype=src.dtype, device=src.device)
-    
+
     BLOCK_D = min(128, triton.next_power_of_2(D))
-    
+
     grid = (B, N, triton.cdiv(D, BLOCK_D))
-    
+
     _batch_gather_mean_kernel[grid](
         src, indices, out,
         K, D,
@@ -2021,7 +1991,7 @@ def batch_gather_mean(
         out.stride(0), out.stride(1), out.stride(2),
         BLOCK_D=BLOCK_D,
     )
-    
+
     return out
 
 

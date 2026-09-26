@@ -222,11 +222,7 @@ def _resolve_eos_token_ids(model_path, hf_config, tokenizer_eos_token_id):
 
 
 class LLMEngine:
-    """
-    SparseEngine 推理引擎的核心入口类。
-    负责协调 Tokenizer、调度器 (Scheduler) 和模型执行器 (ModelRunner)。
-    管理多进程张量并行 (Tensor Parallelism) 的生命周期。
-    """
+    """Coordinate tokenization, scheduling, model execution, and tensor-parallel process lifecycles."""
 
     def __new__(cls, model, **kwargs):
         config_fields = {field.name for field in fields(Config) if field.init}
@@ -242,7 +238,7 @@ class LLMEngine:
         return super().__new__(cls)
 
     def __init__(self, model, *, _dp_worker=None, **kwargs):
-        # 1. 初始化配置
+
         config = Config(model, **kwargs)
         self.config = config
         trtllm_cache_root = None
@@ -251,11 +247,11 @@ class LLMEngine:
             # Pass the original root explicitly: later engines spawn children
             # after rank zero has already installed its process-local env path.
             trtllm_cache_root = str(resolve_trtllm_cache_root())
-        
-        # 初始化 Profiler
+
+
         profiler.set_enabled(config.enable_profiler)
-        
-        # 2. 启动 world worker 进程；TP/EP/DP 语义由 ParallelContext 管理。
+
+
         master_port = select_master_port() if _dp_worker is None else _dp_worker[1]
         logger.info("Using distributed master port: {}", master_port)
         self.ps = []
@@ -266,7 +262,7 @@ class LLMEngine:
         tp_shm_name = make_tp_shm_name() if config.attn_tp_size > 1 else None
         for i in range(1, config.attn_tp_size):
             event = (ctx.Event(), ctx.Event())
-            # 为每一个非零 Rank 启动一个独立的 ModelRunner 进程
+
             process = ctx.Process(
                 target=ModelRunner,
                 args=(config, leader_rank + i, event, tp_shm_name, master_port, trtllm_cache_root),
@@ -274,15 +270,14 @@ class LLMEngine:
             process.start()
             self.ps.append(process)
             self.events.append(event)
-        
-        # 3. 初始化主进程的 ModelRunner (Rank 0)
-        # 注意：必须先初始化 ModelRunner 以便在本地 GPU 分配 KV Cache 账本
+
+
         self.model_runner = ModelRunner(
             config, leader_rank, self.events,
             tp_shm_name, master_port, trtllm_cache_root,
         )
-        
-        # 加载分词器
+
+
         self.tokenizer: Qwen2Tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         self.multimodal_processor = (
             MultiModalInputProcessor(config.model)
@@ -303,12 +298,10 @@ class LLMEngine:
                 auxiliary_prompt, add_special_tokens=False,
             ) if auxiliary_prompt else [],
         )
-        
-        # 4. 初始化调度器
-        # 关键设计：将 Rank 0 的 CacheManager 传给 Scheduler。
-        # Scheduler 通过它来感知全局显存的余量，从而做出调度和抢占决策。
+
+
         self.scheduler = self._create_scheduler()
-        
+
         self._exited = False
         self._throughput_logger = _ThroughputIntervalLogger(config.throughput_log_interval_s, rank=replica_rank)
         self.last_step_token_outputs: list[tuple[int, list[int]]] = []
@@ -320,7 +313,7 @@ class LLMEngine:
         self._pending_slot_releases: set[int] = set()
         self._prefix_prune_jobs: dict[str, PrefixPruneJob] = {}
         self._pending_prefix_prune_ids: deque[str] = deque()
-        # 注册退出钩子，确保程序崩溃或结束时能正确释放多进程资源
+
         self._atexit_callback = self.exit
         atexit.register(self._atexit_callback)
 
@@ -762,7 +755,7 @@ class LLMEngine:
             logger.warning("Failed to unlink ModelRunner shared memory during shutdown: {}", repr(exc))
 
     def exit(self):
-        """优雅地退出所有子进程并清理共享内存"""
+        """Release resources and shut down worker processes or distributed state."""
         atexit_callback = getattr(self, "_atexit_callback", None)
         if atexit_callback is not None:
             atexit.unregister(atexit_callback)
@@ -1703,15 +1696,12 @@ class LLMEngine:
         return asynchronous.step() if asynchronous is not None else self._step_sync()
 
     def _step_sync(self):
-        """
-        执行单个推理步进（一个 Batch）。
-        包含：调度、抢占处理、模型前向计算、状态更新、资源回收。
-        """
+        """Schedule and execute one batch, handle preemption, and update and release request state."""
         with profiler.record("step"):
             self.last_step_token_outputs = []
             self.last_step_prompt_cache_hits = []
             self.last_step_logprob_outputs = []
-            # 1. 调度：决定哪些序列进入本次 Batch
+
             with profiler.record("schedule"):
                 seqs, is_prefill, preempted_seqs = self.scheduler.schedule()
             if is_prefill:
@@ -1724,12 +1714,11 @@ class LLMEngine:
                 if seqs and is_prefill
                 else None
             )
-            
-            # 2. 显式处理抢占 (Eviction)：
-            # 如果有序列被调度器踢出，立即广播指令让所有 Rank 释放其占用的物理槽位
+
+
             with profiler.record("preempt_free"):
                 self._release_preempted_sequences(preempted_seqs)
-                
+
             if not seqs:
                 if self.config.attn_dp_size > 1:
                     self.model_runner.call("run", [], False)
@@ -1756,9 +1745,8 @@ class LLMEngine:
                     f"method={self.config.sparse_method} free_slots={self.model_runner.runtime_state.num_free_slots} "
                     f"waiting={len(self.scheduler.waiting)} decoding={len(self.scheduler.decoding)}"
                 )
-                
-            # 3. 跨进程广播并执行推理：
-            # Rank 0 会驱动所有 Rank 进程同步运行本地的 ModelRunner.run
+
+
             with profiler.record("model_run_call"):
                 try:
                     token_ids, logprob_outputs = self.model_runner.call(
@@ -1818,8 +1806,8 @@ class LLMEngine:
                 ):
                     token_outputs.append((seq.seq_id, [int(token_id)]))
                     logprob_step_outputs.append((seq.seq_id, [token_logprob], [top_logprob]))
-            
-            # 4. 逻辑后处理：更新序列的 Token 列表和状态机
+
+
             with profiler.record("postprocess"):
                 self.scheduler.postprocess(
                     seqs,
@@ -1831,9 +1819,8 @@ class LLMEngine:
                 )
             self.last_step_token_outputs = token_outputs
             self.last_step_logprob_outputs = logprob_step_outputs
-            
-            # 5. 完成序列的资源回收：
-            # 遍历序列，如果已达到 EOS 或最大长度，则通知所有进程释放物理槽位
+
+
             with profiler.record("finished_free"):
                 finished_outputs = []
                 finished_seq_ids = []
@@ -1890,8 +1877,8 @@ class LLMEngine:
                     # Physical release remains the commit point. If a later
                     # release fails, remove only the requests already released.
                     self.scheduler.abort_many(released_seq_ids)
-        
-        # 计算吞吐量统计数据 (正数表示 Prefill，负数表示 Decode)
+
+
         num_tokens = sum(seq.current_chunk_size for seq in seqs) if is_prefill else -len(seqs)
         self._throughput_logger.record_step(num_tokens)
         prefill_seqs = len(self.scheduler.waiting)
@@ -1915,7 +1902,7 @@ class LLMEngine:
         return finished_outputs, num_tokens
 
     def is_finished(self):
-        """检查是否所有请求都已处理完毕"""
+        """Return whether all requests have completed."""
         pending = getattr(getattr(self, "_async_scheduler", None), "pending", ())
         return not pending and self.scheduler.is_finished()
 
@@ -1925,10 +1912,7 @@ class LLMEngine:
         sampling_params: SamplingParams | list[SamplingParams],
         use_tqdm: bool = True,
     ) -> list[dict]:
-        """
-        高层 API：批量输入 Prompt，阻塞直至全部生成完成。
-        返回包含生成的 text 和 token_ids 的字典列表。
-        """
+        """Generate all prompts synchronously and return dictionaries containing text and token_ids."""
         if isinstance(sampling_params, list) and len(sampling_params) != len(prompts):
             raise ValueError(
                 "prompts and sampling_params must have the same length when "
@@ -1937,23 +1921,23 @@ class LLMEngine:
             )
         if use_tqdm:
             pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True)
-        
+
         if not isinstance(sampling_params, list):
             sampling_params = [sampling_params] * len(prompts)
-        
-        # 提交所有请求
+
+
         for prompt, sp in zip(prompts, sampling_params):
             self.add_request(prompt, sp)
-            
+
         outputs = {}
         prefill_throughput = decode_throughput = 0.
-        
-        # 主推理循环
+
+
         while not self.is_finished():
             t = perf_counter()
             output, num_tokens = self.step()
-            
-            # 更新吞吐量统计
+
+
             if use_tqdm:
                 dt = perf_counter() - t
                 if num_tokens > 0:
@@ -1964,17 +1948,17 @@ class LLMEngine:
                     "Prefill": f"{int(prefill_throughput)}tok/s",
                     "Decode": f"{int(decode_throughput)}tok/s",
                 })
-            
-            # 收集已完成的输出
+
+
             for seq_id, token_ids, _token_logprobs, _top_logprobs in output:
                 outputs[seq_id] = token_ids
                 if use_tqdm:
                     pbar.update(1)
 
-        # 按照请求提交顺序排序并解码
+
         results = [outputs[seq_id] for seq_id in sorted(outputs.keys())]
         results = [{"text": self.tokenizer.decode(tids, skip_special_tokens=True), "token_ids": tids} for tids in results]
-        
+
         if use_tqdm:
             pbar.close()
         return results

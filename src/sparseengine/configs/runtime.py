@@ -61,7 +61,7 @@ class Config(
     model: str
     max_num_batched_tokens: int | str = "auto"
     max_num_batched_tokens_auto: bool = field(default=False, init=False)
-    max_num_seqs_in_batch: int = 32  # 不能设置太大
+    max_num_seqs_in_batch: int = 32
     max_model_len: int | None = None
     max_model_len_auto: bool = field(default=False, init=False)
     # None preserves the legacy shared batch limit. Set explicitly to allow

@@ -19,7 +19,7 @@ class Profiler:
         self.nvtx_enabled = os.environ.get("SPARSEENGINE_NVTX", "0") == "1"
         self._no_trace = nullcontext()
         self.rank = 0
-        # 通过环境变量开启设备同步，以准确测量设备耗时；保留旧 CUDA 名称兼容。
+
         self.device_sync = (
             os.environ.get("SPARSEENGINE_SYNC_DEVICE", "0") == "1"
             or os.environ.get("CUDA_SYNC_SENGINE", "0") == "1"
@@ -46,7 +46,7 @@ class Profiler:
         if not self.enabled:
             yield
             return
-        
+
         platform = platforms.current_platform
         capturing = platform.is_stream_capturing()
         if self.device_sync and not capturing:
@@ -57,7 +57,7 @@ class Profiler:
         if self.device_sync and not capturing:
             platform.synchronize()
         t2 = time.perf_counter()
-        
+
         self.times[name] += (t2 - t1)
         self.counts[name] += 1
 
@@ -84,10 +84,10 @@ class Profiler:
             return
 
         logger.info(f"\n=== SparseEngine Profiler Report (Rank {self.rank}) ===")
-        # 按照总耗时降序排列
+
         sorted_keys = sorted(self.times.keys(), key=lambda x: self.times[x], reverse=True)
-        
-        # 尝试找出总耗时作为基准 (通常是 step)
+
+
         total_time = self.times.get("step", sum(self.times.values()))
         if total_time == 0: total_time = 1e-9
 
@@ -101,7 +101,7 @@ class Profiler:
             print(f"{key:<30} {c:<10} {avg:<15.4f} {t:<15.4f} {pct:<10.2f}%")
         print("-" * 80)
 
-# 全局单例
+
 profiler = Profiler()
 
 

@@ -83,7 +83,6 @@ class SequenceStatus(Enum):
     FINISHED = auto()
 
 
-# 一部分属性会在 scheduler 动态修改
 class Sequence:
     counter = count()
 
@@ -362,7 +361,7 @@ class Sequence:
         self.num_tokens += 1
 
     def __getstate__(self):
-        # 优化 IPC：不发送 slot_mapping，只发送元数据和必要的 token
+
         if self.num_completion_tokens == 0 or self.is_recompute_prefill:
             chunk_size = self.current_chunk_size if self.current_chunk_size is not None else self.num_prompt_tokens
             if (

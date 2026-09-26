@@ -136,7 +136,7 @@ def _normalize_quest(config) -> None:
             )
 
     if config.quest_chunk_size <= 0:
-        raise ValueError("quest_chunk_size 必须 > 0")
+        raise ValueError("quest_chunk_size must be > 0")
     config.quest_token_budget = 0
     if config.sparse_method == "quest":
         config.quest_token_budget = (
@@ -151,7 +151,7 @@ def _normalize_quest(config) -> None:
                 f"= {config.quest_token_budget}."
             )
     if config.quest_skip_layers < 0:
-        raise ValueError("quest_skip_layers 不能 < 0")
+        raise ValueError("quest_skip_layers must be >= 0")
 
 
 def _normalize_snapkv(config) -> None:
@@ -513,7 +513,7 @@ def finalize_sparse_layout(config) -> None:
         if kv_layers[kv_position + 1] not in configured_full_layers:
             config.obs_layer_ids.append(layer)
 
-    # PyramidKV 配置验证与智能生成
+
     if 'pyramidkv' == config.sparse_method:
         num_layers = int(config.runtime_layout.num_layers)
         num_kv_layers = int(config.runtime_layout.num_kv_layers)
@@ -548,7 +548,7 @@ def finalize_sparse_layout(config) -> None:
                 else:
                     ratios[i] = least_r
             config.pyramid_layer_ratios = ratios
-            logger.info(f"PyramidKV 自动生成 KV layer_ratios = {[f'{r:.3f}' for r in ratios]}")
+            logger.info(f"PyramidKV generated KV layer_ratios = {[f'{r:.3f}' for r in ratios]}")
         else:
             ratios = [float(ratio) for ratio in config.pyramid_layer_ratios]
             if len(ratios) == num_layers and num_layers != num_kv_layers:
@@ -556,9 +556,9 @@ def finalize_sparse_layout(config) -> None:
             config.pyramid_layer_ratios = ratios
 
     if config.pyramid_layer_ratios is not None:
-        # PyramidKV 模式自动启用 SnapKV 逻辑
+
         if 'pyramidkv' != config.sparse_method:
-            raise ValueError('sparse_method 应为 pyramidkv')
+            raise ValueError('sparse_method must be pyramidkv')
 
         num_kv_layers = int(config.runtime_layout.num_kv_layers)
         if len(config.pyramid_layer_ratios) != num_kv_layers:
@@ -568,4 +568,4 @@ def finalize_sparse_layout(config) -> None:
             )
 
         if any(r <= 0 or r > 1.0 for r in config.pyramid_layer_ratios):
-            raise ValueError("pyramid_layer_ratios 的所有值必须在 (0, 1.0] 范围内")
+            raise ValueError("All pyramid_layer_ratios must be in (0, 1.0]")

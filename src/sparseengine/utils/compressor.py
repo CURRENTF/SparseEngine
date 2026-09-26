@@ -34,22 +34,17 @@ def _normalize_compressor_type(kind: str) -> str:
     raise ValueError(f"Unknown compressor type: {kind}. Use auto|linear|mlp_gelu|mlp_swiglu.")
 
 def create_compressor(is_down: bool, config, bias_override: Optional[bool] = None):
-    """
-    为每个压缩器组创建独立的序列压缩和解压层。
-    假设 split_kv=False；支持新/旧版本配置：
-    - 旧版（对称）：use_nonlinear_compressor + compressor_intermediate_size + compressor_linear_bias
-    - 新版（可非对称）：compressor_down/up_type + compressor_down/up_intermediate_size
-    """
+    """Create separate compression and decompression layers per group with split_kv=False. Support both legacy symmetric and separate down/up compressor configurations."""
     hf_config = config.hf_config
     head_dim = getattr(hf_config, "head_dim", None) or (hf_config.hidden_size // hf_config.num_attention_heads)
-    kv_factor = 2 # 假设 split_kv 恒为 False
-    
-    # 计算输入输出维度
+    kv_factor = 2
+
+
     kv_dim = head_dim * hf_config.num_key_value_heads * kv_factor
     input_size = kv_dim if is_down else config.deltakv_latent_dim
     output_size = config.deltakv_latent_dim if is_down else kv_dim
 
-    # 支持 compressor_linear_bias 参数
+
     bias = getattr(config, 'compressor_linear_bias', True) if bias_override is None else bool(bias_override)
 
     kind_attr = "compressor_down_type" if is_down else "compressor_up_type"

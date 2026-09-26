@@ -313,7 +313,7 @@ class OmniKVRuntime(DynamicSelectionRuntime):
         state = self.layer_batch_sparse_states[layer_idx]
         if state.active_slots is not None:
             active_slots = state.active_slots
-            logger.debug("active_slots 是被 omnikv 选到的 slots")
+            logger.debug("active_slots contains slots selected by OmniKV")
         else:
             active_slots = None
             logger.debug("active_slots is None")

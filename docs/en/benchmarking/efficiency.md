@@ -1,7 +1,5 @@
 # Efficiency and Throughput Benchmark Suite
 
-[简体中文](../../zh/benchmarking/efficiency.md) | English
-
 This runbook owns measurement definitions, entrypoints, and support limits.
 Record experiment-specific parameters, sweeps, and replot instructions with each
 reported result. New defaults do not retroactively change historical protocols.

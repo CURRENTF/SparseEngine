@@ -116,7 +116,7 @@ class DeltaKVCacheManager(CacheManager):
         self.deltakv_layer_to_idx = {l: i for i, l in enumerate(self.deltakv_layer_ids)}
         self.full_layer_to_idx = {l: i for i, l in enumerate(self.full_layer_ids)}
 
-        # NOTE: 这些变量在 allocate_kv_cache() 中被赋值，必须在调用前初始化为 None
+
         self.full_num_slots = 0
         self.deltakv_latent_num_slots = 0
         self.deltakv_full_num_slots = 0
@@ -181,7 +181,7 @@ class DeltaKVCacheManager(CacheManager):
         num_deltakv_layers = len(self.deltakv_layer_ids)
         self._init_compressor_modules(config, num_deltakv_layers)
 
-        # 初始化 RoPE 模块，用于 De-RoPE/Re-RoPE 操作
+
         self.rotary_emb = get_rope(
             head_size=self.head_dim,
             rotary_dim=self.head_dim,
@@ -189,7 +189,7 @@ class DeltaKVCacheManager(CacheManager):
             base=self._get_rope_theta(self.hf_config),
             rope_scaling=self._normalize_rope_scaling(self.hf_config),
         ).to(device=self.device)
-        # cos_sin_cache shape: (max_pos, 1, head_dim) - 包含 (cos, sin)
+
         self.cos_sin_cache = self.rotary_emb.cos_sin_cache
 
         # Per-step/per-segment cache for DeltaKV view planning (shared across layers).
@@ -1623,16 +1623,16 @@ class DeltaKVCacheManager(CacheManager):
             cur_len = self.row_seq_lens[row_idx]
             assert cur_len > 0
 
-            # 清空 full layers
+
             full_slots = self.full_layer_slots_map[row_idx, :cur_len]
             ptr = self._num_free_slots_full
             self.free_slots_stack_full[ptr: ptr + cur_len] = full_slots
             self._num_free_slots_full += cur_len
 
-            # 清空 deltakv layers
+
             slots = self._active_deltakv_raw_slots_for_free(row_idx, int(cur_len))
             ptr = self._num_free_slots_deltakv_full
-            # 未压缩释放
+
             self.free_slots_stack_deltakv_full[ptr: ptr + slots.numel()] = slots
             self._num_free_slots_deltakv_full += slots.numel()
             self.deltakv_slot_to_pos[slots] = -1

@@ -12,22 +12,22 @@ def load_jsonl(path):
             try:
                 obj = json.loads(line)
                 l_idx = obj['layer_idx']
-                # 统一格式为 [num_heads, set_of_indices]
+
                 raw_idx = obj['top_token_idx']
-                
-                # 处理 my_snapkv 格式: [[[h1_idx], [h2_idx], ...]] (bs, num_heads, k)
+
+
                 if isinstance(raw_idx, list) and len(raw_idx) == 1 and isinstance(raw_idx[0], list) and isinstance(raw_idx[0][0], list):
                     heads_indices = [set(h) for h in raw_idx[0]]
-                # 处理 AdaKV 格式: [ [[h1_idx]], [[h2_idx]], ... ] (num_heads, bs, k)
+
                 elif isinstance(raw_idx, list) and isinstance(raw_idx[0], list) and len(raw_idx[0]) == 1:
                     heads_indices = [set(h[0]) for h in raw_idx]
-                # 处理标准 SnapKV 格式: [[h1_idx, ...], [h2_idx, ...]] (bs, num_heads, k) 但可能没嵌套
+
                 elif isinstance(raw_idx, list) and isinstance(raw_idx[0], list):
                     heads_indices = [set(h) for h in raw_idx]
                 else:
                     print(f"Unknown format in {path}: {type(raw_idx)}")
                     continue
-                
+
                 data[l_idx] = heads_indices
             except Exception as e:
                 print(f"Error parsing line in {path}: {e}")
@@ -36,10 +36,10 @@ def load_jsonl(path):
 def compare():
     path_my = './my_snapkv.jsonl'
     path_ada = './adakv_snapkv.jsonl'
-    
+
     data_my = load_jsonl(path_my)
     data_ada = load_jsonl(path_ada)
-    
+
     if not data_my or not data_ada:
         return
 
@@ -58,35 +58,34 @@ def compare():
     for l_idx in common_layers:
         heads_my = data_my[l_idx]
         heads_ada = data_ada[l_idx]
-        
+
         num_heads = min(len(heads_my), len(heads_ada))
-        
-        # 尝试寻找最佳偏移量 (Offset)
-        # 因为 my_snapkv 可能从 sink_size 开始计，而 adakv 可能从 0 开始计
+
+
         best_offset = 0
         max_avg_overlap = -1
-        
-        # 尝试范围 -128 到 128 (通常偏移是 sink_size 或 0)
+
+
         for offset in range(-128, 129):
             current_layer_overlaps = []
             for h in range(num_heads):
                 set_my = heads_my[h]
-                # 对 set_ada 应用偏移
+
                 set_ada_shifted = {idx + offset for idx in heads_ada[h]}
-                
+
                 intersection = len(set_my & set_ada_shifted)
                 union = len(set_my | set_ada_shifted)
                 if union == 0:
                     current_layer_overlaps.append(1.0)
                 else:
-                    # 使用交集比例作为相似度度量
+
                     current_layer_overlaps.append(intersection / len(set_my))
-            
+
             avg_overlap = np.mean(current_layer_overlaps)
             if avg_overlap > max_avg_overlap:
                 max_avg_overlap = avg_overlap
                 best_offset = offset
-        
+
         all_overlaps.append(max_avg_overlap)
         print(f"{l_idx:<10} | {max_avg_overlap:>15.2%} | {best_offset:<12}")
 

@@ -31,7 +31,6 @@ This repository includes repo-local Codex skills.
 The canonical runbooks are:
 
 - [English efficiency benchmark runbook](docs/en/benchmarking/efficiency.md)
-- [简体中文效率基准运行手册](docs/zh/benchmarking/efficiency.md)
 
 Follow the runbook's matched-trace, idle-GPU, artifact-validation, and metric-
 interpretation rules. Do not treat sampled GPU activity as theoretical MFU/MBU;
@@ -117,7 +116,6 @@ use the documented Nsight diagnostic for kernel-timeline attribution.
    be rejected during resolution, but a prepare, JIT, warmup, or execution
    failure must preserve the actionable error and must not silently reselect a
    different provider.
-
 
 # Research Code Skill
 

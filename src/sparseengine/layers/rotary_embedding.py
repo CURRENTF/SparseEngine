@@ -172,14 +172,7 @@ def reverse_rotary_emb(
     cos: torch.Tensor,
     sin: torch.Tensor,
 ) -> torch.Tensor:
-    """对已应用 RoPE 的向量执行逆操作，恢复到位置无关状态。
-
-    RoPE 公式:     y1 = x1*cos - x2*sin,  y2 = x2*cos + x1*sin
-    De-RoPE 分子:  x1 = y1*cos + y2*sin,  x2 = y2*cos - y1*sin
-
-    YaRN 可以给 cos/sin 缓存施加非单位幅值，因此逆变换需要再除以
-    cos²+sin²。普通单位 RoPE 下该分母为 1。
-    """
+    """Invert RoPE to recover position-independent vectors. Divide the inverse rotation by cos squared plus sin squared to account for YaRN amplitude scaling."""
     y1, y2 = torch.chunk(x.float(), 2, dim=-1)
     norm = cos.float().square() + sin.float().square()
     x1 = (y1 * cos + y2 * sin) / norm

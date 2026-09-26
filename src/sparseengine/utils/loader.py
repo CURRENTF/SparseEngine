@@ -619,7 +619,7 @@ def load_deltakv_compressors_to_cache_manager(cache_manager, path: str):
                     layer_token_idx = parts.index("layers")
                     layer_idx = int(parts[layer_token_idx + 1])
                 except (ValueError, IndexError):
-                    raise ValueError(f"无法从权重键名中解析层索引: {key}")
+                    raise ValueError(f"Cannot parse layer index from weight key: {key}")
 
             if "compress_down" in parts:
                 comp_name = "compress_down"
@@ -633,14 +633,14 @@ def load_deltakv_compressors_to_cache_manager(cache_manager, path: str):
                 target_layer_indices = list(range(len(cache_manager.compress_down)))
             else:
                 if layer_idx not in cache_manager.deltakv_layer_to_idx:
-                    logger.debug(f"权重 {key} 对应的层索引 {layer_idx} 不在 deltakv_layer_to_idx 中，跳过")
+                    logger.debug(f"Skipping weight {key}: layer index {layer_idx} is absent from deltakv_layer_to_idx")
                     continue
                 target_layer_indices = [cache_manager.deltakv_layer_to_idx[layer_idx]]
 
             for l_idx in target_layer_indices:
                 compressor = cache_manager.compress_down[l_idx] if comp_name == "compress_down" else cache_manager.compress_up[l_idx]
                 try:
-                    # 尝试获取对应的参数
+
                     if '.' in sub_key:
                         prefix, name = sub_key.rsplit('.', 1)
                         param = compressor.get_submodule(prefix).get_parameter(name)
@@ -648,24 +648,24 @@ def load_deltakv_compressors_to_cache_manager(cache_manager, path: str):
                         param = compressor.get_parameter(sub_key)
 
                     if param.shape != weight.shape:
-                        raise ValueError(f"权重 {key} 形状不匹配: 预期 {param.shape}, 实际 {weight.shape}")
+                        raise ValueError(f"Weight {key} shape mismatch: expected {param.shape}, got {weight.shape}")
 
                     param.data.copy_(weight)
                     loaded_count += 1
                 except Exception as e:
-                    # 尝试直接访问属性作为备选方案
+
                     try:
                         target = getattr(compressor, sub_key)
                         if isinstance(target, nn.Parameter):
                             if target.shape != weight.shape:
-                                raise ValueError(f"权重 {key} 形状不匹配: 预期 {target.shape}, 实际 {weight.shape}")
+                                raise ValueError(f"Weight {key} shape mismatch: expected {target.shape}, got {weight.shape}")
                             target.data.copy_(weight)
                             loaded_count += 1
                             continue
                     except Exception:
                         pass
 
-                    raise RuntimeError(f"未能将权重 {key} 加载到压缩器模块 (layer {layer_idx}): {e}")
+                    raise RuntimeError(f"Failed to load weight {key} into compressor module (layer {layer_idx}): {e}")
 
     assert loaded_count > 0, f"No DeltaKV compressor weights were loaded into cache manager from {path}"
     print(f"Successfully loaded {loaded_count} DeltaKV compressor weights into cache manager from {path}")

@@ -176,12 +176,12 @@ def _fwd_kernel_with_score(
         off_k = kv_loc[None, :] * stride_kbs + cur_kv_head * stride_kh + offs_d[:, None] * stride_kd
         k = tl.load(K + off_k, mask=(start_n + offs_n[None, :]) < block_end_loc, other=0.0)
         qk = tl.dot(q, k)
-        
-        # 收集评分：使用原始点积 (Raw Logits)，且掩码位置设为 0 以便后续计算 Mean
+
+
         mask = (offs_m[:, None] + prompt_cache_len) >= (start_n + offs_n[None, :])
         score_to_collect = tl.where(mask, qk, 0.0)
         block_sum = tl.sum(score_to_collect, 0)
-        tl.atomic_add(Attn_Score + cur_batch * stride_asb + cur_head * stride_ash + (start_n + offs_n) * stride_asl, 
+        tl.atomic_add(Attn_Score + cur_batch * stride_asb + cur_head * stride_ash + (start_n + offs_n) * stride_asl,
                       block_sum, mask=(start_n + offs_n) < block_end_loc)
 
         qk = tl.where(mask, qk * sm_scale, -1.0e8)
@@ -256,11 +256,11 @@ def _fwd_kernel_with_score_2d(
         k = tl.load(K + off_k, mask=(start_n + offs_n[None, :]) < block_end_loc, other=0.0)
         qk = tl.dot(q, k)
         mask = (offs_m[:, None] + prompt_cache_len) >= (start_n + offs_n[None, :])
-        
+
         # Max across the complete query chunk and all heads. Query tiles and
         # heads race through atomic_max into one [batch, context] raw-QK row.
         block_max = tl.max(tl.where(mask, qk, -float("inf")), axis=0)
-        tl.atomic_max(Attn_Score + cur_batch * stride_asb + (start_n + offs_n) * stride_asl, 
+        tl.atomic_max(Attn_Score + cur_batch * stride_asb + (start_n + offs_n) * stride_asl,
                       block_max, mask=(start_n + offs_n) < block_end_loc)
 
         qk = tl.where(mask, qk * sm_scale, -1.0e8)
@@ -291,8 +291,8 @@ def context_attention_fwd(
     attn_score=None
 ):
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
-    
-    # 补齐断言：安全防护
+
+
     assert Lq == Lk and Lk == Lv
     assert Lk in {16, 32, 64, 128, 256}
     assert q.dtype == k.dtype and k.dtype == v.dtype

@@ -107,7 +107,7 @@ def forward(
         .view(bsz, q_len, self.num_key_value_heads, self.head_dim)
         .transpose(1, 2)
     )
-    
+
     # New cache format
     if isinstance(past_key_value, DynamicCache):
         kv_seq_len = past_key_value.get_seq_length()
@@ -117,7 +117,7 @@ def forward(
         if past_key_value is not None:
             assert isinstance(past_key_value, tuple)
             kv_seq_len += past_key_value[0].shape[-2]
-    
+
     cos, sin = self.rotary_emb(value_states, position_ids.to(value_states.device))
     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
     # [bsz, nh, t, hd]
@@ -242,7 +242,7 @@ def forward(
 
 
 def enable_quest_attention_eval(model, args):
-    # 根据模型配置动态确定层数，并在此处初始化 layer_id 以支持多次调用
+
     num_layers = getattr(model.config, "num_hidden_layers", 32)
     current_layer_id = num_layers
     model_rotary_emb = getattr(getattr(model, "model", None), "rotary_emb", None)

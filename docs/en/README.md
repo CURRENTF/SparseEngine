@@ -1,7 +1,5 @@
 # SparseEngine Documentation
 
-English | [简体中文](../zh/README.md)
-
 This directory contains stable user-facing documentation: setup guides,
 feature descriptions, architecture notes, configuration references, and
 benchmark runbooks.

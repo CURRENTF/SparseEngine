@@ -1,7 +1,5 @@
 # DeepSeek V4 Flash native inference
 
-[简体中文](../../zh/features/deepseek-v4.md)
-
 Experimental support for the original DeepSeek-V4-Flash-0731 checkpoint on
 CUDA SM90. Use `sparse_method="deepseek_v4"`; this is the model's native
 attention and cache format, rather than a generic KV eviction policy.

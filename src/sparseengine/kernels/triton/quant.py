@@ -3,7 +3,6 @@ import triton.language as tl
 import torch
 import numpy as np
 
-# --- 下面抄自 baselines/kivi/quant/new_pack.py 的 Triton Kernel ---
 
 SUPPORTED_PACK_BITS = (2, 4, 8)
 
@@ -260,7 +259,6 @@ def _minmax_along_last_dim(
     tl.store(mn_ptr+offsets_b, mn_val, mask=offsets_b<N*num_groups)
     tl.store(mx_ptr+offsets_b, mx_val, mask=offsets_b<N*num_groups)
 
-# --- 下面是封装逻辑，也保持与 KIVI 一致 ---
 
 def triton_quantize_and_pack_along_last_dim(data: torch.Tensor, group_size: int, bit: int):
     assert len(data.shape) == 4
@@ -303,9 +301,7 @@ def triton_quantize_and_pack_along_last_dim(data: torch.Tensor, group_size: int,
     return code.view(B, nh, D, -1), scale.reshape(scale_mn_shape), mn.reshape(scale_mn_shape)
 
 def unpack_tensor(v_code: torch.Tensor, bits: int, pack_dim: int):
-    """
-    KIVI 原版解包逻辑 (基于 PyTorch 向量化索引)
-    """
+    """Unpack KIVI tensors using vectorized PyTorch indexing."""
     feat_per_int = _features_per_int(bits)
     shape = v_code.shape
     new_shape = shape[:pack_dim] + (shape[pack_dim] * feat_per_int,) + shape[pack_dim+1:]
@@ -325,22 +321,18 @@ def unpack_tensor(v_code: torch.Tensor, bits: int, pack_dim: int):
     return unpacked_v_code
 
 def unpack_quantized_to_16bit(packed, scale, mn, group_size, bits: int):
-    """
-    适配 ClusterCompressedKVCache 的包装函数。
-    """
+    """Adapt unpacking for ClusterCompressedKVCache."""
     bits = int(bits)
     feat_per_int = _features_per_int(bits)
-    # 这里的 packed 形状通常是 (B, nh, num_imp, D//feat_per_int)
-    # 我们调用 KIVI 的 unpack_tensor，它在 dim=3 上打包
+
+
     unpacked = unpack_tensor(packed, bits=bits, pack_dim=3)
-    
-    # 反量化
-    # scale/mn 形状是 (B, nh, num_imp, 1) 或者 (B, nh, num_imp, num_groups)
-    # 如果是 Per-token 量化，num_groups = 1
+
+
     if scale.shape[-1] == 1:
         return unpacked.to(scale.dtype) * scale + mn
     else:
-        # Group-wise 逻辑
+
         B, nh, num_imp, D = unpacked.shape
         if D % group_size != 0:
             raise ValueError(f"Unpacked dimension {D} must be divisible by group_size {group_size}.")
