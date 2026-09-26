@@ -12,7 +12,7 @@ from sparseengine.distributed.moe_communication import prepare_moe_communication
 from sparseengine.engine.sparse_methods.deepseek_v4 import SharedKVSelectionQuery
 from sparseengine.layers.embed_head import VocabParallelEmbedding, ParallelLMHead
 from sparseengine.layers.layernorm import RMSNorm
-from sparseengine.layers.linear import LinearBase
+from sparseengine.layers.linear import ReplicatedLinear
 from sparseengine.layers.mxfp4_experts import PackedMxfp4Experts
 from sparseengine.operators.activation import clipped_swiglu
 from sparseengine.operators.compressed_index import CompressedIndexOpSpec, resolve_compressed_index_provider
@@ -32,7 +32,7 @@ _EXPERT = re.compile(r"^model\.layers\.(\d+)\.ffn\.experts\.(\d+)\.(w1|w2|w3)\.(
 
 
 def _linear(config, input_size, output_size, *, quantized=True):
-    return LinearBase(input_size, output_size, quantization=config.quantization_config if quantized else None)
+    return ReplicatedLinear(input_size, output_size, quantization=config.quantization_config if quantized else None)
 
 
 def _freqs(config, max_length, *, compressed, device):

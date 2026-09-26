@@ -489,6 +489,7 @@ def decode_graph_path_id(method: str) -> str:
 
 
 _DEFAULT_PREFILL_POLICY_BY_METHOD = {
+    "deepseek_v4": PREFILL_POLICY_ALL_CHUNKED,
     "palu": PREFILL_POLICY_ALL_CHUNKED,
     **dict.fromkeys(QUANTIZED_KV_METHODS, PREFILL_POLICY_ALL_CHUNKED),
     "": PREFILL_POLICY_ALL_CHUNKED,

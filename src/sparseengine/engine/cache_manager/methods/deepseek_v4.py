@@ -25,11 +25,20 @@ class NativeSharedKVRequest:
     prefix_blocks: list = field(default_factory=list)
 
 
-@dataclass
+@dataclass(eq=False)
 class NativeSharedKVPrefix:
     row: int
     length: int
     leases: dict
+
+
+@dataclass(eq=False)
+class NativePrefixRecord:
+    payload: NativeSharedKVPrefix
+    block_id: bytes
+    parent_id: bytes | None
+    index: int
+    tokens: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -66,6 +75,7 @@ class DeepSeekV4CacheManager(CacheManager):
         self.prefix_cache_block_size = int(config.prefix_cache_block_size)
         self.requests = {}
         self.pending_prefix = {}
+        self.private_prefix_records = {}
         self.layer_batch_state = LayerBatchStates()
         self.compression_planners = {}
         self.compression_views = {}
@@ -348,8 +358,11 @@ class DeepSeekV4CacheManager(CacheManager):
             request = self.requests[seq.seq_id]
             for ratio, lease in request.leases.items():
                 self.families[ratio].mark_materialized(lease, request.length//ratio)
-        if is_prefill:
-            self.publish_pending_prefix_blocks(seqs)
+        if is_prefill and self.enable_prefix_caching:
+            for seq in seqs:
+                self._freeze_prefix_snapshot(seq)
+            if getattr(self, "_async_prefix_records", None) is None:
+                self.publish_pending_prefix_blocks(seqs)
         super().on_forward_end(seqs, is_prefill)
 
     def free_seq(self, seq_id):
@@ -362,6 +375,8 @@ class DeepSeekV4CacheManager(CacheManager):
         for block in request.prefix_blocks:
             self.prefix_cache.release_block_ref(block)
         self.pending_prefix.pop(seq_id, None)
+        for record in self.private_prefix_records.pop(seq_id, set()):
+            self._free_prefix_payload(record.payload)
 
     def free_part_slots(self, layer_idx, seq, keep_indices):
         raise TypeError("Native shared KV does not prune its physical compression history")
@@ -407,46 +422,82 @@ class DeepSeekV4CacheManager(CacheManager):
             raise
 
     def _record_prefix_materialization(self, seq, token_ids, slots):
-        # The scheduler boundary is a snapshot boundary. No publication before retirement.
-        self.pending_prefix[seq.seq_id] = True
+        # Window/carry state is frozen only after every layer has completed.
+        return
+
+    def _freeze_prefix_snapshot(self, seq):
+        request = self.requests[seq.seq_id]
+        size = self.prefix_cache_block_size
+        length = request.length
+        if length % size or length > seq.num_prompt_tokens:
+            return
+        index = length//size-1
+        private = self.private_prefix_records.setdefault(seq.seq_id, set())
+        if len(request.prefix_blocks)+len(private) != index:
+            return
+        # Preserve row headroom for admitted requests. Snapshots are optional.
+        if self.state_rows.num_free_rows <= self.max_buffer_rows-len(self.requests):
+            return
+        block_ids = self.prefix_cache.block_ids_for_tokens(seq.token_ids, max_tokens=length)
+        parent = block_ids[-2] if len(block_ids) > 1 else None
+        tokens = tuple(seq.token_ids[index*size:length])
+        row, leases = self.state_rows.copy(request.row), {}
+        try:
+            for ratio, lease in request.leases.items():
+                leases[ratio] = self.families[ratio].snapshot(lease)
+            record = NativePrefixRecord(NativeSharedKVPrefix(row, length, leases),
+                                         block_ids[-1], parent, index, tokens)
+        except BaseException:
+            for ratio, lease in leases.items():
+                self.families[ratio].release(lease)
+            self.state_rows.release(row)
+            raise
+        private.add(record)
+        asynchronous = getattr(self, "_async_prefix_records", None)
+        if asynchronous is not None:
+            asynchronous.append((seq, list(tokens), record))
+        else:
+            self._record_frozen_prefix_materialization(seq, list(tokens), record)
+
+    def _record_frozen_prefix_materialization(self, seq, token_ids, record):
+        if not isinstance(record, NativePrefixRecord):
+            raise TypeError("Native prefix publication requires a frozen window/carry snapshot")
+        if tuple(token_ids) != record.tokens:
+            raise ValueError("Retired prefix tokens differ from the frozen snapshot")
+        if record not in self.private_prefix_records.get(seq.seq_id, set()):
+            raise ValueError("Prefix snapshot is not owned by this request")
+        self.pending_prefix.setdefault(seq.seq_id, []).append(record)
 
     def publish_pending_prefix_blocks(self, seqs):
         if self.prefix_cache is None:
             return
-        block_size = self.prefix_cache_block_size
         for seq in seqs:
-            request = self.requests[seq.seq_id]
-            if request.length % block_size or request.length > seq.num_prompt_tokens:
-                continue
-            index = request.length//block_size-1
-            parent = request.prefix_blocks[-1].stable_block_id if request.prefix_blocks else None
-            tokens = seq.token_ids[index*block_size:(index+1)*block_size]
-            block_id = self.prefix_cache.stable_block_id(tokens, parent)
-            if len(request.prefix_blocks) != index:
-                # A skipped snapshot leaves no valid cumulative parent chain.
-                continue
-            existing = self.prefix_cache.get_block(block_id)
-            if existing is not None:
-                self.prefix_cache.acquire_block_ref(existing)
-                request.prefix_blocks.append(existing)
-                continue
-            # Prefix caching is opportunistic; live rows always have priority.
-            while len(self.prefix_cache) >= self.prefix_rows and self._evict_one_prefix():
-                pass
-            if len(self.prefix_cache) >= self.prefix_rows or self.state_rows.num_free_rows <= self.max_buffer_rows-len(self.requests):
-                continue
-            row, leases = self.state_rows.copy(request.row), {}
-            try:
-                leases = {ratio: self.families[ratio].snapshot(lease) for ratio, lease in request.leases.items()}
-                payload = NativeSharedKVPrefix(row, request.length, leases)
-                block = PrefixCacheBlock(block_id, parent, block_size, index, payload, tuple(tokens), ref_count=1)
-                inserted = self.prefix_cache.insert_block(block)
-                request.prefix_blocks.append(inserted)
-            except BaseException:
-                for ratio, lease in leases.items():
-                    self.families[ratio].release(lease)
-                self.state_rows.release(row)
-                raise
+            request = self.requests.get(seq.seq_id)
+            for record in self.pending_prefix.pop(seq.seq_id, []):
+                private = self.private_prefix_records[seq.seq_id]
+                private.remove(record)
+                if request is None or len(request.prefix_blocks) != record.index:
+                    self._free_prefix_payload(record.payload)
+                    continue
+                existing = self.prefix_cache.get_block(record.block_id)
+                if existing is not None:
+                    self.prefix_cache.acquire_block_ref(existing)
+                    request.prefix_blocks.append(existing)
+                    self._free_prefix_payload(record.payload)
+                    continue
+                while len(self.prefix_cache) >= self.prefix_rows and self._evict_one_prefix():
+                    pass
+                if len(self.prefix_cache) >= self.prefix_rows:
+                    self._free_prefix_payload(record.payload)
+                    continue
+                block = PrefixCacheBlock(record.block_id, record.parent_id, self.prefix_cache_block_size,
+                                         record.index, record.payload, record.tokens, ref_count=1)
+                try:
+                    inserted = self.prefix_cache.insert_block(block)
+                    request.prefix_blocks.append(inserted)
+                except BaseException:
+                    self._free_prefix_payload(record.payload)
+                    raise
 
     def reset_prefix_cache(self):
         if self.requests:
