@@ -107,7 +107,7 @@ class SGLSharedKVAttentionProvider(SharedKVAttentionProvider):
             raise ValueError("Shared KV prefill payload must be [slots, 1, head_dim]")
         if shared_kv.dtype != self.spec.activation_dtype or shared_kv.device != query.device:
             raise ValueError("Shared KV prefill payload dtype/device differs from query")
-        self._validate_selection(query, indices, lengths, sink)
+        self._validate_selection(query, indices, lengths, sink, bound_capacity=False)
         # SM90 sparse prefill uses two 64-key tiles per iteration. Decode
         # accepts 64-key alignment; adapt the provider's prefill layout here.
         padding = (-indices.shape[-1])%128
@@ -141,11 +141,14 @@ class SGLSharedKVAttentionProvider(SharedKVAttentionProvider):
             indices=indices, attn_sink=sink, topk_length=lengths,
         )[0].squeeze(1)
 
-    def _validate_selection(self, query, indices, lengths, sink):
+    def _validate_selection(self, query, indices, lengths, sink, *, bound_capacity=True):
         rows = query.shape[0]
         if not query.is_cuda or query.dtype != self.spec.activation_dtype:
             raise ValueError("Shared KV attention requires bound CUDA query dtype")
-        if indices.shape != (rows, 1, self.spec.selection_capacity) or indices.dtype != torch.int32:
+        if (indices.ndim != 3 or indices.shape[:2] != (rows, 1)
+                or indices.dtype != torch.int32 or indices.shape[-1] <= 0
+                or indices.shape[-1]%64
+                or (bound_capacity and indices.shape[-1] != self.spec.selection_capacity)):
             raise ValueError("Selected indices must be INT32 [rows, 1, selection_capacity]")
         if lengths.shape != (rows,) or lengths.dtype != torch.int32:
             raise ValueError("Selected lengths must be INT32 [rows]")
