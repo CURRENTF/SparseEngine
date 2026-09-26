@@ -12,15 +12,23 @@ SparseEngine 围绕 cache-manager-first sparse runtime 构建。engine 支持 ph
 | `vanilla` | Dense baseline | Full attention baseline，用于验证正确性并测量非稀疏 engine path。 | 仅使用通用 engine 参数。 |
 | `streamingllm` | Physical eviction | StreamingLLM 风格的固定 sink 加 recent-window cache。保留 prefix/tail 策略之外的 token 会从 active KV cache 中被物理淘汰。 | `sink_keep_tokens`, `recent_keep_tokens` |
 | `attention-sink` | Physical eviction | attention-sink alias policy，使用相同的 sink-token 和 recent-window 保留模型。适合将 sink-window 行为与其他 physical eviction 方法对比。 | `sink_keep_tokens`, `recent_keep_tokens` |
-| `snapkv` | Physical eviction | SnapKV 风格的 token selection 使用 prompt 末尾的 observation window，在生成前选出并保留紧凑的重要 prompt KV。当前与论文对齐的 decode 路径不再评分，也不会再次执行 SnapKV selection，只追加生成 token。 | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `sparse_prefill_score_mode` |
+| `snapkv` | Physical eviction | SnapKV 在 prompt 末尾的 observation window 选出重要 KV。decode 驱逐可选（`snapkv_decode_eviction` 默认关闭）；开启后，每层缓存最近 `observation_window_size` 个 decode query，在物理 KV 长度达到该层预算加 `decode_eviction_interval` 时评分并压缩。评分仅在驱逐边界、decode Graph replay 之后执行。 | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `snapkv_decode_eviction`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
 | `kvzip` | Physical eviction | 仓库现有的 token 共享 KVzip 重建打分，在 prefill 完成后统一压缩 prompt KV。 | `kvzip_token_budget`, `kvzip_score_chunk_size`, `kvzip_prev_postfix_size` |
 | `h2o` | Physical eviction | 中间 prefill chunk 可压缩到 `h2o_prefill_budget`，最终 prompt 压缩到 `h2o_decode_budget`。默认 decode 不评分或驱逐，物理 row 随生成 token 增长；开启 `h2o_decode_eviction` 后逐步累计概率分数并周期驱逐。 | `h2o_decode_eviction`, `h2o_decode_budget`, `h2o_decode_eviction_interval`, `h2o_prefill_budget`, `h2o_recent_ratio`, `h2o_prefill_score_window`, `sparse_prefill_score_mode` |
-| `pyramidkv` | Physical eviction | PyramidKV 风格、依赖 layer 的 KV 保留方式。它在 layer 之间分配 sparse budget，并物理存储选中的 context token。 | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `sparse_prefill_score_mode` |
+| `pyramidkv` | Physical eviction | PyramidKV 按 layer 分配 KV 预算，decode 驱逐始终开启。每层缓存最近 `observation_window_size` 个 decode query，在物理 KV 长度达到该层预算加 `decode_eviction_interval` 时评分并压缩，默认间隔为 1024。评分仅在驱逐边界、decode Graph replay 之后执行。 | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
 | `omnikv` | Logical masking，可选 offload | 跨层共享 token 选择；可将稀疏层完整历史保存在 pinned CPU 内存，decode 精确取回当前选择的 KV。 | `full_attention_layers`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `enable_omnikv_offload` |
 | `quest` | Query-aware page selection | QuEST 根据持久化的 page min/max summary 选择 token page，prefill 保持 dense。显式 KV 模型在 key 坐标中评分；GLM-4.7-Flash 使用匹配的 absorbed decode query 对融合 MLA latent/RoPE cache 评分，同时 compute payload 继续保持 latent。 | `quest_chunk_size`, `quest_skip_layers`, `sink_keep_tokens`, `decode_keep_tokens`, `recent_keep_tokens` |
+| `retroinfer` | 按 query 检索簇 | 实验性的 GPU-only RetroInfer。Dense prefill 后按 KV head 聚类；decode 精确读取排名靠前的簇，并估计随后一部分簇的贡献。完整 KV 始终保存在 GPU。 | `retroinfer_retrieval_ratio`, `retroinfer_estimation_ratio`, `retroinfer_sink_tokens`, `retroinfer_recent_tokens` |
 | `deltakv` | Hybrid compression | 依赖 compressor 的精简 DeltaKV runtime。旧配置中的 `deltakv-less-memory*` 名称会规范到此方法，但实际 benchmark run 仍需要匹配的 compressor checkpoint。 | `deltakv_checkpoint_path`, `deltakv_latent_dim`, `deltakv_center_ratio`, `deltakv_neighbor_count`, `deltakv_latent_quant_bits`, `full_layer_kv_quant_bits` |
 
 SparseEngine 在 public command、`LLM(...)`、runtime config 与内部消费者中统一使用 `sparse_method`。
+
+RetroInfer GPU-only 当前支持 Llama、Qwen2、Qwen3、Qwen3-MoE 和 MiniMax-M2，
+要求统一的 FP16/BF16 显式 KV、完整因果注意力及 attention TP=1。
+MoE 路由不改变注意力接口。需要设置 `decode_graph=False`；暂不支持 prefix cache 和
+async scheduling。默认保留开头 4 个 token 与最近 64 个 token 做精确注意力；
+中间至少有 16,384 个 token 时建立索引，之后每 1,024 个 token 更新一次。
+短上下文直接精确读取完整 KV。
 
 
 

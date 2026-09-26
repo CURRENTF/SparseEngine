@@ -74,6 +74,7 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     store: bool = False
     ignore_eos: bool = False
+    benchmark_forced_token_ids: list[int] | None = None
     stop: str | list[str] | None = None
     logprobs: bool = False
     top_logprobs: int | None = Field(default=None, ge=0, le=20)
@@ -85,6 +86,12 @@ class ChatCompletionRequest(BaseModel):
     enable_thinking: bool | None = None
     preserve_thinking: bool | None = None
     chat_template_kwargs: Any = None
+
+    @model_validator(mode="after")
+    def validate_benchmark_forced_tokens(self):
+        if self.benchmark_forced_token_ids is not None and not self.ignore_eos:
+            raise ValueError("benchmark_forced_token_ids requires ignore_eos=true")
+        return self
 
 
 def _validate_message_tool_call(tool_call: dict[str, Any]):

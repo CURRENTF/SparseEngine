@@ -567,6 +567,10 @@ class CacheManager(ABC):
             from .methods.quest import QuestCacheManager
 
             return create_manager(QuestCacheManager)
+        if sparse_method == "retroinfer":
+            from .methods.retroinfer import RetroInferGPUCacheManager
+
+            return create_manager(RetroInferGPUCacheManager)
         if sparse_method == "omnikv":
             from .methods.omnikv.manager import OmniKVCacheManager
 
@@ -1354,6 +1358,11 @@ class CacheManager(ABC):
 
     def decode_graph_force_eager(self) -> bool:
         """Whether this method should bypass graph replay for diagnostics."""
+        return False
+
+    def decode_graph_force_eager_for_seqs(self, seqs: list[Sequence]) -> bool:
+        """Whether the next decode append needs work outside a captured graph."""
+        del seqs
         return False
 
     requires_committed_token_history = False

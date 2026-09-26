@@ -150,6 +150,10 @@ class SparseMethodRuntime(ABC):
             "sink_keep_tokens": self.config.sink_keep_tokens,
             "recent_keep_tokens": self.config.recent_keep_tokens,
             "decode_keep_tokens": self.config.decode_keep_tokens,
+            "snapkv_decode_eviction": getattr(self.config, "snapkv_decode_eviction", False),
+            "decode_eviction_interval": getattr(
+                self.config, "decode_eviction_interval", 1024
+            ),
             "obs_layer_ids": self.config.obs_layer_ids,
             "full_attention_layers": self.config.full_attention_layers,
             "dynamic_deltakv_topk_tiebreak": self.dynamic_deltakv_topk_tiebreak,

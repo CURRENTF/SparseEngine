@@ -42,7 +42,7 @@ def _latent_chain_manager(manager_type, method: str):
         sink_keep_tokens=1,
         recent_keep_tokens=1,
         decode_keep_tokens=2,
-        snapkv_window_size=2,
+        observation_window_size=2,
         snapkv_num_full_layers=0,
         sparse_attn_score_dtype="float32",
         pool_kernel_size=1,

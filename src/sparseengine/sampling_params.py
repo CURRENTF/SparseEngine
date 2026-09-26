@@ -46,6 +46,7 @@ class SamplingParams:
     ignore_eos: bool = False
     eos_token_ids: int | list[int] | tuple[int, ...] | None = None
     logprobs: int | None = None
+    benchmark_forced_token_ids: tuple[int, ...] | None = None
 
     def __post_init__(self):
         if self.temperature < 0.0:
@@ -70,3 +71,18 @@ class SamplingParams:
             raise ValueError("eos_token_ids must contain non-negative token ids")
         if self.logprobs is not None and self.logprobs < 0:
             raise ValueError("logprobs must be non-negative")
+        if self.benchmark_forced_token_ids is not None:
+            if not self.ignore_eos:
+                raise ValueError("benchmark_forced_token_ids requires ignore_eos")
+            values = self.benchmark_forced_token_ids
+            if (not isinstance(values, (list, tuple)) or len(values) != self.max_tokens
+                    or any(type(token_id) is not int or token_id < 0 for token_id in values)):
+                raise ValueError("benchmark_forced_token_ids must contain exactly max_tokens nonnegative integers")
+            self.benchmark_forced_token_ids = tuple(values)
+
+    def validate_for_vocab(self, vocab_size: int) -> None:
+        forced = self.benchmark_forced_token_ids
+        if forced is not None and any(token_id >= vocab_size for token_id in forced):
+            raise ValueError(
+                f"benchmark_forced_token_ids contains a token outside the model vocabulary ({vocab_size})"
+            )

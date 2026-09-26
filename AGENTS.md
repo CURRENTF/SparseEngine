@@ -8,7 +8,6 @@ This repository includes repo-local Codex skills.
 - `code-review`: Review SparseEngine diffs for correctness, sparse-runtime and operator architecture, scheduling semantics, reproducibility, performance, and tests. Use when reviewing PRs, git diffs, sparse method integrations, operator/provider or kernel changes, cache-manager or scheduler changes, benchmark/evaluation scripts, OpenAI serving changes, or when the user asks for a code review. File: `.agents/skills/code-review/SKILL.md`
 - `review-operator-organization`: Review operator/provider boundaries, device capability selection, kernel ownership, dependency compatibility, weight layouts, fallback semantics, and validation. Use for changes under `operators/`, `platforms/`, Triton kernels, external kernel integrations, or model-to-operator call sites. File: `.agents/skills/review-operator-organization/SKILL.md`
 - `optimize-sparseengine-kernel`: Find, implement, tune, profile, and integrate SparseEngine GPU kernels across Triton, TileLang, CUDA/CuTe, and external SGL providers. Use for kernel hotspots, fusion, correctness baselines, microbenchmarks, Nsight Compute analysis, provider integration, or matched end-to-end performance validation. File: `.agents/skills/optimize-sparseengine-kernel/SKILL.md`
-- `paper-efficiency`: Standardize paper efficiency comparisons and capacity sweeps using shared entrypoints, explicit defaults, and boundary-only decode timing. Use for paper benchmarks and deciding whether results can share a figure, not figure-only styling. File: `.agents/skills/paper-efficiency/SKILL.md`
 
 ## How to use
 
@@ -18,7 +17,6 @@ This repository includes repo-local Codex skills.
   `$code-review` loads it automatically for relevant diffs.
 - Invoke the end-to-end kernel workflow as `$optimize-sparseengine-kernel`; it
   loads only the selected DSL and profiling references.
-- Invoke `$paper-efficiency` for paper-level engine efficiency comparisons.
 - Keep method-specific runtime state in `src/sparseengine/engine/cache_manager/`.
 - Keep `src/sparseengine/layers/attention.py` generic and hook new methods through shared cache-manager interfaces when possible.
 
@@ -41,9 +39,9 @@ use the documented Nsight diagnostic for kernel-timeline attribution.
 
 ## Benchmark Entrypoints and Shared Statistics
 
-- For paper comparisons, use the defaults and acceptance contract in
-  [.agents/skills/paper-efficiency/SKILL.md](.agents/skills/paper-efficiency/SKILL.md).
-  Main decode results use continuous windows with boundary-only synchronization,
+- For paper comparisons, use the [efficiency runbook](docs/en/benchmarking/efficiency.md)
+  for metric definitions. Main decode results use continuous windows
+  with boundary-only synchronization,
   preserving supported async/overlap execution. Step-synchronized runs are diagnostics.
 - Use `scripts/benchmarks/run_efficiency_probe.sh` (idle-GPU checks and sweeps)
   or `benchmark/efficiency/bench_probe.py` (explicit engine/TP configuration)

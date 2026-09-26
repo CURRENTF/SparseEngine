@@ -7,6 +7,11 @@ OpenAI-compatible 服务回放 MiniSWE 轨迹，不启动 GPU 服务、不执行
 先检查 GPU 空闲并启动服务，保存真实 `server_manifest.json`；基线和候选运行保持
 相同缓存冷热状态、客户端和网络位置。该层使用外部 trace manifest，不使用合成负载矩阵。
 
+当前公开标准语料是 `SWE-lite-trace100`
+上的可追加 100 条、8,000 次请求版本。复现实验请固定 revision
+`6bce0bb91ba68948248fd44b914ef77664b6b4e6`。比较时须对齐 trace
+manifest 哈希。
+
 优先从旧记录恢复：
 
 ```bash
@@ -15,8 +20,11 @@ python -m benchmark.sparseengine_regression.agent_trace \
   --legacy-server-requests "$SERVER_REQUESTS" --output "$TRACE_DIR"
 ```
 
-恢复运行的请求日志可重复传 `--legacy-server-requests`。按冻结的 `instances.txt`
-取前 100 条，不按成功与否筛选；用 response ID 精确关联轨迹和请求，保留原始输入、
+恢复运行的请求日志可重复传 `--legacy-server-requests`。默认按冻结的 `instances.txt`
+取前 100 条；加 `--selection longest_turns` 则按每条轨迹的模型请求轮数降序选取，
+轮数相同按原 `instances.txt` 顺序确定。也可用 `total_prompt_tokens` 或
+`max_prompt_tokens` 按原响应中的输入 token 数排序。均不按成功与否筛选；
+用 response ID 精确关联轨迹和请求，保留原始输入、
 输出、输出 token 数与轮间等待。超时/步数耗尽仍是原来的终止状态，不能叫成功。
 请求缺失/重复、API 次数不符、单条轨迹跨服务器运行或出现负间隔时明确失败。
 

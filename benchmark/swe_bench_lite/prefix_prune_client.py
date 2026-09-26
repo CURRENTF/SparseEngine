@@ -14,15 +14,19 @@ from typing import Any
 
 
 class PrefixPruneClient:
-    def __init__(self, *, api_base: str, tokenizer_path: str, keep_ratio: float, events_path: Path, trigger_tokens: int = 8192):
+    def __init__(self, *, api_base: str, tokenizer_path: str, keep_ratio: float,
+                 events_path: Path, trigger_tokens: int = 8192, tool_result_lag: int = 0):
         if not math.isfinite(keep_ratio) or not 0 <= keep_ratio < 1:
             raise ValueError("Prefix-prune keep ratio must be in [0, 1).")
         if trigger_tokens <= 0:
             raise ValueError("Prefix-prune trigger must be positive.")
+        if tool_result_lag < 0:
+            raise ValueError("Tool-result pruning lag must be non-negative.")
         self._prune_trigger_tokens = trigger_tokens
         self._prefix_cache_api_base = api_base.rstrip("/")
         self._prune_tokenizer_path = tokenizer_path
         self._prune_keep_ratio = keep_ratio
+        self._prune_tool_result_lag = tool_result_lag
         self._prune_events_path = events_path
         self._prune_target = "tool_results"
         self._prune_policy = "kvzip_global"
@@ -152,6 +156,7 @@ class PrefixPruneClient:
             return
         cursor = len(self._prune_processed_messages)
         new_tools = False
+        selected_tool_index = None
         if tool_mode:
             messages = chat["messages"]
             seen = getattr(self, "_prune_seen_messages", None)
@@ -161,9 +166,22 @@ class PrefixPruneClient:
                 old != messages[i] for i, old in enumerate(seen)
             ):
                 raise RuntimeError("Tool-pruning transcript is not append-only; refusing to reuse its cursor.")
-            seen.extend(deepcopy(messages[len(seen):]))
+            old_seen_len = len(seen)
+            seen.extend(deepcopy(messages[old_seen_len:]))
             self._prune_seen_messages = seen
             new_tools = any(m.get("role") == "tool" for m in messages[cursor:])
+            lag = getattr(self, "_prune_tool_result_lag", 0)
+            if lag:
+                tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+                if len(tool_indices) <= lag:
+                    return
+                selected_tool_index = tool_indices[-lag - 1]
+                if selected_tool_index < cursor:
+                    return
+                if sum(m.get("role") == "tool" for m in messages[old_seen_len:]) > 1:
+                    raise RuntimeError(
+                        "Delayed tool pruning requires one new tool result per model turn."
+                    )
             if not new_tools and (not self._prune_finished or self._prune_reuse_verified):
                 self._prune_processed_messages.extend(self._prune_seen_messages[cursor:])
                 return
@@ -188,9 +206,12 @@ class PrefixPruneClient:
                 from benchmark.swe_bench_lite.tool_prune import ToolResultPruneSelector
                 self._prune_tool_selector = ToolResultPruneSelector(self._prune_tokenizer_path)
             selection_start = time.perf_counter() if timing_enabled else None
+            selector_kwargs = {"message_start": cursor}
+            if selected_tool_index is not None:
+                selector_kwargs["message_indices"] = (selected_tool_index,)
             selection = self._prune_tool_selector.select(
                 chat, block_size=int(match_before["block_size"]), usable_tokens=usable,
-                message_start=cursor,
+                **selector_kwargs,
             )
             if selection_start is not None:
                 self._prune_rpc_timing["tool_selection"] = {
@@ -203,7 +224,8 @@ class PrefixPruneClient:
                     reason="no_block_aligned_tool_body", usable_tokens=usable,
                     tool_tokens=selection["tool_tokens"],
                 )
-                self._prune_processed_messages.extend(self._prune_seen_messages[cursor:])
+                end = selected_tool_index + 1 if selected_tool_index is not None else len(messages)
+                self._prune_processed_messages.extend(self._prune_seen_messages[cursor:end])
                 return
             if selection["eligible_tokens"] < self._prune_trigger_tokens:
                 # Commit the cursor only after pruning; pending bodies are selected
@@ -300,7 +322,8 @@ class PrefixPruneClient:
         self._prune_freed_slots = after_matched - after_resident
         self._prune_pending = None
         if tool_mode:
-            self._prune_processed_messages.extend(self._prune_seen_messages[cursor:])
+            end = selected_tool_index + 1 if selected_tool_index is not None else len(messages)
+            self._prune_processed_messages.extend(self._prune_seen_messages[cursor:end])
         self._record_prune_event(
             "prune_completed",
             policy=self._prune_policy,
@@ -315,7 +338,8 @@ class PrefixPruneClient:
             keep_tokens=keep_tokens,
             tool_selection=({k: v for k, v in selection.items() if k != "token_ids"} if selection else None),
             message_start=cursor if tool_mode else None,
-            message_end=len(chat["messages"]) if tool_mode else None,
+            message_end=(selected_tool_index + 1 if selected_tool_index is not None else len(chat["messages"])) if tool_mode else None,
+            tool_result_lag=getattr(self, "_prune_tool_result_lag", 0) if tool_mode else None,
             quality_degraded=True,
             trigger_tokens=self._prune_trigger_tokens,
             scoring={key: result[key] for key in ("scoring_chunks", "max_scoring_batch", "scoring_jobs") if key in result},

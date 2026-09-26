@@ -30,6 +30,11 @@ matrix. It does not start a GPU server or execute tools. Prepare an idle-GPU ser
 separately, using SparseEngine vanilla or upstream vLLM; retain its actual MiniSWE
 `server_manifest.json`. Match cache state and client/network placement between runs.
 
+The standard published corpus is the appendable 100-agent, 8,000-request trace
+at `SWE-lite-trace100`.
+Pin revision `6bce0bb91ba68948248fd44b914ef77664b6b4e6` for this version.
+Always match the trace manifest hash when comparing runs.
+
 Reuse existing recordings:
 
 ```bash
@@ -38,9 +43,11 @@ python -m benchmark.sparseengine_regression.agent_trace \
   --legacy-server-requests "$SERVER_REQUESTS" --output "$TRACE_DIR"
 ```
 
-Repeat the legacy option for recovery-run request directories. Import joins exact
-response IDs and selects the first 100 IDs in frozen `instances.txt`, never the
-first 100 successful tasks. Missing/duplicate requests, unmatched call counts,
+Repeat the legacy option for recovery-run request directories. By default, import
+selects the first 100 IDs in frozen `instances.txt`. Use `--selection longest_turns`
+to rank trajectories by model request count, breaking ties by source order.
+`total_prompt_tokens` and `max_prompt_tokens` rank by the recorded response usage.
+No selection filters by outcome. Import joins exact response IDs. Missing/duplicate requests, unmatched call counts,
 cross-server trajectories and negative gaps fail explicitly. Terminal agent
 time/step limits remain in the corpus. Inputs/outputs are exact saved payloads;
 legacy delays are **estimates** calculated as

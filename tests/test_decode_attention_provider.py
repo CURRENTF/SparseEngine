@@ -42,7 +42,7 @@ from sparseengine.platforms import DeviceCaps, PlatformEnum
         ("rkv", False),
         ("snapkv", False),
         ("h2o", False),
-        ("pyramidkv", True),
+        ("pyramidkv", False),
         ("omnikv", True),
         ("skipkv", True),
         ("deltakv", True),

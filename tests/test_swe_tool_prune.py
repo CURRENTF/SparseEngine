@@ -112,3 +112,22 @@ def test_incremental_selector_never_selects_old_identical_tool_body():
     expected = [i for i,t in enumerate(result['token_ids']) if left <= i*2 and i*2+len(t) <= right]
     assert actual == expected
     assert chat['messages'][0] == old
+
+
+def test_selected_tool_message_excludes_newer_tool_results():
+    chat = {'messages': [
+        {'role': 'tool', 'content': 'older result ' * 5},
+        {'role': 'assistant', 'content': 'next call'},
+        {'role': 'tool', 'content': 'newer result ' * 5},
+    ]}
+    tokenizer = PairTokenizer()
+    prompt = render(chat)
+    result = tool_result_ranges(
+        chat, tokenizer, render, block_size=1,
+        usable_tokens=len(tokenizer.encode(prompt)), message_indices=(0,),
+    )
+    old_start = prompt.index('[tool]') + len('[tool]')
+    old_end = prompt.index('[/message]', old_start)
+    selected = [i for left, right in result['ranges'] for i in range(left, right)]
+    assert selected
+    assert all(old_start <= i * 2 and (i + 1) * 2 <= old_end for i in selected)

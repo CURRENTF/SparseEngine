@@ -57,7 +57,7 @@ def method_kwargs(method: str, *, max_model_len: int, prefix_cache: bool) -> dic
                 "sink_keep_tokens": 0,
                 "recent_keep_tokens": 32,
                 "decode_keep_tokens": 2048,
-                "snapkv_window_size": 32,
+                "observation_window_size": 32,
                 "pool_kernel_size": 7,
             }
         )

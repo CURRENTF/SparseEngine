@@ -359,7 +359,7 @@ def test_snapkv_latent_score_handoff_preserves_final_window_and_accumulation():
     manager.config = SimpleNamespace(
         sparse_method="snapkv",
         snapkv_num_full_layers=0,
-        snapkv_window_size=2,
+        observation_window_size=2,
         sink_keep_tokens=1,
         recent_keep_tokens=1,
         decode_keep_tokens=2,

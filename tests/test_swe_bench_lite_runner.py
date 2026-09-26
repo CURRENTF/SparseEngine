@@ -717,22 +717,27 @@ if __name__ == "__main__":
 
 def test_tool_result_prune_cli_exports_explicit_settings_and_clears_ambient_values():
     with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
-        "os.environ", {"SPARSEENGINE_PREFIX_PRUNE_TARGET": "stale", "SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO": "0.9"},
+        "os.environ", {"SPARSEENGINE_PREFIX_PRUNE_TARGET": "stale", "SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO": "0.9",
+                       "SPARSEENGINE_PREFIX_PRUNE_TOOL_RESULT_LAG": "99"},
     ):
         args = build_parser().parse_args([
             "--stage", "summarize", "--run-dir", tmp, "--no-chain-cache",
             "--prefix-prune-policy", "kvzip_global", "--prefix-prune-target", "tool_results",
             "--prefix-prune-tokenizer", tmp, "--prefix-prune-keep-ratio", "0.25",
+            "--prefix-prune-tool-result-lag", "4",
         ])
         runner = SweBenchLiteRunner(args)
         env = runner._model_env()
         assert env["SPARSEENGINE_PREFIX_PRUNE_TARGET"] == "tool_results"
         assert env["SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO"] == "0.25"
+        assert env["SPARSEENGINE_PREFIX_PRUNE_TOOL_RESULT_LAG"] == "4"
         assert env["SPARSEENGINE_PREFIX_PRUNE_TOKENIZER"] == str(Path(tmp).resolve())
         assert str(runner.repo_root / "src") in env["PYTHONPATH"]
         original_config = runner._semantic_config(None)
         assert original_config["prefix_prune"]["target"] == "tool_results"
         assert original_config["prefix_prune"]["keep_ratio"] == 0.25
+        assert original_config["prefix_prune"]["schedule"] == "delayed_tool_result"
+        assert original_config["prefix_prune"]["tool_result_lag"] == 4
         runner.args.prefix_prune_keep_ratio = 0.75
         assert runner._semantic_config(None) != original_config
         plain_args = build_parser().parse_args(["--stage", "summarize", "--run-dir", tmp])

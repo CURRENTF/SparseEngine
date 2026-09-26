@@ -132,6 +132,7 @@ class Sequence:
         self.ignore_eos = sampling_params.ignore_eos
         self.eos_token_ids = tuple(sampling_params.eos_token_ids)
         self.logprobs = sampling_params.logprobs
+        self.benchmark_forced_token_ids = sampling_params.benchmark_forced_token_ids
         self.completion_token_logprobs: list[float | None] = []
         self.completion_top_logprobs: list[dict[int, float] | None] = []
         self._init_sampling_penalty_state(token_ids)
@@ -425,6 +426,8 @@ class Sequence:
          self.recompute_replay_cursor, self.decode_progress_checkpoint,
          self.multimodal_digest, self.multimodal_position_delta,
          self.multimodal_full_prefill) = state
+        # TP workers run forward only; rank 0 retains the forced replay tokens for sampling.
+        self.benchmark_forced_token_ids = None
         self.completion_token_logprobs = []
         self.completion_top_logprobs = []
         # TP workers intentionally receive only the active prompt chunk or one

@@ -12,6 +12,42 @@ from unittest.mock import patch
     "OpenAI smart router dependencies are not installed",
 )
 class OpenAISmartRouterTest(unittest.TestCase):
+    def test_prefix_prune_controls_route_to_fullest_cache_owner(self):
+        from sparseengine.entrypoints.openai import smart_router
+
+        router = smart_router.SmartRouter(
+            worker_urls=["http://busy-owner", "http://idle-worker"],
+            request_timeout_s=1.0, overload_load_factor=1.5,
+            load_abs_threshold=1, profiles={}, route_log_dir=None,
+        )
+        owner, idle = router.workers
+        for worker in router.workers:
+            worker.healthy = True
+            worker.info = {"served_model_name": "model", "sparse_method": "omnikv",
+                           "prefix_cache_enabled": True, "prefix_cache_mode": "radix"}
+        router.refresh_worker_info = AsyncMock(return_value=None)
+        chat = {"model": "model", "messages": [{"role": "tool", "content": "result"}]}
+        router._probe_workers = AsyncMock(return_value=[
+            smart_router.WorkerProbe(
+                worker=owner, load={"active_requests": 6},
+                match={"supported": True, "enabled": True,
+                       "matched_tokens": 100, "match_ratio": 1.0},
+            ),
+            smart_router.WorkerProbe(
+                worker=idle, load={"active_requests": 0},
+                match={"supported": True, "enabled": True,
+                       "matched_tokens": 20, "match_ratio": 0.2},
+            ),
+        ])
+        for endpoint, payload in (
+            ("/v1/prefix_cache/match", {"chat": chat}),
+            ("/v1/prefix_cache/prune", {"token_ids": list(range(100)), "ranges": [[10, 20]]}),
+        ):
+            selected, _, route = asyncio.run(router.select_worker(endpoint, payload))
+            self.assertIs(selected, owner)
+            self.assertEqual(route["reason"], "prefix_owner")
+        self.assertEqual(router._probe_workers.call_args_list[0].args[1], {"chat": chat})
+
     def test_empty_chain_id_creates_on_chain_capable_worker(self):
         from sparseengine.entrypoints.openai import smart_router
 

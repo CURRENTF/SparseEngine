@@ -1,5 +1,7 @@
 """Sparse-method normalization and layout-dependent validation."""
 
+import torch
+
 from sparseengine.configs.common import (
     _coerce_bool_config,
     _normalize_float_attr,
@@ -153,6 +155,13 @@ def _normalize_quest(config) -> None:
 
 
 def _normalize_snapkv(config) -> None:
+    config.snapkv_decode_eviction = _coerce_bool_config(
+        "snapkv_decode_eviction", config.snapkv_decode_eviction
+    )
+    _normalize_positive_int(config, "observation_window_size", fallback=0)
+    _normalize_positive_int(config, "decode_eviction_interval", fallback=0)
+    if config.sparse_method == "pyramidkv":
+        config.snapkv_decode_eviction = True
     _normalize_int_attr(config, "snapkv_num_full_layers")
     if config.snapkv_num_full_layers != 0:
         raise ValueError(
@@ -397,7 +406,54 @@ def _normalize_kvzip(config) -> None:
         raise ValueError("kvzip_score_chunk_size must be <= engine_prefill_chunk_size.")
 
 
+def _normalize_retroinfer(config) -> None:
+    if config.sparse_method != "retroinfer":
+        return
+    if config.attention_cache_layout != "explicit_kv":
+        raise ValueError("RetroInfer GPU-only requires uniform explicit KV storage.")
+    layout = config.runtime_layout
+    if layout.linear_attention_layer_indices or layout.heterogeneous_kv:
+        raise ValueError("RetroInfer GPU-only requires uniform explicit KV layers.")
+    if layout.layer_idx_to_kv_idx != tuple(range(layout.num_layers)):
+        raise ValueError("RetroInfer GPU-only requires independent per-layer KV caches.")
+    if any(
+        str(layer_type) == "sliding_attention"
+        for layer_type in (getattr(config.hf_config, "layer_types", None) or ())
+    ):
+        raise ValueError("RetroInfer GPU-only requires full causal attention, not sliding attention.")
+    if config.hf_config.dtype not in (torch.float16, torch.bfloat16):
+        raise ValueError("RetroInfer GPU-only requires FP16 or BF16 KV.")
+    if config.enable_prefix_caching or config.enable_prefix_cache_offload:
+        raise ValueError("RetroInfer GPU-only v1 does not support prefix caching.")
+    if config.decode_graph:
+        raise ValueError("RetroInfer GPU-only v1 requires decode_graph=False.")
+    if config.async_scheduling is True:
+        raise ValueError("RetroInfer GPU-only v1 requires async_scheduling=False.")
+    config.async_scheduling = False
+    for name in (
+        "retroinfer_sink_tokens", "retroinfer_recent_tokens",
+        "retroinfer_avg_cluster_size", "retroinfer_min_index_tokens",
+        "retroinfer_update_tokens",
+    ):
+        value = getattr(config, name)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer, got {value!r}.")
+    for name in ("retroinfer_retrieval_ratio", "retroinfer_estimation_ratio"):
+        value = getattr(config, name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1:
+            raise ValueError(f"{name} must be in [0, 1], got {value!r}.")
+    if config.retroinfer_retrieval_ratio <= 0:
+        raise ValueError("RetroInfer retrieval ratio must be positive.")
+    if config.retroinfer_retrieval_ratio + config.retroinfer_estimation_ratio > 1:
+        raise ValueError("RetroInfer retrieval and estimation ratios must sum to at most 1.")
+    if config.retroinfer_update_tokens % config.retroinfer_avg_cluster_size:
+        raise ValueError("RetroInfer update size must be divisible by average cluster size.")
+    if config.retroinfer_min_index_tokens % config.retroinfer_avg_cluster_size:
+        raise ValueError("RetroInfer minimum index size must be divisible by average cluster size.")
+
+
 def normalize_sparse_methods(config) -> None:
+    _normalize_retroinfer(config)
     _normalize_kvzip(config)
     _validate_prefill_sparse_method_model_compatibility(config)
     if (

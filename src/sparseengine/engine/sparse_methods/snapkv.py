@@ -7,110 +7,23 @@ from sparseengine.engine.sequence import Sequence
 from sparseengine.utils.log import log_level, logger
 from sparseengine.utils.profiler import profiler
 
-from .base import AttentionEndEvent, LayerBatchSparseState, SparseStepContext
+from .base import AttentionEndEvent, SparseStepContext
 from .passthrough import PassThroughRuntime
 
 
 class ScoredCompactionRuntime(PassThroughRuntime):
     can_compact_decode_layers = False
 
-    def __init__(self, config, cache_manager):
-        super().__init__(config, cache_manager)
-        self._snapkv_decode_reduced_attn_score_buffers: dict[
-            int,
-            torch.Tensor,
-        ] = {}
-
-    def clear_decode_attn_score_buffers(self) -> None:
-        super().clear_decode_attn_score_buffers()
-        self._snapkv_decode_reduced_attn_score_buffers.clear()
-
-    def decode_graph_keepalive_tensors(self) -> list[torch.Tensor]:
-        return list(self._snapkv_decode_reduced_attn_score_buffers.values())
-
-    def _prepare_decode_attention_score(
-        self,
-        layer_idx: int,
-        state: LayerBatchSparseState,
-        batch_size: int,
-        num_heads: int,
-        max_len: int,
-    ) -> None:
-        del num_heads, max_len
-        score_width = self._snapkv_decode_score_width(state)
-        state.attn_score = self._get_snapkv_decode_score_buffer(
-            layer_idx,
-            batch_size,
-            score_width,
-            fill_value=-1e20,
-        )
-
-    def _get_snapkv_decode_score_buffer(
-        self,
-        layer_idx: int,
-        batch_size: int,
-        max_len: int,
-        *,
-        fill_value: float,
-    ) -> torch.Tensor:
-        if min(batch_size, max_len) <= 0:
-            raise RuntimeError(
-                "SnapKV decode score buffer requires positive dimensions: "
-                f"layer={layer_idx} shape={(batch_size, max_len)}."
-            )
-        reduced = self._snapkv_decode_reduced_attn_score_buffers.get(
-            int(layer_idx)
-        )
-        if (
-            reduced is None
-            or reduced.dtype != self.snapkv_decode_score_dtype
-            or reduced.device != self.device
-            or int(reduced.shape[0]) < batch_size
-            or int(reduced.shape[1]) < max_len
-        ):
-            reduced = torch.empty(
-                (batch_size, max_len),
-                dtype=self.snapkv_decode_score_dtype,
-                device=self.device,
-            )
-            self._snapkv_decode_reduced_attn_score_buffers[int(layer_idx)] = reduced
-        view = reduced[:batch_size, :max_len]
-        view.fill_(fill_value)
-        return view
-
-    def _snapkv_decode_score_width(self, state: LayerBatchSparseState) -> int:
-        max_len = self._state_max_context_len(state)
-        if not bool(getattr(self.config, "decode_graph", False)):
-            return max_len
-        graph_capacity = getattr(
-            self.cache_manager,
-            "_decode_static_max_context_len",
-            None,
-        )
-        if graph_capacity is None or int(graph_capacity) < max_len:
-            raise RuntimeError(
-                "SnapKV decode CUDA graph requires a score capacity covering the "
-                f"current context: graph_capacity={graph_capacity} current={max_len}."
-            )
-        return int(graph_capacity)
-
-    def on_attention_end(self, event: AttentionEndEvent) -> None:
-        layer_idx = event.layer_idx
-        if not self._is_kv_layer(layer_idx) or event.forward_context.is_prefill:
-            return
-        attn_score = self.layer_batch_sparse_states[layer_idx].attn_score
-        if attn_score is not None and attn_score.dim() != 2:
-            raise RuntimeError(
-                "SnapKV-family decode attention must write a fused head-reduced "
-                f"[B, L] score tensor: layer={layer_idx} "
-                f"shape={tuple(attn_score.shape)}."
-            )
+    def _decode_eviction_enabled(self) -> bool:
+        return True
 
     def finish_step(self, step: SparseStepContext) -> None:
         if step.is_prefill and any(
             seq.is_last_chunk_prefill for seq in step.seqs
         ):
             self._snapkv_prefill_eviction(step.seqs)
+        elif not step.is_prefill and self._decode_eviction_enabled():
+            self._snapkv_decode_eviction(step.seqs)
 
     @torch.no_grad()
     def _snapkv_prefill_eviction(self, seqs: list[Sequence]):
@@ -282,78 +195,61 @@ class ScoredCompactionRuntime(PassThroughRuntime):
             for layer_idx in range(self.num_layers):
                 if not self._is_kv_layer(layer_idx):
                     continue
-                state = self.layer_batch_sparse_states[layer_idx]
-                attn_scores = state.attn_score
-                if attn_scores is None:
-                    continue
-
                 budget = self._get_layer_budget(layer_idx, is_prefill=False)
                 if budget is None:
                     continue
 
                 trigger_len = self._snapkv_decode_trigger_len(budget)
-                max_context_len = state.max_context_len
-                if max_context_len is not None and (
-                    int(max_context_len) <= int(budget)
-                    or int(max_context_len) < int(trigger_len)
-                ):
-                    continue
-
                 kv_len_fn = getattr(
                     self.cache_manager,
                     "decode_kv_lens_for_layer",
                     None,
                 )
-                if kv_len_fn is not None:
-                    kv_lens = kv_len_fn(layer_idx, seqs)
-                else:
-                    kv_lens = [
-                        int(state.context_lens[batch_idx])
-                        for batch_idx in range(len(seqs))
-                    ]
-                triggered: list[tuple[int, Sequence, int]] = []
-                for batch_idx, (seq, kv_len) in enumerate(zip(seqs, kv_lens)):
+                if not callable(kv_len_fn):
+                    raise RuntimeError(
+                        "SnapKV/PyramidKV decode eviction requires physical "
+                        "per-layer KV lengths from the cache manager."
+                    )
+                kv_lens = kv_len_fn(layer_idx, seqs)
+                triggered: list[tuple[Sequence, int]] = []
+                for seq, kv_len in zip(seqs, kv_lens):
+                    if seq.is_recompute_replay:
+                        self.cache_manager.clear_decode_query_history(layer_idx, seq.seq_id)
+                        continue
                     if kv_len <= budget or kv_len < trigger_len:
                         continue
-                    triggered.append((batch_idx, seq, kv_len))
+                    triggered.append((seq, kv_len))
 
                 if not triggered:
                     continue
-                if attn_scores.dim() != 2:
-                    raise RuntimeError(
-                        "SnapKV/PyramidKV post-forward eviction requires "
-                        "head-reduced [B, L] scores: "
-                        f"layer={layer_idx} shape={tuple(attn_scores.shape)}."
-                    )
-                if (
-                    attn_scores.dtype != self.snapkv_decode_score_dtype
-                    or attn_scores.device != self.device
-                ):
-                    raise RuntimeError(
-                        "SnapKV/PyramidKV post-forward score dtype/device mismatch: "
-                        f"layer={layer_idx} got={attn_scores.dtype}/"
-                        f"{attn_scores.device} expected={self.snapkv_decode_score_dtype}/"
-                        f"{self.device}."
-                    )
 
-                by_kv_len: dict[int, list[tuple[int, Sequence]]] = {}
-                for batch_idx, seq, kv_len in triggered:
-                    by_kv_len.setdefault(int(kv_len), []).append((batch_idx, seq))
+                by_kv_len: dict[int, list[Sequence]] = {}
+                for seq, kv_len in triggered:
+                    by_kv_len.setdefault(int(kv_len), []).append(seq)
 
                 for kv_len, group in by_kv_len.items():
                     if log_level == "DEBUG":
-                        for _batch_idx, seq in group:
+                        for seq in group:
                             logger.debug(
                                 "[SnapKV] decode eviction: "
                                 f"layer={layer_idx} seq_id={seq.seq_id} "
                                 f"kv_len={kv_len} budget={budget} "
                                 f"trigger_len={trigger_len}"
                             )
+                    attn_scores = torch.stack([
+                        self.cache_manager.decode_query_scores(layer_idx, seq, kv_len)
+                        for seq in group
+                    ])
+                    if attn_scores.shape != (len(group), kv_len):
+                        raise RuntimeError(
+                            "SnapKV/PyramidKV decode query scores must be [B, L]: "
+                            f"layer={layer_idx} shape={tuple(attn_scores.shape)}."
+                        )
                     if len(group) == 1:
-                        batch_idx, seq = group[0]
+                        seq = group[0]
                         with profiler.record("snapkv_decode_select"):
                             keep_indices = self._snapkv_select_indices(
-                                attn_scores[batch_idx, :kv_len],
+                                attn_scores[0],
                                 kv_len,
                                 budget,
                             )
@@ -365,14 +261,9 @@ class ScoredCompactionRuntime(PassThroughRuntime):
                             )
                         continue
 
-                    batch_indices = torch.tensor(
-                        [batch_idx for batch_idx, _seq in group],
-                        dtype=torch.long,
-                        device=attn_scores.device,
-                    )
                     with profiler.record("snapkv_decode_select"):
                         keep_indices = self._snapkv_select_indices_batch(
-                            attn_scores.index_select(0, batch_indices)[:, :kv_len],
+                            attn_scores,
                             kv_len,
                             budget,
                         )
@@ -381,7 +272,7 @@ class ScoredCompactionRuntime(PassThroughRuntime):
                         "free_part_slots_batch",
                         None,
                     )
-                    group_seqs = [seq for _batch_idx, seq in group]
+                    group_seqs = group
                     if can_compact_layers:
                         key = (
                             tuple(int(seq.seq_id) for seq in group_seqs),
@@ -393,7 +284,7 @@ class ScoredCompactionRuntime(PassThroughRuntime):
                     else:
                         with profiler.record("snapkv_decode_compact"):
                             if free_batch is None:
-                                for row_idx, (_batch_idx, seq) in enumerate(group):
+                                for row_idx, seq in enumerate(group):
                                     self.cache_manager.free_part_slots(
                                         layer_idx,
                                         seq,
@@ -529,70 +420,16 @@ class ScoredCompactionRuntime(PassThroughRuntime):
         return self.num_sink + self.decode_keep_tokens + self.num_recent
 
     def _snapkv_decode_trigger_len(self, budget: int) -> int:
-        top_budget = int(budget) - int(self.num_sink) - int(self.num_recent)
-        return int(2.0 * top_budget)
-
+        return int(budget) + int(getattr(self.config, "decode_eviction_interval", 1024))
 
 class SnapKVRuntime(ScoredCompactionRuntime):
     can_compact_decode_layers = True
 
-    def needs_attention_score(
-        self,
-        layer_idx: int,
-        step: SparseStepContext,
-    ) -> bool:
-        del layer_idx, step
-        return False
+    def _decode_eviction_enabled(self) -> bool:
+        return bool(getattr(self.config, "snapkv_decode_eviction", False))
 
 
 class PyramidKVRuntime(ScoredCompactionRuntime):
-    def needs_attention_score(
-        self,
-        layer_idx: int,
-        step: SparseStepContext,
-    ) -> bool:
-        if step.is_prefill:
-            return False
-        budget = self._get_layer_budget(layer_idx, is_prefill=False)
-        if budget is None:
-            return False
-        trigger_len = self._snapkv_decode_trigger_len(budget)
-        if bool(getattr(self.config, "decode_graph", False)):
-            state = self.layer_batch_sparse_states[layer_idx]
-            graph_capacity = self._snapkv_decode_score_width(state)
-            return (
-                int(graph_capacity) >= int(trigger_len)
-                and int(graph_capacity) > int(budget)
-            )
-
-        kv_lens_fn = getattr(
-            self.cache_manager,
-            "decode_kv_lens_for_layer",
-            None,
-        )
-        if kv_lens_fn is not None:
-            kv_lens = kv_lens_fn(layer_idx, step.seqs)
-            return any(
-                int(kv_len) >= int(trigger_len)
-                and int(kv_len) > int(budget)
-                for kv_len in kv_lens
-            )
-
-        state = self.layer_batch_sparse_states[layer_idx]
-        if state.context_lens is None:
-            return False
-        if state.max_context_len is not None:
-            return (
-                int(state.max_context_len) >= int(trigger_len)
-                and int(state.max_context_len) > int(budget)
-            )
-        return bool(
-            (
-                (state.context_lens >= trigger_len)
-                & (state.context_lens > budget)
-            ).any()
-        )
-
     def on_attention_end(self, event: AttentionEndEvent) -> None:
         super().on_attention_end(event)
         layer_idx = event.layer_idx
@@ -671,30 +508,16 @@ class PyramidKVRuntime(ScoredCompactionRuntime):
             )
 
     def finish_step(self, step: SparseStepContext) -> None:
-        if step.is_prefill:
-            if not any(seq.is_last_chunk_prefill for seq in step.seqs):
-                return
-            if getattr(
-                self.cache_manager,
-                "prefill_staging_was_active",
-                lambda: False,
-            )():
-                return
-            self._snapkv_prefill_eviction(step.seqs)
+        if step.is_prefill and getattr(
+            self.cache_manager,
+            "prefill_staging_was_active",
+            lambda: False,
+        )():
             return
-        if not any(
-            state.attn_score is not None
-            for state in self.layer_batch_sparse_states.values()
-        ):
-            return
-        self._snapkv_decode_eviction(step.seqs)
+        super().finish_step(step)
 
     def _sparse_layer_budget(self, kv_layer_idx: int) -> int:
         ratio = self.config.pyramid_layer_ratios[kv_layer_idx]
         base_ratio = self.config.pyramid_layer_ratios[0]
         scaled_top_tokens = int(self.decode_keep_tokens * ratio / base_ratio)
         return self.num_sink + scaled_top_tokens + self.num_recent
-
-    def _snapkv_decode_trigger_len(self, budget: int) -> int:
-        top_budget = int(budget) - int(self.num_sink) - int(self.num_recent)
-        return int(budget) + int(top_budget)

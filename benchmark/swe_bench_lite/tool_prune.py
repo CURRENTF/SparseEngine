@@ -13,18 +13,27 @@ def tool_result_ranges(
     block_size: int,
     usable_tokens: int,
     message_start: int = 0,
+    message_indices: tuple[int, ...] | None = None,
 ) -> dict[str, Any]:
     if block_size <= 0 or usable_tokens < 0:
         raise ValueError("Invalid prefix-cache block size or usable token count.")
     prompt = render(chat)
     if not 0 <= message_start <= len(chat["messages"]):
         raise ValueError("Invalid tool message cursor.")
+    if message_indices is not None and any(
+        index < message_start or index >= len(chat["messages"])
+        for index in message_indices
+    ):
+        raise ValueError("Invalid selected tool message index.")
+    selected_indices = set(message_indices) if message_indices is not None else None
     marked_chat = {**chat, "messages": list(chat["messages"])}
     markers = []
     nonce = uuid4().hex
     for index in range(message_start, len(marked_chat["messages"])):
         message = marked_chat["messages"][index]
-        if message.get("role") != "tool":
+        if message.get("role") != "tool" or (
+            selected_indices is not None and index not in selected_indices
+        ):
             continue
         content = message.get("content")
         if not isinstance(content, str):
@@ -129,8 +138,10 @@ class ToolResultPruneSelector:
             self.tokenizer, ChatCompletionRequest.model_validate(chat), self.capabilities,
         )
 
-    def select(self, chat: dict[str, Any], *, block_size: int, usable_tokens: int, message_start: int = 0):
+    def select(self, chat: dict[str, Any], *, block_size: int, usable_tokens: int,
+               message_start: int = 0, message_indices: tuple[int, ...] | None = None):
         return tool_result_ranges(
             chat, self.tokenizer, self._render,
-            block_size=block_size, usable_tokens=usable_tokens, message_start=message_start,
+            block_size=block_size, usable_tokens=usable_tokens,
+            message_start=message_start, message_indices=message_indices,
         )

@@ -97,10 +97,10 @@ End with:
   topology, concurrency, graph mode, cache budget, and failure count. Component
   comparisons require relevant shapes, dtypes, callable and timing boundaries,
   environment, and failure count; mark inapplicable serving fields as N/A.
-  For paper efficiency comparisons, apply
-  [`paper-efficiency`](../paper-efficiency/SKILL.md): a validated continuous
-  decode window can support decode-window throughput, but not serving TPOT or
-  full-workload throughput.
+  For paper efficiency comparisons, apply the
+  [efficiency runbook](../../../docs/en/benchmarking/efficiency.md#measurement-contract):
+  a validated continuous decode window can support decode-window throughput,
+  but not serving TPOT or full-workload throughput.
 - Do not assume the cause of a performance regression is the scheduler, CPU, or
   a specific kernel without evidence from the changed workload boundary.
 - If no issues are found, say so clearly and mention residual test or benchmark risk.

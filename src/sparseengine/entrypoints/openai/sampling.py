@@ -33,6 +33,8 @@ def _sampling_params_from_request(request: CompletionRequest | ChatCompletionReq
         max_tokens=max_tokens,
         ignore_eos=request.ignore_eos,
         logprobs=logprobs,
+        benchmark_forced_token_ids=(request.benchmark_forced_token_ids
+                                    if isinstance(request, ChatCompletionRequest) else None),
     )
 
 
