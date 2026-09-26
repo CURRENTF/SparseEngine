@@ -239,7 +239,25 @@ class LowRankKVPayload:
     positions: torch.Tensor
 
 
-AttentionPayload = ExplicitKVPayload | MlaLatentPayload | LowRankKVPayload
+@dataclass(frozen=True)
+class SharedKVPayload:
+    """Shared key/value vectors materialized for sparse prefill computation."""
+
+    values: torch.Tensor
+
+
+@dataclass(frozen=True)
+class PackedSharedKVPayload:
+    """FP8 non-rotary values, BF16 rotary values and page-tail UE8M0 scales."""
+
+    pages: torch.Tensor
+    page_size: int
+
+
+AttentionPayload = (
+    ExplicitKVPayload | MlaLatentPayload | LowRankKVPayload
+    | SharedKVPayload | PackedSharedKVPayload
+)
 
 
 @dataclass(frozen=True)
