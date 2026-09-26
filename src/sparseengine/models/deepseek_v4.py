@@ -407,3 +407,19 @@ class DeepseekV4ForCausalLM(nn.Module):
 
     def compute_logits(self, hidden_states):
         return self.lm_head(hidden_states)
+
+    @torch.inference_mode()
+    def warmup_moe(self, num_tokens=1):
+        num_tokens = int(num_tokens)
+        if num_tokens <= 0:
+            raise ValueError("MoE warmup requires a positive token count")
+        experts = self.model.layers[0].ffn.experts
+        device = experts.w13_weight.device
+        hidden = torch.zeros(num_tokens, experts.hidden_size, device=device, dtype=torch.bfloat16)
+        top_k = int(self.config.num_experts_per_tok)
+        ids = (torch.arange(num_tokens*top_k, device=device, dtype=torch.int32)
+               .remainder(experts.num_local_experts).add(experts.local_expert_start)
+               .view(num_tokens, top_k))
+        weights = torch.full((num_tokens, top_k), 1./top_k, device=device, dtype=torch.float32)
+        experts(hidden, ids, weights)
+        torch.cuda.synchronize(device)
