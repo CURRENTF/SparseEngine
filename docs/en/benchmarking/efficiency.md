@@ -3,8 +3,8 @@
 [简体中文](../../zh/benchmarking/efficiency.md) | English
 
 This runbook owns measurement definitions, entrypoints, and support limits.
-Keep experiment-specific parameters, sweeps, and replot instructions in
-[scripts/official_experiments/](../../../scripts/official_experiments/).
+Experiment-specific parameters, sweeps, and replot instructions are on
+[`dev-paper-branch`](https://github.com/CURRENTF/SparseEngine/tree/dev-paper-branch/scripts/official_experiments).
 New defaults do not retroactively change historical protocols.
 
 ## Entrypoints and Minimal Example
@@ -48,7 +48,7 @@ equal work or quality.
 Continuous windows require explicit `--scenario fixed --prompt-length-jitter 0
 --output-length-jitter 0 --decode-only-steps 256 --decode-only-warmup-steps 32`.
 These are not ordinary request-mode defaults. For a capacity sweep and its smoke,
-use the [sparse decode efficiency experiment entrypoint](../../../scripts/official_experiments/sparse_decode_efficiency/README.md#boundary-sync-rerun);
+check out `dev-paper-branch` and use the [sparse decode efficiency experiment entrypoint](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/sparse_decode_efficiency/README.md#boundary-sync-rerun);
 do not copy timing runners. Cover periodic scoring/eviction, extending the
 window uniformly across comparisons when necessary.
 
@@ -233,14 +233,14 @@ storage errors, and user interruption stop the entire queue.
 Changed contracts, hardware, or
 Graph/backend policies require new baselines, preserving the old data.
 
-Keep scripts, reusable configurations, plotting code, and the compact official
-result package under `scripts/official_experiments/<experiment>/`. The committed
+Keep scripts, reusable configurations, plotting code, and the compact paper
+result package on `dev-paper-branch` under `scripts/official_experiments/<experiment>/`. The committed
 package contains only the device, launch arguments, final results, and Git commit,
 plus the compact JSON/CSV needed to reproduce an official table or figure. Do not
 store working-tree state, patches, source snapshots, source hashes, or recovery
 material. Keep large raw outputs/logs on persistent data storage outside Git. A
 Research-Vault record may index private or transient evidence, but it does not
-replace the repository result package. Do not use tmp or overwrite old runs.
+replace the branch result package. Do not use tmp or overwrite old runs.
 
 | Symptom | Action |
 | --- | --- |

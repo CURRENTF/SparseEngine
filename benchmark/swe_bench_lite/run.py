@@ -1484,7 +1484,7 @@ class SweBenchLiteRunner:
         model_env = self._model_env()
         mini_prefix = shlex.split(self.args.mini_command)
         if getattr(self.args, "record_agent_trace", False):
-            timed = self.repo_root / "scripts/official_experiments/chain_cache_miniswe/timed_mini.py"
+            timed = self.repo_root / "benchmark/swe_bench_lite/timed_mini.py"
             if mini_prefix != ["mini-extra"] and mini_prefix != [sys.executable, str(timed)]:
                 raise RunnerError("--record-agent-trace requires the default mini-extra or timed_mini command")
             mini_prefix = [sys.executable, str(timed)]

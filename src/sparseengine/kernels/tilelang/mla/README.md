@@ -34,9 +34,9 @@ Neither actual context length nor context capacity enters split selection.
 The conservative candidate range is profile policy, not a kernel correctness
 limit. The formula scales with hardware but is not a claim of optimal tuning on
 every GPU. Historical context-aware experiments remain frozen in
-`scripts/official_experiments/tilelang_mla_split_profiles`; they do not measure
+`dev-paper-branch:scripts/official_experiments/tilelang_mla_split_profiles`; they do not measure
 this context-independent rule. The capacity rerun recipe is in
-`scripts/official_experiments/sparse_decode_efficiency`.
+`dev-paper-branch:scripts/official_experiments/sparse_decode_efficiency`.
 
 The provider passes SM count from `DeviceCaps` at binding. Context capacity
 remains a storage/validation bound only. Plans are indexed only by batch;

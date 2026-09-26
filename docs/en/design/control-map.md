@@ -11,8 +11,8 @@ before reporting results.
 - Stable English runbooks and contracts live under the topical `docs/en/`
   directories.
 - Keep local run ledgers out of repo docs. Use the run artifacts themselves
-  when a repo-facing claim needs evidence. Finalized official result packages
-  belong under `scripts/official_experiments/<experiment>/`.
+  when a repo-facing claim needs evidence. Finalized paper result packages
+  belong on [`dev-paper-branch`](https://github.com/CURRENTF/SparseEngine/tree/dev-paper-branch/scripts/official_experiments).
 - `docs/en/configuration/runtime-parameter-semantics.md` is the canonical parameter contract.
   Keep it synchronized before adding new public run configs.
 

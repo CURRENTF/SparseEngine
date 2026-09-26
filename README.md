@@ -20,7 +20,7 @@ A sparse-first inference engine for long-context LLM serving.
 128K input / 2K output on H100 80GB. Top: decode throughput at each method's
 largest measured batch. Bottom: throughput improvement relative to vLLM Vanilla
 at the same concurrency, with vLLM at 0%. Ours denotes SparseEngine.
-See the [measurement and figure notes](scripts/official_experiments/sparse_decode_efficiency/README.md#readme-figures).
+See the [measurement and figure notes on dev-paper-branch](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/sparse_decode_efficiency/README.md#readme-figures).
 
 ## Project Overview
 

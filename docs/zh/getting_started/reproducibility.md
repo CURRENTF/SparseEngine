@@ -1,6 +1,6 @@
 # 可复现性
 
-使用本页的稳定 checklist 复现 SparseEngine 实验。不要把本地 run ledger 放入仓库；面向仓库的结果需要证据时，应引用原始 run artifact path。已完成的正式结果必须提交到 `scripts/official_experiments/<experiment>/`；私有记录不能替代该精简结果包。
+使用本页的稳定 checklist 复现 SparseEngine 实验。不要把本地 run ledger 放入仓库；面向仓库的结果需要证据时，应引用原始 run artifact path。已完成的论文实验结果提交到 [dev-paper-branch](https://github.com/CURRENTF/SparseEngine/tree/dev-paper-branch/scripts/official_experiments) 对应的结果包。
 
 ## 环境
 

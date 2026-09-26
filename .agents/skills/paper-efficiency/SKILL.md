@@ -36,9 +36,9 @@ description: Standardize SparseEngine paper efficiency comparisons, capacity swe
   实测 workload 排除这段时间，不能作为冷缓存 E2E。
 - 阶段诊断：`benchmark/microbench.py --synchronize_step_timing`。
 - 计时与统计：`benchmark/efficiency/metrics.py`；连续窗口复用 `PipelinedDecodeWindow`。
-- 扫描、配置和绘图：复用 `scripts/official_experiments/` 对应目录；
+- 扫描、配置和绘图：在 `dev-paper-branch` 复用 `scripts/official_experiments/` 对应目录；
   128K/2K 重跑使用 `sparse_decode_efficiency/config.boundary-sync.json`，
-  按[实验说明](../../../scripts/official_experiments/sparse_decode_efficiency/README.md#boundary-sync-rerun)先跑 `--smoke-only`。
+  按[实验说明](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/sparse_decode_efficiency/README.md#boundary-sync-rerun)先跑 `--smoke-only`。
   32K/2K 历史变体使用外部数据目录下的 `configs/config.boundary-sync.32k2k.json`，
   通过完整路径传给 `--config`；跨长度面板复用绘图入口
   `--grid-config`，各面板独立校验协议。允许显式标为未完成的实测曲线，不能伪造容量边界。
@@ -105,7 +105,7 @@ output，保持总长度不变，为满批 warmup 和测量窗口留足输出；
    step-sync 与 boundary-sync 不混图、不估算修正；异常未解释时不宣称性能或质量优越。
    分类修复后的同协议续跑遵循实验 README 的参数、硬件和原始结果校验，不放宽跨协议复用。
 4. 脚本、可复用配置、绘图代码和正式结果包留在
-   `scripts/official_experiments/<experiment>/`。结果包只记录设备、启动参数、
+   `dev-paper-branch` 的 `scripts/official_experiments/<experiment>/`。结果包只记录设备、启动参数、
    最终结果和 Git commit；若有正式图表，同目录保存其必需的精简 JSON/CSV。
    不保存工作区状态、patch、源码快照、源码 hash 或恢复材料。大体积日志/
    原始输出留在持久数据盘。Research-Vault 只用于可选的私有运行历史、

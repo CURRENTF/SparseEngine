@@ -93,7 +93,7 @@ page overlap is measured separately; score tolerance does not imply identical
 selection near ties. Quality validation must also compare actual model outputs.
 
 Serving measurements reuse
-`scripts/official_experiments/sparse_decode_efficiency/sweep_decode_capacity.py`
+`dev-paper-branch:scripts/official_experiments/sparse_decode_efficiency/sweep_decode_capacity.py`
 with `--probe-only --probe-concurrency`, matching model, workload and GPU between
 variants. Decode throughput uses 32 warmup +256 contiguous steps with two
 boundary synchronizations, one discarded full workload and three measured full
