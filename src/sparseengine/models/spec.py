@@ -11,9 +11,12 @@ from sparseengine.utils.config import config_get
 @dataclass(frozen=True)
 class ModelSpec:
     name: str
+    native_sparse_method: str | None = None
+    max_attention_tp_size: int | None = None
     requires_fp8: bool = False
     mixed_attention: bool = False
     allow_raw_config: bool = False
+    prefer_raw_config: bool = False
     supports_tiny_random: bool = True
     supports_quantized_tiny_random: bool = False
     tiny_random_requires_standard_head_shape: bool = True
@@ -30,6 +33,8 @@ class ModelSpec:
 
     def validate_parallel_execution(self, topology: ParallelTopology) -> None:
         """Reject unimplemented execution paths without changing topology semantics."""
+        if self.max_attention_tp_size is not None and topology.attn_tp_size > self.max_attention_tp_size:
+            raise ValueError(f"{self.name} requires attention TP <= {self.max_attention_tp_size}")
         if topology.moe_ep_size > 1 and not self.supports_expert_parallel:
             raise ValueError(
                 f"{self.name} does not support expert parallelism, "
@@ -109,6 +114,13 @@ MODEL_SPECS = {
 }
 MODEL_SPECS.update(
     {
+        "deepseek_v4": ModelSpec(
+            "DeepSeek-V4-Flash-0731", native_sparse_method="deepseek_v4", max_attention_tp_size=1,
+            requires_fp8=True, allow_raw_config=True, prefer_raw_config=True, supports_tiny_random=False,
+            supports_expert_parallel=True, supports_data_parallel=True,
+            runtime_class_name="DeepseekV4ForCausalLM", attention_cache_layout="shared_kv",
+            num_experts_field="n_routed_experts", top_k_field="num_experts_per_tok",
+        ),
         "qwen3_5": ModelSpec(
             "Qwen3.5",
             mixed_attention=True,

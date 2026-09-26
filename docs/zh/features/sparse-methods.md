@@ -8,6 +8,7 @@ SparseEngine 围绕 cache-manager-first sparse runtime 构建。engine 支持 ph
 
 | 方法 | 类别 | 说明 | 主要 Runtime 参数 |
 | --- | --- | --- | --- |
+| `deepseek_v4` | 原生压缩 KV | [DeepSeek V4 Flash 原生注意力及缓存](deepseek-v4.md)，使用滑动窗口与压缩历史选择。 | Checkpoint 决定预算；通用引擎参数 |
 | `palu` | 低秩 KV | [基于激活 whitening 的分组 K/V 压缩](palu.md)，decode 融合重建。 | `palu_checkpoint_path` |
 | `vanilla` | Dense baseline | Full attention baseline，用于验证正确性并测量非稀疏 engine path。 | 仅使用通用 engine 参数。 |
 | `streamingllm` | Physical eviction | StreamingLLM 风格的固定 sink 加 recent-window cache。保留 prefix/tail 策略之外的 token 会从 active KV cache 中被物理淘汰。 | `sink_keep_tokens`, `recent_keep_tokens` |

@@ -129,11 +129,12 @@ class SparseController:
     def get_layer_max_context_len(self, layer_idx: int) -> int | None:
         return self.runtime.get_layer_max_context_len(layer_idx)
 
-    def get_prefill_selection(self, layer_idx: int) -> SparseSelection:
+    def get_prefill_selection(self, layer_idx: int, *, selection_query=None) -> SparseSelection:
         return self.runtime.build_prefill_selection(
             PrefillSelectionRequest(
                 layer_idx=layer_idx,
                 forward_context=get_context(),
+                selection_query=selection_query,
             )
         )
 

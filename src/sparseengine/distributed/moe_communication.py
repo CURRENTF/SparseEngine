@@ -44,6 +44,10 @@ class MoeCommunication:
         output = outputs[0] if len(outputs) == 1 else torch.cat(outputs, dim=0)
         return self.combine(output, dispatch)
 
+    def routing_token_metadata(self, input_ids, *, capacity=None):
+        """Expert-directed or replicated transports route their local tokens."""
+        return input_ids
+
     def _finish(self, output):
         return output
 
@@ -193,6 +197,23 @@ class AllGatherReduceScatterMoeCommunication(MoeCommunication):
         else:
             dist.all_gather_into_tensor(gathered, local, group=self.group.process_group)
         return MoeDispatch(gathered, rows, capacity)
+
+    def routing_token_metadata(self, input_ids, *, capacity=None):
+        """Gather IDs once per model step in the same layout as hidden dispatch."""
+        if capacity is None:
+            capacity = get_context().moe_token_capacity or input_ids.numel()
+        local = torch.zeros(capacity, dtype=torch.int64, device=input_ids.device)
+        local[:input_ids.numel()].copy_(input_ids)
+        gathered = torch.empty(capacity*self.group.size, dtype=torch.int64, device=input_ids.device)
+        if self.group.size == 1:
+            gathered.copy_(local)
+        else:
+            dist.all_gather_into_tensor(gathered, local, group=self.group.process_group)
+        sizes = get_context().moe_token_sizes
+        if (sizes is not None and len(set(sizes)) > 1 and self.op is not None
+                and self.op.supports_variable_sizes):
+            gathered = torch.cat([gathered[i*capacity:i*capacity+size] for i, size in enumerate(sizes)])
+        return gathered
 
     def combine(self, output: torch.Tensor, dispatch: MoeDispatch) -> torch.Tensor:
         if dispatch.token_sizes is not None:
