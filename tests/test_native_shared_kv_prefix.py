@@ -26,6 +26,7 @@ def native_prefix_owner():
     cache.requests = {1: NativeSharedKVRequest(row, 16, {4: lease})}
     cache.families = {4: family}
     cache.max_buffer_rows = 1
+    cache.max_model_len = 256
     cache.prefix_rows = 2
     cache.prefix_cache_block_size = 16
     cache.prefix_cache = RadixPrefixIndex(block_size=16, fingerprint=b"native", max_blocks=2)
@@ -71,3 +72,19 @@ def test_discarded_async_prefix_releases_unpublished_physical_state():
     assert len(cache.prefix_cache) == 0
     assert cache.state_rows.num_free_rows == 3
     assert cache.families[4].allocator.num_free_pages == 4
+
+
+def test_decode_reservation_counts_shared_tail_copy_only_when_group_publishes():
+    cache, seq = native_prefix_owner()
+    seq.num_prefilled_tokens, seq.prefix_cache_hit_len = 16, 0
+    assert cache.decode_window_costs(seq, 4) == {"ratio_4": 0}
+    cache._freeze_prefix_snapshot(seq)
+    assert cache.decode_window_costs(seq, 3) == {"ratio_4": 0}
+    assert cache.decode_window_costs(seq, 4) == {"ratio_4": 1}
+    assert cache.prefill_private_slots_for(seq) == 3
+    # Shared budgets use physical pages; scalar scheduling projects their
+    # original-token capacity without mixing page units and token units.
+    free = cache.num_free_slots
+    assert cache.prefill_capacity_after_decode_reservations(
+        free, {"ratio_4": 1}, admission=False) == free-cache.page_size*4
+    cache.free_seq(seq.seq_id)

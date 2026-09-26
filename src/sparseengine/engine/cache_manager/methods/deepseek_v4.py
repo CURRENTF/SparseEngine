@@ -514,14 +514,78 @@ class DeepSeekV4CacheManager(CacheManager):
             )
 
     def prefill_step_free_slots_for(self, seq):
-        remaining = seq.num_prompt_tokens-max(seq.num_prefilled_tokens, seq.prefix_cache_hit_len)
+        start = self._request_length(seq)
+        remaining = min(seq.num_prompt_tokens-start,
+                        self.num_free_slots+self.prefill_private_slots_for(seq))
         if self.enable_prefix_caching:
-            start = max(seq.num_prefilled_tokens, seq.prefix_cache_hit_len)
             return min(remaining, self.prefix_cache_block_size-start%self.prefix_cache_block_size)
         return min(remaining, self.config.max_num_batched_tokens)
 
+    def _request_length(self, seq):
+        request = self.requests.get(seq.seq_id)
+        return (request.length if request is not None else
+                max(seq.num_prefilled_tokens, seq.prefix_cache_hit_len))
+
+    def _append_page_costs(self, seq, tokens):
+        request = self.requests.get(seq.seq_id)
+        end = self._request_length(seq)+int(tokens)
+        costs = {}
+        for ratio, family in self.families.items():
+            if request is None:
+                pages = ceil((end//ratio)/self.page_size)
+            else:
+                pages = family.reservation_pages(request.leases[ratio], end//ratio)
+            costs[f"ratio_{ratio}"] = pages
+        return costs
+
+    def _page_cost_to_slots(self, costs):
+        return max((int(costs.get(f"ratio_{ratio}", 0))*ratio*self.page_size
+                    for ratio in self.families), default=0)
+
+    def prefill_step_reservation_cost(self, seq, scheduled_tokens):
+        return self._page_cost_to_slots(self._append_page_costs(seq, scheduled_tokens))
+
+    def decode_step_reservation_cost(self, seq):
+        return self.prefill_step_reservation_cost(seq, 1)
+
+    def decode_window_costs(self, seq, tokens):
+        return self._append_page_costs(seq, tokens)
+
+    def decode_window_budgets(self):
+        return {f"ratio_{ratio}": family.allocator.num_free_pages
+                for ratio, family in self.families.items()}
+
+    def prefill_capacity_after_decode_reservations(self, free_slots, reserved, *, admission):
+        capacity = min(((family.allocator.num_free_pages-int(reserved.get(f"ratio_{ratio}", 0)))
+                        *ratio*self.page_size for ratio, family in self.families.items()),
+                       default=free_slots)
+        return min(int(free_slots), capacity)
+
+    def prefill_private_slots_for(self, seq):
+        request = self.requests.get(seq.seq_id)
+        if request is None:
+            return 0
+        capacities = []
+        for ratio, family in self.families.items():
+            lease = request.leases[ratio]
+            capacity = len(lease.pages)*self.page_size*ratio-request.length
+            tail = lease.materialized_tokens%self.page_size
+            if tail and family.allocator.reference_count(
+                    lease.pages[lease.materialized_tokens//self.page_size]) > 1:
+                capacity = min(capacity, ratio-1-request.length%ratio)
+            capacities.append(max(0, capacity))
+        return min(capacities, default=self.max_model_len-request.length)
+
+    def decode_step_free_slots_for(self, seq):
+        return self.num_free_slots+self.prefill_private_slots_for(seq)
+
     def prompt_admission_budgets(self, waiting_seqs, engine_prefill_chunk_size):
-        budgets = {f"ratio_{r}": f.allocator.num_free_pages for r, f in self.families.items()}
+        budgets = self.decode_window_budgets()
+        for seq in waiting_seqs:
+            if seq.seq_id in self.requests:
+                remaining = max(0, seq.num_prompt_tokens-self._request_length(seq))
+                for name, cost in self._append_page_costs(seq, remaining).items():
+                    budgets[name] = max(0, budgets[name]-cost)
         budgets["rows"] = min(self.max_buffer_rows-len(self.requests), self.state_rows.num_free_rows)
         return budgets
 
