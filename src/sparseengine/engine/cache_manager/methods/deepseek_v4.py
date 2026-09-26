@@ -332,7 +332,9 @@ class DeepSeekV4CacheManager(CacheManager):
             ratio = self.ratios[layer_idx]
             pool = self.state_rows.index_carry[layer_idx] if index else self.state_rows.carry[layer_idx]
             plan = self.compression_plans[ratio] if self.step_is_prefill else None
-            rows = len(self.compression_store_slots[ratio]) if plan is not None else len(self.query_rows)
+            # Upstream prefill writes at ragged query-token indices. The
+            # provider compacts completed groups only after normalization.
+            rows = len(self.query_rows)
             self.compression_views[key] = CompressionComputeView(
                 carry=pool.state, rows=self.step_request_rows, seq_lens=self.step_seq_lens,
                 output=torch.empty(rows, pool.head_dim, dtype=torch.float32, device=self.device),

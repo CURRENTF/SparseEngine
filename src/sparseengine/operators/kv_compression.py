@@ -113,6 +113,11 @@ class SGLKVCompressionProvider:
             handle = view.prefill_plan[0]
         self.kernels.normalize_rotate(view.output, self.norm_weight, handle, freqs,
                                       self.spec.rms_eps, is_decode=view.prefill_plan is None)
+        if view.prefill_plan is not None:
+            # Plan rows are [ragged token, request, position, window length].
+            # Cache store slots describe only completed compression groups.
+            completed_rows = handle.view(torch.int32)[:, 0].to(torch.int64)
+            return view.output[completed_rows]
         return view.output
 
 
