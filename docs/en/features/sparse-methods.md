@@ -20,10 +20,20 @@ Set `sparse_method` to one of the following method names.
 | `pyramidkv` | Physical eviction | PyramidKV-style layer-dependent KV retention. Decode eviction is always enabled. Each sparse layer scores its last `observation_window_size` decode queries and compacts after its physical row reaches that layer's budget plus `decode_eviction_interval` (default 1024). Scoring runs after the decode Graph replay, only at eviction boundaries. | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
 | `omnikv` | Logical masking with optional offload | Cross-layer token selection; optionally keep sparse-layer history in pinned CPU memory and fetch the exact selected KV for decode. | `full_attention_layers`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `enable_omnikv_offload` |
 | `quest` | Query-aware page selection | QuEST selects token pages from persistent min/max page summaries. Prefill stays dense. Explicit-KV models score in key coordinates; GLM-4.7-Flash scores the fused MLA latent/RoPE cache with the matching absorbed decode query while keeping the compute payload latent. | `quest_chunk_size`, `quest_skip_layers`, `sink_keep_tokens`, `decode_keep_tokens`, `recent_keep_tokens` |
+| `retroinfer` | Query-aware cluster retrieval | Experimental GPU-only RetroInfer. Dense prefill builds per-KV-head key clusters; decode reads top clusters exactly and estimates the contribution of the next ranked clusters. The full KV cache remains on GPU. | `retroinfer_retrieval_ratio`, `retroinfer_estimation_ratio`, `retroinfer_sink_tokens`, `retroinfer_recent_tokens` |
 | `deltakv` | Hybrid compression | Slim compressor-backed DeltaKV runtime. Legacy `deltakv-less-memory*` names normalize here for older configs, but real benchmark runs still require a matching compressor checkpoint. | `deltakv_checkpoint_path`, `deltakv_latent_dim`, `deltakv_center_ratio`, `deltakv_neighbor_count`, `deltakv_latent_quant_bits`, `full_layer_kv_quant_bits` |
 
 SparseEngine uses `sparse_method` unchanged in public commands, `LLM(...)`, the
 runtime config, and internal consumers.
+
+RetroInfer GPU-only currently supports Llama, Qwen2, Qwen3, Qwen3-MoE, and
+MiniMax-M2 with uniform FP16/BF16 explicit KV, full causal attention, and
+attention TP=1. MoE routing does not change this attention contract. Set
+`decode_graph=False`; prefix
+caching and async scheduling are unavailable. The default 4-token sink and
+64-token recent region stay exact. An index is built after at least 16,384
+older tokens are available and extended in 1,024-token segments. Shorter
+contexts read their full KV exactly.
 
 
 

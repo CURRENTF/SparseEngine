@@ -38,6 +38,7 @@ from ..base import (
 from ..raw_kv_offload import RawKVOffloadBuffer
 from ..chain_offload import ChainMethodState, ChainOffloadController
 from ..storage import ExplicitKVStorage, create_attention_cache_storage
+from ..storage.mla_latent import MlaLatentStorage, LayerVaryingMlaLatentStorage
 
 
 _INT32_BYTES = 4
@@ -126,8 +127,19 @@ class SnapKVCacheManager(CacheManager):
             parallel_context,
             allocation_budget_bytes=allocation_budget_bytes,
         )
+        self._pyramidkv_mla_latent = (
+            config.sparse_method == "pyramidkv"
+            and config.attention_cache_layout == "mla_latent"
+        )
         self.attention_cache_storage = (
-            create_attention_cache_storage(
+            LayerVaryingMlaLatentStorage(
+                kv_lora_rank=int(config.hf_config.kv_lora_rank),
+                rope_dim=int(config.hf_config.qk_rope_head_dim),
+                dtype=config.hf_config.dtype,
+                validate_runtime_invariants=bool(config.validate_runtime_invariants),
+            )
+            if self._pyramidkv_mla_latent
+            else create_attention_cache_storage(
                 config,
                 num_kv_heads=self.num_kv_heads,
                 head_dim=self.head_dim,
@@ -135,6 +147,7 @@ class SnapKVCacheManager(CacheManager):
             if config.pyramid_layer_ratios is None
             else None
         )
+        self._pyramidkv_mla_staging_storage: MlaLatentStorage | None = None
         self.pyramidkv_prefill_staging_num_slots = 0
         self.pyramidkv_prefill_staging_kv_cache = None
         self._pyramidkv_prefill_staging_active = False
@@ -471,28 +484,56 @@ class SnapKVCacheManager(CacheManager):
             layer_slots = [0] * self.num_layers
 
             if staging_bytes:
-                self.pyramidkv_prefill_staging_kv_cache = torch.empty(
-                    2,
-                    self.pyramidkv_prefill_staging_num_slots,
-                    self.num_kv_heads,
-                    self.head_dim,
-                    dtype=self.hf_config.dtype,
-                    device=self.device,
-                )
+                if self._pyramidkv_mla_latent:
+                    self._pyramidkv_mla_staging_storage = MlaLatentStorage(
+                        kv_lora_rank=int(self.hf_config.kv_lora_rank),
+                        rope_dim=int(self.hf_config.qk_rope_head_dim),
+                        dtype=self.hf_config.dtype,
+                        validate_runtime_invariants=bool(config.validate_runtime_invariants),
+                    )
+                    self._pyramidkv_mla_staging_storage.allocate(
+                        num_layers=1,
+                        num_slots=self.pyramidkv_prefill_staging_num_slots,
+                        device=self.device,
+                    )
+                    payload = self._pyramidkv_mla_staging_storage.layer_payload(0)
+                    self.pyramidkv_prefill_staging_kv_cache = (
+                        payload.latent_cache,
+                        payload.rope_cache,
+                    )
+                else:
+                    self.pyramidkv_prefill_staging_kv_cache = torch.empty(
+                        2,
+                        self.pyramidkv_prefill_staging_num_slots,
+                        self.num_kv_heads,
+                        self.head_dim,
+                        dtype=self.hf_config.dtype,
+                        device=self.device,
+                    )
 
             self.kv_cache = []
-            for kv_idx, layer_idx in enumerate(kv_layer_ids):
-                num_slots = kv_layer_slots[kv_idx]
-                layer_slots[layer_idx] = num_slots
-                k_cache = torch.empty(
-                    num_slots, self.num_kv_heads, self.head_dim,
-                    dtype=self.hf_config.dtype, device=self.device
-                )
-                v_cache = torch.empty(
-                    num_slots, self.num_kv_heads, self.head_dim,
-                    dtype=self.hf_config.dtype, device=self.device
-                )
-                self.kv_cache.append((k_cache, v_cache))
+            if self._pyramidkv_mla_latent:
+                storage = self.attention_cache_storage
+                if not isinstance(storage, LayerVaryingMlaLatentStorage):
+                    raise RuntimeError("PyramidKV MLA requires layer-varying latent storage.")
+                storage.allocate_layers(slot_counts=kv_layer_slots, device=self.device)
+                for kv_idx, layer_idx in enumerate(kv_layer_ids):
+                    layer_slots[layer_idx] = kv_layer_slots[kv_idx]
+                    payload = storage.layer_payload(kv_idx)
+                    self.kv_cache.append((payload.latent_cache, payload.rope_cache))
+            else:
+                for kv_idx, layer_idx in enumerate(kv_layer_ids):
+                    num_slots = kv_layer_slots[kv_idx]
+                    layer_slots[layer_idx] = num_slots
+                    k_cache = torch.empty(
+                        num_slots, self.num_kv_heads, self.head_dim,
+                        dtype=self.hf_config.dtype, device=self.device
+                    )
+                    v_cache = torch.empty(
+                        num_slots, self.num_kv_heads, self.head_dim,
+                        dtype=self.hf_config.dtype, device=self.device
+                    )
+                    self.kv_cache.append((k_cache, v_cache))
 
             config.num_kvcache_slots = layer_slots
             logger.info(
@@ -558,6 +599,15 @@ class SnapKVCacheManager(CacheManager):
         layer_idx: int,
         payload: AttentionCacheWrite,
     ) -> torch.Tensor:
+        if getattr(self, "_pyramidkv_mla_latent", False) and self.has_prefill_staging_view(layer_idx):
+            storage = self._pyramidkv_mla_staging_storage
+            slot_mapping = self._pyramidkv_prefill_staging_slot_mapping_by_layer.get(
+                int(layer_idx), self._pyramidkv_prefill_staging_slot_mapping
+            )
+            if storage is None or slot_mapping is None:
+                raise RuntimeError("PyramidKV MLA prefill staging is missing storage or slot mapping.")
+            storage.store(0, slot_mapping, payload)
+            return slot_mapping
         storage = getattr(self, "attention_cache_storage", None)
         if storage is None or isinstance(storage, ExplicitKVStorage):
             return super().store_attention_payload(layer_idx, payload)
@@ -581,6 +631,11 @@ class SnapKVCacheManager(CacheManager):
         context_lens: torch.Tensor,
         selection: SparseSelection | None = None,
     ):
+        if getattr(self, "_pyramidkv_mla_latent", False) and self.has_prefill_staging_view(layer_idx):
+            storage = self._pyramidkv_mla_staging_storage
+            if storage is None:
+                raise RuntimeError("PyramidKV MLA prefill staging storage is missing.")
+            return storage.layer_payload(0), active_slots, req_indices, context_lens
         storage = getattr(self, "attention_cache_storage", None)
         if storage is None or isinstance(storage, ExplicitKVStorage):
             return super().get_layer_compute_payload(
@@ -2909,13 +2964,11 @@ class SnapKVCacheManager(CacheManager):
                     row_idx=row_idx,
                     kind=kind,
                     end=end,
-                    k_out=self.pyramidkv_prefill_staging_kv_cache[
-                        0,
-                        resident_prefix_len : resident_prefix_len + end,
+                    k_out=self.pyramidkv_prefill_staging_kv_cache[0][
+                        resident_prefix_len : resident_prefix_len + end
                     ],
-                    v_out=self.pyramidkv_prefill_staging_kv_cache[
-                        1,
-                        resident_prefix_len : resident_prefix_len + end,
+                    v_out=self.pyramidkv_prefill_staging_kv_cache[1][
+                        resident_prefix_len : resident_prefix_len + end
                     ],
                 )
                 event = device_runtime.new_event(device=self.device)
@@ -2977,13 +3030,11 @@ class SnapKVCacheManager(CacheManager):
                 :resident_prefix_len,
             ].to(torch.long)
             k_cache, v_cache = self.get_layer_kv_cache(layer_idx)
-            self.pyramidkv_prefill_staging_kv_cache[
-                0,
-                :resident_prefix_len,
+            self.pyramidkv_prefill_staging_kv_cache[0][
+                :resident_prefix_len
             ].copy_(k_cache[slots])
-            self.pyramidkv_prefill_staging_kv_cache[
-                1,
-                :resident_prefix_len,
+            self.pyramidkv_prefill_staging_kv_cache[1][
+                :resident_prefix_len
             ].copy_(v_cache[slots])
         if restored_residual <= 0:
             return None
@@ -3001,13 +3052,11 @@ class SnapKVCacheManager(CacheManager):
                 row_idx=row_idx,
                 kind=self._pyramidkv_long_prefill_offload_kind(),
                 end=restored_residual,
-                k_out=self.pyramidkv_prefill_staging_kv_cache[
-                    0,
-                    resident_prefix_len : resident_prefix_len + restored_residual,
+                k_out=self.pyramidkv_prefill_staging_kv_cache[0][
+                    resident_prefix_len : resident_prefix_len + restored_residual
                 ],
-                v_out=self.pyramidkv_prefill_staging_kv_cache[
-                    1,
-                    resident_prefix_len : resident_prefix_len + restored_residual,
+                v_out=self.pyramidkv_prefill_staging_kv_cache[1][
+                    resident_prefix_len : resident_prefix_len + restored_residual
                 ],
             )
         return None
@@ -3037,8 +3086,8 @@ class SnapKVCacheManager(CacheManager):
         offload_end = end - residual_start
         staging_start = resident_prefix_len + offload_start
         staging_end = resident_prefix_len + offload_end
-        k = self.pyramidkv_prefill_staging_kv_cache[0, staging_start:staging_end]
-        v = self.pyramidkv_prefill_staging_kv_cache[1, staging_start:staging_end]
+        k = self.pyramidkv_prefill_staging_kv_cache[0][staging_start:staging_end]
+        v = self.pyramidkv_prefill_staging_kv_cache[1][staging_start:staging_end]
         kind = self._pyramidkv_long_prefill_offload_kind()
         with profiler.record("pyramidkv_long_prefill_offload_ensure_entry"):
             self.raw_kv_offload_buffer.ensure_entry(

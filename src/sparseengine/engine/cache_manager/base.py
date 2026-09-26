@@ -553,6 +553,10 @@ class CacheManager(ABC):
             from .methods.quest import QuestCacheManager
 
             return create_manager(QuestCacheManager)
+        if sparse_method == "retroinfer":
+            from .methods.retroinfer import RetroInferGPUCacheManager
+
+            return create_manager(RetroInferGPUCacheManager)
         if sparse_method == "omnikv":
             from .methods.omnikv.manager import OmniKVCacheManager
 

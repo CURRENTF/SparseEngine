@@ -102,7 +102,7 @@ class DecodeAttentionOpSpec:
     kv_storage_format: str = "dense"
 
     def __post_init__(self) -> None:
-        if self.kv_storage_format not in {"dense", "kivi", "turboquant", "fp8_kv"}:
+        if self.kv_storage_format not in {"dense", "kivi", "turboquant", "fp8_kv", "retroinfer"}:
             raise ValueError(f"Unknown decode KV storage format {self.kv_storage_format!r}.")
         if self.num_query_heads <= 0 or self.num_kv_heads <= 0:
             raise ValueError("Decode attention head counts must be positive.")
@@ -339,7 +339,11 @@ DECODE_ATTENTION_REGISTRY: OpRegistry[
             "triton_paged_decode",
             "triton_fixed_grid_paged_decode",
         ),
-        repo_nonstandard=("triton_deltakv_fixed_grid_decode", "triton_quantized_pages_decode"),
+        repo_nonstandard=(
+            "triton_deltakv_fixed_grid_decode",
+            "triton_quantized_pages_decode",
+            "triton_retroinfer_gpu_decode",
+        ),
     ),
 )
 
@@ -1488,13 +1492,124 @@ class DeltaKVFixedGridDecodeAttentionProvider(DecodeAttentionProvider):
 
 
 @DECODE_ATTENTION_REGISTRY.register_atomic(ProviderRole.REPO_NONSTANDARD)
+class RetroInferGPUDecodeAttentionProvider(DecodeAttentionProvider):
+    name = "triton_retroinfer_gpu_decode"
+    supports_decode_graph = False
+
+    @classmethod
+    def supports(cls, spec: DecodeAttentionOpSpec, caps: DeviceCaps) -> SupportResult:
+        if spec.kv_storage_format != "retroinfer":
+            return SupportResult.unsupported("requires RetroInfer GPU index")
+        if caps.platform is not PlatformEnum.CUDA or not caps.supports_triton:
+            return SupportResult.unsupported("requires CUDA and Triton")
+        if spec.cuda_graph:
+            return SupportResult.unsupported("RetroInfer GPU-only v1 is eager-only")
+        if spec.activation_dtype not in (torch.float16, torch.bfloat16):
+            return SupportResult.unsupported("requires FP16 or BF16 QKV")
+        if spec.head_dim not in {64, 128, 256} or spec.page_size != 1:
+            return SupportResult.unsupported("requires head_dim 64/128/256 and token slots")
+        if spec.may_require_attention_scores or spec.may_use_full_layer_kivi_int4:
+            return SupportResult.unsupported("requires score-free explicit KV")
+        return SupportResult.yes()
+
+    def prepare(self, spec: DecodeAttentionOpSpec, *, device_index: int | None = None) -> None:
+        device = torch.device("cuda", int(device_index or 0))
+        heads, dim = spec.num_kv_heads, spec.head_dim
+        self._empty_centroids = torch.zeros((heads, 1, dim), dtype=spec.activation_dtype, device=device)
+        self._empty_value_sums = torch.zeros((heads, 1, dim), dtype=torch.float32, device=device)
+        self._empty_sizes = torch.zeros((heads, 1), dtype=torch.int32, device=device)
+        self._empty_offsets = torch.zeros((heads, 2), dtype=torch.int32, device=device)
+        self._empty_positions = torch.zeros((heads, 1), dtype=torch.int32, device=device)
+        self._empty_ranked = torch.zeros((heads, 1), dtype=torch.int32, device=device)
+
+    def run(self, spec: DecodeAttentionOpSpec, q: torch.Tensor, view: Any, **kwargs) -> torch.Tensor:
+        from sparseengine.engine.cache_manager.base import ExplicitKVPayload
+        from sparseengine.engine.cache_manager.methods.retroinfer import RetroInferDecodeViewMeta
+        from sparseengine.kernels.triton.retroinfer_attention import retroinfer_paged_decode
+
+        kwargs.pop("decode_launch_op", None)
+        if kwargs:
+            raise TypeError(f"Unexpected RetroInfer decode arguments: {sorted(kwargs)}.")
+        if not isinstance(view.meta, RetroInferDecodeViewMeta):
+            raise TypeError("RetroInfer decode requires a request-owned GPU wave index view.")
+        if not isinstance(view.payload, ExplicitKVPayload):
+            raise TypeError("RetroInfer decode requires explicit KV payload.")
+        batch, heads, dim = q.shape
+        if (
+            batch != len(view.meta.rows) or batch > spec.max_batch_size
+            or (heads, dim) != (spec.num_query_heads, spec.head_dim)
+            or q.dtype != spec.activation_dtype
+        ):
+            raise ValueError("RetroInfer decode query differs from its prepared contract.")
+        output = torch.empty_like(q)
+        key_cache = view.payload.k_cache
+        value_cache = view.payload.v_cache
+        for batch_idx, row in enumerate(view.meta.rows):
+            index = row.index
+            if index is None:
+                centroids = self._empty_centroids
+                value_sums = self._empty_value_sums
+                sizes = self._empty_sizes
+                offsets = self._empty_offsets
+                sorted_positions = self._empty_positions
+                ranked = self._empty_ranked
+                retrieved = estimated = 0
+            else:
+                centroids = index.centroids
+                value_sums = index.value_sums
+                sizes = index.sizes
+                offsets = index.offsets
+                sorted_positions = index.sorted_positions
+                retrieved = index.retrieval_clusters
+                estimated = index.estimation_clusters
+                group = spec.num_query_heads // spec.num_kv_heads
+                scores = torch.bmm(
+                    q[batch_idx].reshape(spec.num_kv_heads, group, dim),
+                    centroids.transpose(1, 2),
+                ).float() * spec.softmax_scale
+                scores.masked_fill_(sizes[:, None, :] == 0, -float("inf"))
+                ranking_scores = torch.softmax(scores, dim=-1).sum(dim=1)
+                ranked = torch.topk(
+                    ranking_scores, retrieved + estimated,
+                    dim=-1, sorted=True,
+                ).indices.to(torch.int32).contiguous()
+            retroinfer_paged_decode(
+                q[batch_idx], key_cache, value_cache,
+                view.meta.active_slots[row.row_index],
+                centroids, value_sums, sizes, offsets, sorted_positions, ranked,
+                sink_end=row.sink_end,
+                recent_start=row.recent_start,
+                recent_end=row.recent_end,
+                retrieval_clusters=retrieved,
+                estimation_clusters=estimated,
+                output=output[batch_idx],
+            )
+        return output
+
+    def close(self) -> None:
+        for name in (
+            "_empty_centroids", "_empty_value_sums", "_empty_sizes",
+            "_empty_offsets", "_empty_positions", "_empty_ranked",
+        ):
+            setattr(self, name, None)
+
+    def binding_metadata(self) -> dict[str, str]:
+        return {
+            "implementation_kind": "atomic_provider",
+            "implementation_source": "repo_triton",
+            "kernel_path": "retroinfer_attention",
+            "workspace_owner": "cache_manager",
+        }
+
+
+@DECODE_ATTENTION_REGISTRY.register_atomic(ProviderRole.REPO_NONSTANDARD)
 class QuantizedPagesDecodeAttentionProvider(DecodeAttentionProvider):
     name = "triton_quantized_pages_decode"
     supports_decode_graph = True
 
     @classmethod
     def supports(cls, spec, caps):
-        if spec.kv_storage_format == "dense":
+        if spec.kv_storage_format not in {"kivi", "turboquant", "fp8_kv"}:
             return SupportResult.unsupported("requires quantized page storage")
         if caps.platform is not PlatformEnum.CUDA or not caps.supports_triton:
             return SupportResult.unsupported("requires CUDA and Triton")

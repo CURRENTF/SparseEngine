@@ -54,6 +54,7 @@ CANONICAL_SPARSE_METHODS = {
     "pyramidkv",
     "omnikv",
     "quest",
+    "retroinfer",
     "rkv",
     "skipkv",
     "deltakv",
@@ -235,6 +236,7 @@ _PREFILL_LAYER_VARYING_PAGE_TABLE = {
     "pyramidkv": True,
     "omnikv": False,
     "quest": False,
+    "retroinfer": False,
     "rkv": True,
     "skipkv": True,
     "deltakv": True,
@@ -391,11 +393,11 @@ _MOE_SPARSE_METHODS = frozenset(
 DENSE_MODEL_COMPATIBILITY = ModelRuntimeCompatibility(
     sparse_methods=frozenset(CANONICAL_SPARSE_METHODS),
     prefix_cache_methods=frozenset(PREFIX_CACHE_SUPPORTED_METHODS),
-    decode_graph_methods=frozenset(CANONICAL_SPARSE_METHODS),
+    decode_graph_methods=frozenset(CANONICAL_SPARSE_METHODS - {"retroinfer"}),
 )
 
 QWEN3_MOE_EP_COMPATIBILITY = ModelRuntimeCompatibility(
-    sparse_methods=_MOE_SPARSE_METHODS | QUANTIZED_KV_METHODS,
+    sparse_methods=_MOE_SPARSE_METHODS | QUANTIZED_KV_METHODS | {"retroinfer"},
     prefix_cache_methods=frozenset(
         {"", "omnikv", "quest", "snapkv", "h2o", "pyramidkv", "rkv"}
     ),
@@ -417,7 +419,7 @@ QWEN35_MOE_COMPATIBILITY = ModelRuntimeCompatibility(
 )
 
 MINIMAX_M2_EP_COMPATIBILITY = ModelRuntimeCompatibility(
-    sparse_methods=_MOE_SPARSE_METHODS,
+    sparse_methods=_MOE_SPARSE_METHODS | {"retroinfer"},
     prefix_cache_methods=frozenset({"", "omnikv", "quest", "snapkv"}),
     decode_graph_methods=_MOE_SPARSE_METHODS,
 )
@@ -430,7 +432,7 @@ MINIMAX_M2_TP_EP_COMPATIBILITY = ModelRuntimeCompatibility(
 
 GLM4_MOE_LITE_EP_COMPATIBILITY = ModelRuntimeCompatibility(
     sparse_methods=frozenset(
-        {"", "streamingllm", "snapkv", "h2o", "omnikv", "quest", "rkv"}
+        {"", "streamingllm", "snapkv", "h2o", "pyramidkv", "omnikv", "quest", "rkv"}
     ),
     prefix_cache_methods=frozenset(
         {"", "streamingllm", "snapkv", "h2o", "omnikv", "quest", "rkv"}
@@ -458,7 +460,7 @@ MODEL_RUNTIME_COMPATIBILITY = {
     "gemma4": GEMMA4_COMPATIBILITY,
 }
 
-DECODE_CUDA_GRAPH_SUPPORTED_METHODS = set(CANONICAL_SPARSE_METHODS)
+DECODE_CUDA_GRAPH_SUPPORTED_METHODS = set(CANONICAL_SPARSE_METHODS) - {"retroinfer"}
 TP_DECODE_CUDA_GRAPH_SUPPORTED_METHODS = {
     "kvzip",
     *QUANTIZED_KV_METHODS,
@@ -490,6 +492,7 @@ _DEFAULT_PREFILL_POLICY_BY_METHOD = {
     "pyramidkv": PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
     "omnikv": PREFILL_POLICY_ALL_CHUNKED,
     "quest": PREFILL_POLICY_ALL_CHUNKED,
+    "retroinfer": PREFILL_POLICY_ALL_CHUNKED,
     "rkv": PREFILL_POLICY_ALL_CHUNKED,
     "skipkv": PREFILL_POLICY_ALL_CHUNKED,
     "deltakv": PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
@@ -562,6 +565,8 @@ def validate_model_runtime_compatibility(
             f"{method} requires one of {sorted(model_types)}; "
             f"the auxiliary reconstruction lifecycle for {model_type!r} is not implemented."
         )
+    if method == "retroinfer" and topology.attn_tp_size != 1:
+        raise ValueError("RetroInfer GPU-only v1 requires attention TP=1.")
     compatibility = MODEL_RUNTIME_COMPATIBILITY.get(model_type)
     if model_type == "qwen3_moe" and topology.attn_tp_size > 1:
         compatibility = QWEN3_MOE_TP_EP_COMPATIBILITY
