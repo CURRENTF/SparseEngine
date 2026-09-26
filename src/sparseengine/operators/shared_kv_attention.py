@@ -108,6 +108,11 @@ class SGLSharedKVAttentionProvider(SharedKVAttentionProvider):
         if shared_kv.dtype != self.spec.activation_dtype or shared_kv.device != query.device:
             raise ValueError("Shared KV prefill payload dtype/device differs from query")
         self._validate_selection(query, indices, lengths, sink)
+        # SM90 sparse prefill uses two 64-key tiles per iteration. Decode
+        # accepts 64-key alignment; adapt the provider's prefill layout here.
+        padding = (-indices.shape[-1])%128
+        if padding:
+            indices = torch.nn.functional.pad(indices, (0, padding), value=-1)
         return self._prefill(
             query, shared_kv, indices, self.spec.softmax_scale,
             d_v=self.spec.head_dim, attn_sink=sink, topk_length=lengths,

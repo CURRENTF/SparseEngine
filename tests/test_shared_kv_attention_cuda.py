@@ -41,11 +41,28 @@ def attention_reference(query, kv, indices, lengths, sink):
     result = []
     for row in range(len(query)):
         ids = indices[row, 0, :int(lengths[row])].long()
+        ids = ids[ids >= 0]
         selected = kv[ids].double()
         logits = query[row].double() @ selected.T / (512 ** 0.5)
         probabilities = torch.cat((logits, sink.double()[:, None]), dim=-1).softmax(-1)
         result.append(probabilities[:, :-1] @ selected)
     return torch.stack(result).bfloat16()
+
+
+def test_prefill_adapts_decode_capacity_and_masks_window_holes():
+    torch.manual_seed(29)
+    kv = torch.randn(160, 512, device="cuda", dtype=torch.bfloat16)
+    query = torch.randn(2, 64, 512, device="cuda", dtype=torch.bfloat16)
+    sink = torch.randn(64, device="cuda")
+    indices = torch.full((2, 1, 192), -1, device="cuda", dtype=torch.int32)
+    indices[:, 0, :20] = torch.arange(20, device="cuda", dtype=torch.int32)
+    indices[:, 0, 128] = 150
+    lengths = torch.full((2,), 129, device="cuda", dtype=torch.int32)
+    spec = SharedKVAttentionOpSpec(64, 512, torch.bfloat16, 64, 192, 512**-.5, True)
+    provider = resolve_shared_kv_attention_provider(spec, device_index=torch.cuda.current_device())
+    result = provider.prefill(query, SharedKVPayload(kv[:, None]), indices, lengths, sink)
+    torch.testing.assert_close(result, attention_reference(query, kv, indices, lengths, sink),
+                               rtol=.02, atol=.008)
 
 
 def unpack_reference(storage, slots, page_size):
