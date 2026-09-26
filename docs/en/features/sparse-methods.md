@@ -10,6 +10,7 @@ Set `sparse_method` to one of the following method names.
 
 | Method | Family | Description | Main Runtime Knobs |
 | --- | --- | --- | --- |
+| `deepseek_v4` | Native compressed KV | [DeepSeek V4 Flash native attention and cache](deepseek-v4.md), with sliding-window and learned compressed-history selection. | Checkpoint-owned budgets; common engine knobs |
 | `palu` | Low-rank KV | [Activation-whitened grouped K/V compression](palu.md), with fused decode reconstruction. | `palu_checkpoint_path` |
 | `vanilla` | Dense baseline | Full attention baseline. Use it to verify correctness and measure the non-sparse engine path. | Common engine knobs only. |
 | `streamingllm` | Physical eviction | StreamingLLM-style fixed sink plus recent-window cache. Tokens outside the retained prefix/tail policy are physically evicted from the active KV cache. | `sink_keep_tokens`, `recent_keep_tokens` |

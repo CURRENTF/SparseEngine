@@ -1796,7 +1796,7 @@ def collect_decode_graph_participants(model: torch.nn.Module) -> tuple[object, .
     participants: list[object] = []
     seen: set[int] = set()
     for module in model.modules():
-        if not isinstance(module, Attention):
+        if not isinstance(module, Attention) and not getattr(module, "is_attention_layer", False):
             continue
         participant = getattr(module, "decode_op", None)
         if participant is None or not bool(
@@ -1816,7 +1816,7 @@ def validate_decode_graph_model(model: torch.nn.Module) -> int:
 
     validated = 0
     for module in model.modules():
-        if isinstance(module, Attention):
+        if isinstance(module, Attention) or getattr(module, "is_attention_layer", False):
             decode_op = getattr(module, "decode_op", None)
             implementation = (
                 decode_op

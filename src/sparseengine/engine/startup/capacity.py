@@ -173,6 +173,9 @@ def profiling_kv_budget_bytes(config, num_slots: int) -> int:
     if num_slots <= 0:
         raise ValueError(f"Profiling KV slots must be positive, got {num_slots}.")
     from sparseengine.method_registry import QUANTIZED_KV_METHODS
+    if config.sparse_method == "deepseek_v4":
+        from sparseengine.engine.cache_manager.methods.deepseek_v4 import DeepSeekV4CacheManager
+        return DeepSeekV4CacheManager.profiling_budget_bytes(config, num_slots)
     if config.sparse_method in QUANTIZED_KV_METHODS:
         from sparseengine.engine.cache_manager.storage.quantized_kv import QuantizedKVStorage, quantized_kv_reserved_bytes
         g = int(config.kv_quant_page_size)

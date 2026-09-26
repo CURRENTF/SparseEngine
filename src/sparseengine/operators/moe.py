@@ -37,6 +37,7 @@ class MoeOpSpec:
     scale_dtype: torch.dtype | None = None
     activation: str = "silu"
     max_num_tokens: int = 1
+    activation_limit: float | None = None
 
     def __post_init__(self) -> None:
         if self.num_experts <= 0 or self.num_local_experts <= 0:
@@ -64,16 +65,21 @@ class MoeOpSpec:
             raise ValueError(
                 f"MoE block_shape must contain two positive values, got {self.block_shape}."
             )
-        if self.routing_method not in {"softmax", "biased_sigmoid"}:
+        if self.routing_method not in {"softmax", "biased_sigmoid", "sqrtsoftplus", "hash_sqrtsoftplus"}:
             raise ValueError(
-                "MoE routing_method must be 'softmax' or 'biased_sigmoid', "
+                "Unsupported MoE routing method: "
                 f"got {self.routing_method!r}."
             )
-        if self.activation not in {"silu", "gelu_tanh"}:
+        if self.activation not in {"silu", "gelu_tanh", "clipped_silu"}:
             raise ValueError(
-                "MoE activation must be 'silu' or 'gelu_tanh', "
+                "Unsupported MoE activation: "
                 f"got {self.activation!r}."
             )
+        if self.activation == "clipped_silu":
+            if self.activation_limit is None or self.activation_limit <= 0:
+                raise ValueError("Clipped SwiGLU requires a positive activation limit")
+        elif self.activation_limit is not None:
+            raise ValueError("Activation limit requires clipped SwiGLU")
 
 
 def model_activation_dtype(config) -> torch.dtype:
@@ -433,7 +439,7 @@ class MoeDispatchPlan(MoeProvider):
 MOE_REGISTRY: OpRegistry[MoeOpSpec, MoeProvider] = OpRegistry(
     "routed MoE",
     portfolio=PortfolioPolicy(
-        upstream_standard=("flashinfer_cutlass_fp8_sm90",),
+        upstream_standard=("flashinfer_cutlass_fp8_sm90", "flashinfer_cutlass_mxfp4_sm90"),
         repo_portable=("triton_minimax_m2_fused", "triton"),
     ),
     profile_order=(
@@ -1735,6 +1741,129 @@ class H20Qwen36Fp8MoeDispatchPlan(HopperQwen36Fp8MoeDispatchPlan):
     name = "h20_qwen36_fp8_dispatch_plan"
     PROFILED_DEVICE_NAME = "H20"
     TRITON_MAX_TOKENS_BY_EP_SIZE = {1: 8, 2: 1}
+
+
+@MOE_REGISTRY.register_atomic(ProviderRole.UPSTREAM_STANDARD)
+class FlashInferCutlassMxfp4MoeProvider(MoeProvider):
+    """SM90 W4A16 experts with checkpoint UE8M0 groups and clipped SwiGLU."""
+
+    name = "flashinfer_cutlass_mxfp4_sm90"
+    gate_up_order = "up_gate"
+
+    @property
+    def weight_layout_id(self):
+        return "sm90_interleaved_mxfp4_up_gate_ue8m0_g32"
+
+    @classmethod
+    def supports(cls, spec, caps):
+        if caps.platform != PlatformEnum.CUDA or caps.compute_capability != (9, 0):
+            return SupportResult.unsupported("MXFP4 W4A16 requires CUDA SM90")
+        if not runtime_version_at_least(caps.runtime_version, (12, 8)):
+            return SupportResult.unsupported("FlashInfer W4A16 requires CUDA >= 12.8")
+        if spec.weight_dtype != torch.uint8 or spec.block_shape != (1, 32):
+            return SupportResult.unsupported("requires packed E2M1 weights and per-32 UE8M0 scales")
+        if spec.scale_dtype not in (torch.uint8, torch.float8_e8m0fnu):
+            return SupportResult.unsupported("requires UE8M0 scale bytes")
+        if spec.activation_dtype != torch.bfloat16 or spec.activation != "clipped_silu":
+            return SupportResult.unsupported("requires BF16 input and clipped SwiGLU")
+        if spec.hidden_size % 128 or spec.intermediate_size % 128 or spec.tp_size != 1:
+            return SupportResult.unsupported("requires 128-aligned dimensions and MoE TP1")
+        if spec.cuda_graph and not caps.supports_graph_capture:
+            return SupportResult.unsupported("device does not support CUDA Graph")
+        from sparseengine.kernels.external.flashinfer.moe import flashinfer_cutlass_fp8_moe_support
+        supported, reason = flashinfer_cutlass_fp8_moe_support()
+        if not supported:
+            return SupportResult.unsupported(reason)
+        import flashinfer.fused_moe as fi
+        for symbol in ("interleave_moe_weights_for_sm90_mixed_gemm",
+                       "interleave_moe_scales_for_sm90_mixed_gemm"):
+            if not callable(getattr(fi, symbol, None)):
+                return SupportResult.dependency_broken(f"FlashInfer lacks {symbol}")
+        return SupportResult.yes("FlashInfer SM90 MXFP4 W4A16 with fused clipped SwiGLU")
+
+    def prepare(self, spec, *, device, tp_rank, ep_rank, max_num_tokens=None):
+        import flashinfer.fused_moe as fi
+        from sparseengine.operators.workspace import get_workspace_manager
+
+        device = torch.device(device)
+        if device.type != "cuda":
+            raise ValueError("MXFP4 experts must be prepared on CUDA")
+        if tp_rank != 0 or not 0 <= ep_rank < spec.ep_size:
+            raise ValueError("MXFP4 prepared rank does not match the expert topology")
+        if hasattr(self, "spec"):
+            raise RuntimeError("MXFP4 provider must be prepared once before model execution")
+        self.spec, self.device, self.ep_rank = spec, device, ep_rank
+        self.max_num_tokens = min(spec.max_num_tokens, max_num_tokens or spec.max_num_tokens)
+        size = fi.cutlass_fused_moe_workspace_size(
+            self.max_num_tokens, spec.hidden_size, spec.intermediate_size,
+            spec.num_experts, spec.top_k, x_dtype=torch.bfloat16,
+            weight_dtype=torch.uint8, ep_size=spec.ep_size, ep_rank=ep_rank,
+            use_w4_group_scaling=True, use_packed_weights=False,
+            use_fused_finalize=False, device=device,
+        )
+        self.workspace = get_workspace_manager(device, create=True).reserve_bytes(
+            size, label=self.name, lane="flashinfer_cutlass_mxfp4_moe",
+        )
+        self.alpha = torch.ones(spec.num_local_experts, device=device, dtype=torch.float32)
+        self.beta = torch.zeros_like(self.alpha)
+        self.limit = torch.full_like(self.alpha, spec.activation_limit)
+        self._run = fi.cutlass_fused_moe
+
+    def prepare_weights(self, w13, w2, scale13, scale2):
+        """Reorder loaded storage once in place, avoiding a second model copy."""
+        import flashinfer.fused_moe as fi
+
+        if not hasattr(self, "spec") or hasattr(self, "weights"):
+            raise RuntimeError("Prepare MXFP4 topology before loading weights exactly once")
+        spec = self.spec
+        shapes = ((spec.num_local_experts, 2 * spec.intermediate_size, spec.hidden_size // 2),
+                  (spec.num_local_experts, spec.hidden_size, spec.intermediate_size // 2),
+                  (spec.num_local_experts, 2 * spec.intermediate_size, spec.hidden_size // 32),
+                  (spec.num_local_experts, spec.hidden_size, spec.intermediate_size // 32))
+        for tensor, shape in zip((w13, w2, scale13, scale2), shapes):
+            if tuple(tensor.shape) != shape or tensor.device != self.device or not tensor.is_contiguous():
+                raise ValueError("MXFP4 loaded weight/scale storage differs from its prepared contract")
+        if w13.dtype != torch.uint8 or w2.dtype != torch.uint8:
+            raise TypeError("MXFP4 weights must contain packed E2M1 bytes")
+        if scale13.dtype != spec.scale_dtype or scale2.dtype != spec.scale_dtype:
+            raise TypeError("MXFP4 scales differ from the bound UE8M0 dtype")
+        for weight in (w13, w2):
+            weight.copy_(fi.interleave_moe_weights_for_sm90_mixed_gemm(weight))
+        folded = []
+        for scales in (scale13, scale2):
+            raw = scales.view(torch.uint8)
+            prepared = fi.interleave_moe_scales_for_sm90_mixed_gemm(raw, group_size=32)
+            raw.copy_(prepared.reshape_as(raw))
+            folded.append(raw.view(prepared.shape))
+        self.weights = (w13, w2)
+        self.scales = folded
+
+    def run(self, spec, hidden_states, topk_ids, topk_weights, w13_weight,
+            w2_weight, w13_scale_inv, w2_scale_inv, *, local_expert_start,
+            tp_rank, ep_rank):
+        if not hasattr(self, "weights"):
+            raise RuntimeError("MXFP4 physical weights must be prepared before execution")
+        if (spec != self.spec or tp_rank != 0 or ep_rank != self.ep_rank or
+                local_expert_start != self.ep_rank * spec.num_local_experts):
+            raise ValueError("MXFP4 execution differs from the prepared expert topology")
+        if hidden_states.shape[0] > self.max_num_tokens:
+            raise ValueError("MXFP4 batch exceeds the prepared workspace capacity")
+        if hidden_states.dtype != torch.bfloat16 or hidden_states.device != self.device:
+            raise ValueError("MXFP4 input differs from the prepared activation contract")
+        if any(x.data_ptr() != y.data_ptr() for x, y in
+               zip((w13_weight, w2_weight), self.weights)):
+            raise ValueError("MXFP4 execution must use prepared weight storage")
+        output = torch.empty_like(hidden_states)
+        if not hidden_states.shape[0]:
+            return output
+        self._run(hidden_states, topk_ids.to(torch.int32), topk_weights.float(),
+                  *self.weights, torch.bfloat16, self.scales,
+                  swiglu_alpha=self.alpha, swiglu_beta=self.beta, swiglu_limit=self.limit,
+                  ep_size=spec.ep_size, ep_rank=self.ep_rank, output=output,
+                  use_w4_group_scaling=True, use_packed_weights=False,
+                  use_fused_finalize=False, enable_pdl=False,
+                  workspace_buffer=self.workspace.buffer)
+        return output
 
 
 def resolve_moe_provider(

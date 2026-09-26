@@ -239,7 +239,36 @@ class LowRankKVPayload:
     positions: torch.Tensor
 
 
-AttentionPayload = ExplicitKVPayload | MlaLatentPayload | LowRankKVPayload
+@dataclass(frozen=True)
+class SharedKVPayload:
+    """Shared key/value vectors materialized for sparse prefill computation."""
+
+    values: torch.Tensor
+
+
+@dataclass(frozen=True)
+class PackedSharedKVPayload:
+    """FP8 non-rotary values, BF16 rotary values and page-tail UE8M0 scales."""
+
+    pages: torch.Tensor
+    page_size: int
+
+
+@dataclass(frozen=True)
+class CompressionComputeView:
+    """Cache-owned carry and workspace, with one step's physical row plan."""
+
+    carry: torch.Tensor
+    rows: torch.Tensor
+    seq_lens: torch.Tensor
+    output: torch.Tensor
+    prefill_plan: tuple[torch.Tensor, torch.Tensor] | None = None
+
+
+AttentionPayload = (
+    ExplicitKVPayload | MlaLatentPayload | LowRankKVPayload
+    | SharedKVPayload | PackedSharedKVPayload
+)
 
 
 @dataclass(frozen=True)
@@ -527,6 +556,9 @@ class CacheManager(ABC):
             raise ValueError(f"Unsupported sparse_method={sparse_method!r}.")
         from sparseengine.method_registry import QUANTIZED_KV_METHODS
 
+        if sparse_method == "deepseek_v4":
+            from .methods.deepseek_v4 import DeepSeekV4CacheManager
+            return create_manager(DeepSeekV4CacheManager)
         if sparse_method == "palu":
             from .methods.palu import PaluCacheManager
 

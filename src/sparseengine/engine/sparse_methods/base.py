@@ -68,6 +68,7 @@ class SparseStepContext:
 class PrefillSelectionRequest:
     layer_idx: int
     forward_context: Any
+    selection_query: Any = None
 
 
 @dataclass(frozen=True)

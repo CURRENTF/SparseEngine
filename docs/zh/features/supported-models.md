@@ -16,6 +16,7 @@
 | GLM-4.7-Flash | `glm4_moe_lite` | BF16 / 实验性逐张量 FP8 | ✅ | ✅⁵ | ✅ |
 | Gemma 4 Dense / MoE | `gemma4` | BF16 / FP16 | ✅ | 仅支持 1 | ✅（仅 MoE） |
 | Llama 3 / 3.1 | `llama` | BF16 / FP16 / 块级 FP8 | ✅ | 仅支持 1 | 仅支持 1 |
+| [DeepSeek V4 Flash-0731](deepseek-v4.md)（实验性） | `deepseek_v4` | 块级 FP8 / MXFP4 / BF16 / FP32 | 仅支持 1 | DP=EP | EP=DP |
 | MiniMax M2.7 | `minimax_m2` | 块级 FP8，非量化权重使用 BF16 | ✅ | ✅ | ✅ |
 
 TP 规模限制为 1 到 8，并且 checkpoint 维度（包括 attention head 数和 vocabulary
@@ -44,6 +45,8 @@ GLM 逐张量 FP8 加载支持 E4M3 权重以及每个量化投影对应的 BF16
 它要求动态激活量化，并需要设备提供兼容的原生 FP8 provider。
 权重精度不会改变 MLA KV cache 的 dtype。该路径仍为实验性支持，不代表比 BF16
 更快；部署前应使用匹配工作负载进行对比。
+
+DeepSeek V4 仅使用原生 `deepseek_v4` 方法，不适用下方通用稀疏方法矩阵，具体限制见[运行要求](deepseek-v4.md)。
 
 ## 稀疏方法支持
 
