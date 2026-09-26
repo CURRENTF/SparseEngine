@@ -22,7 +22,7 @@ from sparseengine.utils.log import logger
 CHAIN_PREFIX_METHODS = frozenset(
     {"streamingllm", "snapkv", "h2o", "pyramidkv", "rkv", "skipkv"}
 )
-RADIX_PREFIX_METHODS = frozenset({"", "omnikv", "quest"})
+RADIX_PREFIX_METHODS = frozenset({"", "omnikv", "quest", "deepseek_v4"})
 PREFIX_CACHE_MODES = frozenset({"auto", "radix", "chain"})
 
 
