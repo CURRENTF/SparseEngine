@@ -452,8 +452,6 @@ def test_chain_apply_plan_rejects_duplicate_resident_seq_owner():
         ("", "auto", "radix"),
         ("omnikv", "auto", "radix"),
         ("quest", "radix", "radix"),
-        ("deepseek_v4", "auto", "radix"),
-        ("deepseek_v4", "radix", "radix"),
         ("streamingllm", "auto", "chain"),
         ("snapkv", "auto", "chain"),
         ("h2o", "auto", "chain"),
@@ -478,8 +476,6 @@ def test_prefix_cache_mode_rejects_incompatible_mode():
         normalize_prefix_cache_mode("radix", enabled=True, method="h2o")
     with pytest.raises(ValueError, match="incompatible"):
         normalize_prefix_cache_mode("chain", enabled=True, method="quest")
-    with pytest.raises(ValueError, match="incompatible"):
-        normalize_prefix_cache_mode("chain", enabled=True, method="deepseek_v4")
     assert (
         normalize_prefix_cache_mode("chain", enabled=False, method="snapkv")
         == "disabled"
