@@ -42,6 +42,9 @@ def test_mxfp4_preparation_clipped_swiglu_ep_and_graph(ep_size, hidden, intermed
     scale13 = torch.randint(119, 123, (experts, 2 * intermediate, hidden // 32), device=device, dtype=torch.uint8).view(torch.float8_e8m0fnu)
     scale2 = torch.randint(119, 123, (experts, hidden, intermediate // 32), device=device, dtype=torch.uint8).view(torch.float8_e8m0fnu)
     reference13, reference2 = _dequantize(raw13, scale13), _dequantize(raw2, scale2)
+    # Full V4 checkpoints serialize these same packed bytes as signed I8.
+    checkpoint13 = raw13.view(torch.int8) if ep_size > 1 else raw13
+    checkpoint2 = raw2.view(torch.int8) if ep_size > 1 else raw2
     providers = []
     local = experts // ep_size
     for rank in range(ep_size):
@@ -53,11 +56,11 @@ def test_mxfp4_preparation_clipped_swiglu_ep_and_graph(ep_size, hidden, intermed
                                         activation_limit=10, cuda_graph=True, max_num_tokens=rows,
                                         parallel_context=parallel)
         for expert in range(rank*local, (rank+1)*local):
-            module.load_expert_weight(expert, "w3", raw13[expert, :intermediate],
+            module.load_expert_weight(expert, "w3", checkpoint13[expert, :intermediate],
                                       scale13[expert, :intermediate])
-            module.load_expert_weight(expert, "w1", raw13[expert, intermediate:],
+            module.load_expert_weight(expert, "w1", checkpoint13[expert, intermediate:],
                                       scale13[expert, intermediate:])
-            module.load_expert_weight(expert, "w2", raw2[expert], scale2[expert])
+            module.load_expert_weight(expert, "w2", checkpoint2[expert], scale2[expert])
         tensors = (module.w13_weight, module.w2_weight, module.w13_scale_inv, module.w2_scale_inv)
         addresses = [t.data_ptr() for t in tensors]
         module.prepare_weights()
