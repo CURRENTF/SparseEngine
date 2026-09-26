@@ -40,7 +40,9 @@ SparseEngine 是一个从设计之初就以稀疏性为核心原则的推理框�
 
 ## 核心稀疏方法
 
-SparseEngine 支持物理淘汰、逻辑掩码、查询感知选择和混合 KV 压缩。主要方法系列包括 `streamingllm`、`snapkv`、`h2o`、`pyramidkv`、`omnikv`、`quest` 和 `deltakv`。
+SparseEngine 支持物理淘汰、逻辑掩码、查询感知选择和 KV 压缩。主要方法系列包括
+`streamingllm`、`snapkv`、`h2o`、`pyramidkv`、`omnikv`、`quest`、`retroinfer`
+和 `deltakv`。
 
 | 方法 | 类型 | 简介 |
 | --- | --- | --- |
@@ -50,7 +52,18 @@ SparseEngine 支持物理淘汰、逻辑掩码、查询感知选择和混合 KV 
 | `h2o` | 物理淘汰 | 为每层分别维护累计 attention importance，并使用该层自己的 heavy-hitter 选择与 recent 后缀物理压缩 KV row。 |
 | `omnikv` | 逻辑掩码 | 保留存储中的 token，但对注意力读取视图进行掩码，使稀疏层仅关注选定的上下文。 |
 | `quest` | 查询感知选择 | 保持预填充阶段为稠密计算，在解码阶段使用查询感知的分页选择。 |
+| `retroinfer` | 按 query 检索簇 | 实验性的 GPU-only 方法：完整 KV 保留在 GPU，精确读取排名靠前的簇，并估计后续簇的贡献。 |
 | `deltakv` / `deltakv-*` | 混合压缩 | 保留一个小型全精度池，并通过 DeltaKV 压缩或相关消融方法存储较早的上下文。 |
+
+其他已注册的缓存方法包括 `kvzip`、`rkv`、`skipkv`、`palu`，以及 KV 量化方法
+`kivi`、`turboquant`、`fp8_kv`。各方法的模型、checkpoint 和运行限制不同，
+详见[支持的模型](docs/zh/features/supported-models.md)、
+[核心稀疏方法](docs/zh/features/sparse-methods.md)、[Palu](docs/zh/features/palu.md)
+与 [KV cache 量化](docs/zh/features/quantized-kv.md)。
+
+预填充加速由独立的 `prefill_sparse_method` 选择：`h2o_prefill` 压缩 chunk 间 KV，
+`flashprefill_v2` 稀疏化 prefill attention 计算，`omnikv_prefill` 在 prefill
+期间选择跨层历史。它们只能与兼容的 `sparse_method` 组合。
 
 方法概览和集成规则请参阅[核心稀疏方法](docs/zh/features/sparse-methods.md)。
 
@@ -62,12 +75,16 @@ SparseEngine 支持物理淘汰、逻辑掩码、查询感知选择和混合 KV 
 | Qwen3 | ✅ |
 | Qwen3MoE | ✅ |
 | Qwen3.5 / 3.6 / 3.8 | ✅ |
-| Qwen3.5 / Qwen3.6 MoE | ✅ |
+| Qwen3.6 MoE | ✅ |
+| GLM-4.7-Flash | ✅ |
+| Gemma 4 Dense / MoE | ✅ |
 | Llama 3 / 3.1 | ✅ |
 | MiniMax M2.7 | ✅ |
 
 各模型支持的精度、并行方式和稀疏方法请参阅
 [支持的模型](docs/zh/features/supported-models.md)。
+
+原生图像和视频输入需按 checkpoint 设置 `enable_multimodal=True`；音频尚不支持。
 
 ## 文档
 

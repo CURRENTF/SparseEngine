@@ -47,17 +47,17 @@ GLM 逐张量 FP8 加载支持 E4M3 权重以及每个量化投影对应的 BF16
 
 ## 稀疏方法支持
 
-| 模型 | Vanilla | StreamingLLM | SnapKV | H2O | PyramidKV | OmniKV | QuEST | R-KV | SkipKV | DeltaKV |
-| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| Qwen2.5 | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | ✅ | 指定 checkpoint¹ | 需要 compressor² |
-| Qwen3 | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | ✅ | — | 需要压缩器² |
-| Qwen3MoE | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | ✅ | — | — |
-| Qwen3.5 / 3.6 / 3.8 | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | ✅ | — | 匹配的 checkpoint³ |
-| Qwen3.6 MoE | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | ✅ | — | — |
-| GLM-4.7-Flash | ✅ | ✅ | ✅ | 实验性⁴ | — | ✅ | ✅⁵ | ✅ | — | — |
-| Gemma 4 Dense / MoE | ✅ | ✅⁶ | — | — | — | ✅ | — | — | — | — |
-| Llama 3 / 3.1 | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | ✅ | 指定 checkpoint¹ | 需要 compressor² |
-| MiniMax M2.7 | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | ✅ | — | — |
+| 模型 | Vanilla | StreamingLLM | SnapKV | H2O | PyramidKV | OmniKV | QuEST | RetroInfer | R-KV | SkipKV | DeltaKV |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Qwen2.5 | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | 实验性⁷ | ✅ | 指定 checkpoint¹ | 需要 compressor² |
+| Qwen3 | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | 实验性⁷ | ✅ | — | 需要压缩器² |
+| Qwen3MoE | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | 实验性⁷ | ✅ | — | — |
+| Qwen3.5 / 3.6 / 3.8 | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | — | ✅ | — | 匹配的 checkpoint³ |
+| Qwen3.6 MoE | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | — | ✅ | — | — |
+| GLM-4.7-Flash | ✅ | ✅ | ✅ | 实验性⁴ | 实验性⁸ | ✅ | ✅⁵ | — | ✅ | — | — |
+| Gemma 4 Dense / MoE | ✅ | ✅⁶ | — | — | — | ✅ | — | — | — | — | — |
+| Llama 3 / 3.1 | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | 实验性⁷ | ✅ | 指定 checkpoint¹ | 需要 compressor² |
+| MiniMax M2.7 | ✅ | ✅ | ✅ | 实验性⁴ | ✅ | ✅ | ✅ | 实验性⁷ | ✅ | — | — |
 
 ¹ SkipKV 仅支持已发布 steering vector 的模型：
 `DeepSeek-R1-Distill-Qwen-7B`、`DeepSeek-R1-Distill-Qwen-14B` 和
@@ -77,6 +77,20 @@ TP=1 或 TP=2。
 ⁶ 带共享 KV 层的 Gemma 4 checkpoint 不支持逐层 StreamingLLM eviction；
 Vanilla 和 OmniKV 仍受支持。
 
+⁷ RetroInfer 仅支持 GPU、统一的 FP16/BF16 显式 KV、attention TP=1、eager decode，
+不支持 prefix cache 或 async scheduling。Llama 3.1 已有
+[完整 LongBench 质量结果](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/retroinfer_llama31_longbench/RESULTS.md)；
+其他模型条目表示代码兼容，尚未完成各自的模型验证。这些结果不构成服务吞吐证据。
+
+⁸ GLM PyramidKV MLA 已有 [LongBench v1/v2 质量结果](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/glm47_fp8_streamingllm_pyramidkv_dp8_20260926/RESULTS.md)，
+条件为 FP8 权重、BF16 KV、attention TP=1；CUDA Graph 与 prefix cache 均关闭。
+该结果不覆盖其他拓扑。
+
+Palu（Llama/Qwen3）、KVzip（Qwen2/Qwen3/Llama）和 KV 量化方法
+（`kivi`、`turboquant`、`fp8_kv`：Llama/Qwen2/Qwen3/Qwen3MoE）另有运行要求，
+详见 [Palu](palu.md)、[KVzip](sparse-methods.md#kvzip) 与
+[KV cache 量化](quantized-kv.md)。
+
 ## 原生多模态支持
 
 设置 `enable_multimodal=True` 后，可通过 OpenAI 兼容的 Chat 和 Responses API
@@ -84,7 +98,7 @@ Vanilla 和 OmniKV 仍受支持。
 
 | 模型家族 | 图片 | 视频 | 音频 |
 | --- | :---: | :---: | :---: |
-| Qwen3.5 / 3.6 / 3.8 Dense 与 Qwen3.5 / 3.6 MoE | ✅ | ✅ | — |
+| Qwen3.5 / 3.6 / 3.8 Dense 与 Qwen3.6 MoE | ✅ | ✅ | — |
 | Gemma 4 Dense 与 MoE | ✅ | ✅ | — |
 
 `—` 表示当前不支持该组合。

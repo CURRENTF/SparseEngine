@@ -57,17 +57,17 @@ performance improvement over BF16; compare matched workloads before deployment.
 
 ## Sparse Method Support
 
-| Model | Vanilla | StreamingLLM | SnapKV | H2O | PyramidKV | OmniKV | QuEST | R-KV | SkipKV | DeltaKV |
-| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| Qwen2.5 | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | ✅ | Selected checkpoints¹ | Compressor required² |
-| Qwen3 | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | ✅ | — | Compressor required² |
-| Qwen3MoE | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | ✅ | — | — |
-| Qwen3.5 / 3.6 / 3.8 | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | ✅ | — | Matched checkpoint³ |
-| Qwen3.6 MoE | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | ✅ | — | — |
-| GLM-4.7-Flash | ✅ | ✅ | ✅ | Experimental⁴ | — | ✅ | ✅⁵ | ✅ | — | — |
-| Gemma 4 Dense / MoE | ✅ | ✅⁶ | — | — | — | ✅ | — | — | — | — |
-| Llama 3 / 3.1 | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | ✅ | Selected checkpoint¹ | Compressor required² |
-| MiniMax M2.7 | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | ✅ | — | — |
+| Model | Vanilla | StreamingLLM | SnapKV | H2O | PyramidKV | OmniKV | QuEST | RetroInfer | R-KV | SkipKV | DeltaKV |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Qwen2.5 | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | Experimental⁷ | ✅ | Selected checkpoints¹ | Compressor required² |
+| Qwen3 | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | Experimental⁷ | ✅ | — | Compressor required² |
+| Qwen3MoE | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | Experimental⁷ | ✅ | — | — |
+| Qwen3.5 / 3.6 / 3.8 | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | — | ✅ | — | Matched checkpoint³ |
+| Qwen3.6 MoE | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | — | ✅ | — | — |
+| GLM-4.7-Flash | ✅ | ✅ | ✅ | Experimental⁴ | Experimental⁸ | ✅ | ✅⁵ | — | ✅ | — | — |
+| Gemma 4 Dense / MoE | ✅ | ✅⁶ | — | — | — | ✅ | — | — | — | — | — |
+| Llama 3 / 3.1 | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | Experimental⁷ | ✅ | Selected checkpoint¹ | Compressor required² |
+| MiniMax M2.7 | ✅ | ✅ | ✅ | Experimental⁴ | ✅ | ✅ | ✅ | Experimental⁷ | ✅ | — | — |
 
 ¹ SkipKV is limited to the released steering-vector models:
 `DeepSeek-R1-Distill-Qwen-7B`, `DeepSeek-R1-Distill-Qwen-14B`, and
@@ -88,6 +88,21 @@ guaranteed. CPU offload supports attention TP=1 or TP=2.
 ⁶ Gemma 4 checkpoints with shared KV layers reject per-layer StreamingLLM
 eviction. Vanilla and OmniKV remain supported.
 
+⁷ RetroInfer is GPU-only with uniform FP16/BF16 explicit KV, attention TP=1,
+eager decode, and no prefix caching or async scheduling. Llama 3.1 has
+[full LongBench quality results on dev-paper-branch](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/retroinfer_llama31_longbench/RESULTS.md);
+the other model entries describe implemented compatibility, not completed
+model-specific validation. These results do not establish serving throughput.
+
+⁸ GLM PyramidKV MLA has [LongBench v1/v2 quality results on dev-paper-branch](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/glm47_fp8_streamingllm_pyramidkv_dp8_20260926/RESULTS.md)
+for FP8 weights and BF16 KV with attention TP=1. CUDA Graph and prefix caching
+were disabled; other topologies are not covered by that result.
+
+Palu (Llama/Qwen3), KVzip (Qwen2/Qwen3/Llama), and quantized KV
+(`kivi`, `turboquant`, `fp8_kv`: Llama/Qwen2/Qwen3/Qwen3MoE) have separate
+requirements. See [Palu](palu.md), [KVzip](sparse-methods.md#kvzip), and
+[Quantized KV Cache](quantized-kv.md).
+
 ## Native Multimodal Support
 
 Set `enable_multimodal=True` to accept supported image and video inputs through
@@ -95,7 +110,7 @@ the OpenAI-compatible Chat and Responses APIs. Unsupported media return an error
 
 | Model family | Image | Video | Audio |
 | --- | :---: | :---: | :---: |
-| Qwen3.5 / 3.6 / 3.8 Dense and Qwen3.5 / 3.6 MoE | ✅ | ✅ | — |
+| Qwen3.5 / 3.6 / 3.8 Dense and Qwen3.6 MoE | ✅ | ✅ | — |
 | Gemma 4 Dense and MoE | ✅ | ✅ | — |
 
 `—` means that the combination is not currently supported.
