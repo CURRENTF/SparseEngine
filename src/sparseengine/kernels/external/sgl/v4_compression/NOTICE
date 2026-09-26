@@ -1,0 +1,12 @@
+SGLang compression computation
+Source: https://github.com/sgl-project/sglang
+Revision: 3ed56a341b57eb57c8e37e0cec353e67ebb35c3b
+License: Apache-2.0 (included in LICENSE)
+
+The csrc and include files are unchanged upstream sources from
+python/sglang/kernels/jit/. Only the required compression, planner and fused
+normalization/rotation computation plus their include closure are included.
+The Python adapter uses the existing apache-tvm-ffi dependency to prepare the
+typed entry points. It does not import SGLang runtime classes or configuration.
+Programmatic dependent launches are disabled so preceding GEMM and carry writes
+retain ordinary stream ordering.

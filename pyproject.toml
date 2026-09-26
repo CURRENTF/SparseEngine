@@ -76,6 +76,12 @@ sparseengine = [
     "configs/profiles/*.json",
     "kernels/triton/profiles/*.json",
     "operators/profiles/*.json",
+    "kernels/external/sgl/v4_compression/LICENSE",
+    "kernels/external/sgl/v4_compression/NOTICE",
+    "kernels/external/sgl/v4_compression/csrc/deepseek_v4/*.cuh",
+    "kernels/external/sgl/v4_compression/include/sgl_kernel/*.h",
+    "kernels/external/sgl/v4_compression/include/sgl_kernel/*.cuh",
+    "kernels/external/sgl/v4_compression/include/sgl_kernel/deepseek_v4/*.cuh",
 ]
 
 [tool.pytest.ini_options]

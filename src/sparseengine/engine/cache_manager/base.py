@@ -254,6 +254,17 @@ class PackedSharedKVPayload:
     page_size: int
 
 
+@dataclass(frozen=True)
+class CompressionComputeView:
+    """Cache-owned carry and workspace, with one step's physical row plan."""
+
+    carry: torch.Tensor
+    rows: torch.Tensor
+    seq_lens: torch.Tensor
+    output: torch.Tensor
+    prefill_plan: tuple[torch.Tensor, torch.Tensor] | None = None
+
+
 AttentionPayload = (
     ExplicitKVPayload | MlaLatentPayload | LowRankKVPayload
     | SharedKVPayload | PackedSharedKVPayload
