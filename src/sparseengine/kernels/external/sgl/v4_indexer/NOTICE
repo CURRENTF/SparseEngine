@@ -1,0 +1,15 @@
+SGLang DeepSeek indexer computation
+Source: https://github.com/sgl-project/sglang
+Revision: 3ed56a341b57eb57c8e37e0cec353e67ebb35c3b
+Files: python/sglang/kernels/ops/attention/dsv4/{fp4_indexer,torch_quant}.py
+License: Apache-2.0 (included in LICENSE)
+
+Only grouped FP4 quantization, packed-key store, FP4 dequantization and
+BF16-query weighted ReLU scoring are adapted. Engine imports, V4.1 RoPE
+and double-quantization stages are excluded. The key packer's scale floor
+is changed to 6 * 2**-126 before division by 6, matching the original
+DeepSeek-V4-Flash-0731 checkpoint reference. RNE is always enabled by the
+provider. The exact Hadamard and fake-quantized BF16 query are prepared
+separately; no FP8 substitution or V4.1 query semantics are introduced.
+The score kernel retains upstream BF16 rounding points. Python dispatch
+uses caller-owned buffers and skips allocation for graph replay.

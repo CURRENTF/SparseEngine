@@ -47,19 +47,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+deepseek-v4 = [
+    "fast-hadamard-transform==1.1.0",
+]
 deepepv1 = [
     "deep-ep @ git+https://github.com/deepseek-ai/DeepEP.git@9af0e0d0e74f3577af1979c9b9e1ac2cad0104ee",
     "nvidia-ml-py>=12",
 ]
 cu129 = [
     "torch==2.11.0",
-    "flashinfer-python[cu12]>=0.6.15,<0.7",
-    "flashinfer-cubin>=0.6.15,<0.7",
+    "flashinfer-python[cu12]>=0.6.18.post1,<0.7",
+    "flashinfer-cubin>=0.6.18,<0.7",
 ]
 cu130 = [
     "torch==2.11.0",
-    "flashinfer-python[cu13]>=0.6.15,<0.7",
-    "flashinfer-cubin>=0.6.15,<0.7",
+    "flashinfer-python[cu13]>=0.6.18.post1,<0.7",
+    "flashinfer-cubin>=0.6.18,<0.7",
 ]
 
 [project.scripts]
@@ -82,6 +85,8 @@ sparseengine = [
     "kernels/external/sgl/v4_compression/include/sgl_kernel/*.h",
     "kernels/external/sgl/v4_compression/include/sgl_kernel/*.cuh",
     "kernels/external/sgl/v4_compression/include/sgl_kernel/deepseek_v4/*.cuh",
+    "kernels/external/sgl/v4_indexer/LICENSE",
+    "kernels/external/sgl/v4_indexer/NOTICE",
 ]
 
 [tool.pytest.ini_options]
