@@ -99,7 +99,7 @@ def _base_hparams(args: argparse.Namespace, method: str, batch_size: int) -> dic
                 "sink_keep_tokens": 0,
                 "recent_keep_tokens": args.recent_keep_tokens,
                 "decode_keep_tokens": args.snapkv_decode_keep_tokens,
-                "snapkv_window_size": args.snapkv_window_size,
+                "observation_window_size": args.snapkv_window_size,
                 "pool_kernel_size": args.pool_kernel_size,
             }
         )

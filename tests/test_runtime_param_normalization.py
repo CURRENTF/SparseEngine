@@ -6,6 +6,13 @@ import pytest
 import torch
 
 from sparseengine.config import Config
+from sparseengine.configs.groups import SparseMethodConfig
+
+
+def test_observation_and_eviction_parameter_renames_reject_legacy_names():
+    for legacy in ("snapkv_window_size", "snapkv_decode_eviction_interval"):
+        with pytest.raises(TypeError, match=legacy):
+            SparseMethodConfig(**{legacy: 32})
 
 
 @pytest.fixture
@@ -103,11 +110,11 @@ def test_auto_long_prefill_keeps_atomic_threshold(prefill_config):
 def test_auto_chunk_uses_final_atomic_budget_and_score_window(prefill_config):
     make, _, probes = prefill_config
     config = make(sparse_method="pyramidkv", max_num_batched_tokens=64,
-                  long_prefill_offload_threshold=128, snapkv_window_size=32)
+                  long_prefill_offload_threshold=128, observation_window_size=32)
     assert config.engine_prefill_chunk_size == config.max_num_batched_tokens == 128
     assert not probes
-    with pytest.raises(ValueError, match="snapkv_window_size"):
-        make(sparse_method="snapkv", max_num_batched_tokens=16, snapkv_window_size=32)
+    with pytest.raises(ValueError, match="observation_window_size"):
+        make(sparse_method="snapkv", max_num_batched_tokens=16, observation_window_size=32)
 
 
 def test_explicit_batch_budget_must_fit_final_score_window(prefill_config):
@@ -118,7 +125,7 @@ def test_explicit_batch_budget_must_fit_final_score_window(prefill_config):
             sparse_method="snapkv",
             engine_prefill_chunk_size=64,
             max_num_batched_tokens=32,
-            snapkv_window_size=64,
+            observation_window_size=64,
         )
     assert not probes
 

@@ -16,11 +16,18 @@ def coordinate_dp_step(runner, seqs, is_prefill: bool) -> bool:
         else 0
     )
     force_eager = getattr(runner.cache_manager, "decode_graph_force_eager", None)
+    force_eager_for_seqs = getattr(
+        runner.cache_manager, "decode_graph_force_eager_for_seqs", None
+    )
     control = runner.dp_control_buffer
     control.zero_()
     dp_rank = runner.parallel_context.attn_dp_rank
     control[dp_rank] = max(rows, decode_capacity)
-    control[-1] = bool(seqs and (is_prefill or (force_eager and force_eager())))
+    control[-1] = bool(seqs and (
+        is_prefill
+        or (force_eager and force_eager())
+        or (force_eager_for_seqs and force_eager_for_seqs(seqs))
+    ))
     dist.all_reduce(control, op=dist.ReduceOp.MAX, group=runner.dp_control_group)
     token_sizes = tuple(int(value) for value in control[:-1])
     capacity, eager = max(token_sizes), bool(control[-1])

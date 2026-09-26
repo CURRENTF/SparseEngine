@@ -82,7 +82,7 @@ def _manager_with_layer_rows(
         obs_layer_ids=[0],
         sparse_prefill_score_mode="probability",
         max_model_len=64,
-        snapkv_window_size=4,
+        observation_window_size=4,
         snapkv_num_full_layers=0,
         pyramid_layer_ratios=None,
         prefill_schedule_policy=PREFILL_POLICY_ALL_CHUNKED,

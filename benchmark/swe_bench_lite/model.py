@@ -50,6 +50,9 @@ class SparseVLLMLitellmModel(LitellmModel, PrefixPruneClient):
                 self._prune_keep_ratio = float(os.environ["SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO"])
                 if not math.isfinite(self._prune_keep_ratio) or not 0 <= self._prune_keep_ratio < 1:
                     raise ValueError("Prefix-prune keep ratio must be in [0, 1).")
+                self._prune_tool_result_lag = int(os.getenv("SPARSEENGINE_PREFIX_PRUNE_TOOL_RESULT_LAG", "0"))
+                if self._prune_tool_result_lag < 0:
+                    raise ValueError("Tool-result pruning lag must be non-negative.")
                 self._prune_tool_selector = None
             elif self._prune_target == "range":
                 self._prune_range_start = self._required_env_int(

@@ -1,7 +1,0 @@
-{"repeats": 15, "cases": [
-  {"batch":64,"heads":20,"length":4160,"tune":true},
-  {"batch":8,"heads":20,"length":4160,"tune":true},
-  {"batch":4,"heads":10,"length":131072,"tune":true},
-  {"batch":4,"heads":20,"length":8192,"tune":true},
-  {"batch":1,"heads":20,"length":2048,"tune":true}
-]}

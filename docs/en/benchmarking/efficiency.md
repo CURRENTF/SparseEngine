@@ -3,8 +3,8 @@
 [简体中文](../../zh/benchmarking/efficiency.md) | English
 
 This runbook owns measurement definitions, entrypoints, and support limits.
-Keep experiment-specific parameters, sweeps, and replot instructions in
-[scripts/official_experiments/](../../../scripts/official_experiments/).
+Experiment-specific parameters, sweeps, and replot instructions are on
+[`dev-paper-branch`](https://github.com/CURRENTF/SparseEngine/tree/dev-paper-branch/scripts/official_experiments).
 New defaults do not retroactively change historical protocols.
 
 ## Entrypoints and Minimal Example
@@ -48,7 +48,7 @@ equal work or quality.
 Continuous windows require explicit `--scenario fixed --prompt-length-jitter 0
 --output-length-jitter 0 --decode-only-steps 256 --decode-only-warmup-steps 32`.
 These are not ordinary request-mode defaults. For a capacity sweep and its smoke,
-use the [sparse decode efficiency experiment entrypoint](../../../scripts/official_experiments/sparse_decode_efficiency/README.md#boundary-sync-rerun);
+check out `dev-paper-branch` and use the [sparse decode efficiency experiment entrypoint](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/sparse_decode_efficiency/README.md#boundary-sync-rerun);
 do not copy timing runners. Cover periodic scoring/eviction, extending the
 window uniformly across comparisons when necessary.
 
@@ -220,22 +220,27 @@ Keep configuration, input-data, model, and result validation. Experimenters deci
 whether code changes require remeasurement; rerun instead of treating worktree
 recovery as part of the official result contract.
 Aggregate throughput as total tokens / total time and retain dispersion.
-Maximum concurrency requires an integer boundary and max+1 capacity failure;
-an arbitrary crash is not capacity evidence. Multi-method queues preserve
+An exact maximum at BS≤30 requires an integer boundary and a max+1 capacity
+failure. Above BS30, a near-maximum within five is acceptable when B succeeds
+and a defensible upper bound U≤B+5 is established; a classified capacity
+failure at F gives U=F-1. A KV-slot estimate without an upper bound only
+supports a measured lower bound (usable BS≥B), not a verified error of five.
+Estimated batches are not measured throughput points. An arbitrary crash is
+not capacity evidence. Multi-method queues preserve
 method-local smoke/measurement failures and continue
 other methods, but retain a failed final status. GPU contention, lost resources,
 storage errors, and user interruption stop the entire queue.
 Changed contracts, hardware, or
 Graph/backend policies require new baselines, preserving the old data.
 
-Keep scripts, reusable configurations, plotting code, and the compact official
-result package under `scripts/official_experiments/<experiment>/`. The committed
+Keep scripts, reusable configurations, plotting code, and the compact paper
+result package on `dev-paper-branch` under `scripts/official_experiments/<experiment>/`. The committed
 package contains only the device, launch arguments, final results, and Git commit,
 plus the compact JSON/CSV needed to reproduce an official table or figure. Do not
 store working-tree state, patches, source snapshots, source hashes, or recovery
 material. Keep large raw outputs/logs on persistent data storage outside Git. A
 Research-Vault record may index private or transient evidence, but it does not
-replace the repository result package. Do not use tmp or overwrite old runs.
+replace the branch result package. Do not use tmp or overwrite old runs.
 
 | Symptom | Action |
 | --- | --- |

@@ -213,7 +213,7 @@ def make_scheduler(policy, *, method="", chunk=5, max_tokens=10, oracle=None):
         sink_keep_tokens=1,
         recent_keep_tokens=1,
         decode_keep_tokens=4,
-        snapkv_window_size=2,
+        observation_window_size=2,
         sparse_method=method,
     )
     if oracle is None:
@@ -369,7 +369,7 @@ def make_scheduler_with_oracle(
         sink_keep_tokens=1,
         recent_keep_tokens=1,
         decode_keep_tokens=4,
-        snapkv_window_size=2,
+        observation_window_size=2,
         sparse_method=method,
     )
     return Scheduler(
@@ -436,32 +436,34 @@ class PrefillPolicyRegistryTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SPARSEENGINE_DELTAKV_DETERMINISTIC_TOPK_TIEBREAK"):
                 SparseController(make_sparse_controller_config(), SimpleNamespace())
 
-    def test_pyramidkv_decode_trigger_includes_fixed_tokens(self):
+    def test_pyramidkv_decode_trigger_uses_shared_interval(self):
         cfg = make_sparse_controller_config()
         cfg.sparse_method = "pyramidkv"
         cfg.sink_keep_tokens = 64
         cfg.recent_keep_tokens = 512
         cfg.decode_keep_tokens = 4096
+        cfg.decode_eviction_interval = 37
         controller = SparseController(cfg, SimpleNamespace())
 
         low_layer_budget = 64 + 68 + 512
         self.assertEqual(
             controller.runtime._snapkv_decode_trigger_len(low_layer_budget),
-            low_layer_budget + 68,
+            low_layer_budget + 37,
         )
 
-    def test_snapkv_decode_trigger_preserves_top_budget_rule(self):
+    def test_snapkv_decode_trigger_uses_shared_interval(self):
         cfg = make_sparse_controller_config()
         cfg.sparse_method = "snapkv"
         cfg.sink_keep_tokens = 64
         cfg.recent_keep_tokens = 512
         cfg.decode_keep_tokens = 4096
+        cfg.decode_eviction_interval = 37
         controller = SparseController(cfg, SimpleNamespace())
 
         budget = 64 + 4096 + 512
         self.assertEqual(
             controller.runtime._snapkv_decode_trigger_len(budget),
-            8192,
+            budget + 37,
         )
 
     def test_streamingllm_decode_eviction_batches_layer_compaction(self):
@@ -792,6 +794,20 @@ class StandardCacheManagerAdmissionTest(unittest.TestCase):
 
 
 class PrefillPolicyConfigTest(unittest.TestCase):
+    def test_pyramid_forces_decode_eviction_and_rejects_nonpositive_interval(self):
+        from sparseengine.configs.sparse import _normalize_snapkv
+
+        config = SimpleNamespace(
+            sparse_method="pyramidkv", snapkv_decode_eviction=False,
+            decode_eviction_interval=1024, observation_window_size=32,
+            snapkv_num_full_layers=0,
+        )
+        _normalize_snapkv(config)
+        self.assertTrue(config.snapkv_decode_eviction)
+        config.decode_eviction_interval = 0
+        with self.assertRaisesRegex(ValueError, "decode_eviction_interval"):
+            _normalize_snapkv(config)
+
     def hf_config(self):
         return SimpleNamespace(
             model_type="qwen2",
@@ -1471,7 +1487,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
             engine_prefill_chunk_size=2,
             long_prefill_offload_threshold=5,
-            snapkv_window_size=0,
+            observation_window_size=0,
         )
         pyramid.pyramidkv_prefill_staging_kv_cache = torch.empty(
             (2, 8, 1, 1), dtype=torch.float32
@@ -1601,7 +1617,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
             engine_prefill_chunk_size=2,
             long_prefill_offload_threshold=5,
-            snapkv_window_size=0,
+            observation_window_size=0,
         )
         manager.pyramidkv_prefill_staging_num_slots = 16
         manager.pyramidkv_prefill_staging_kv_cache = torch.empty(
@@ -1850,7 +1866,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         manager.num_kv_layers = 2
         manager.config = SimpleNamespace(
             sparse_method="snapkv",
-            snapkv_window_size=2,
+            observation_window_size=2,
             snapkv_num_full_layers=0,
             sink_keep_tokens=1,
             decode_keep_tokens=4,
@@ -1881,7 +1897,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
             long_prefill_offload_threshold=5,
             engine_prefill_chunk_size=4,
-            snapkv_window_size=3,
+            observation_window_size=3,
             snapkv_num_full_layers=0,
             sink_keep_tokens=1,
             decode_keep_tokens=4,
@@ -1920,7 +1936,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
             long_prefill_offload_threshold=64,
             engine_prefill_chunk_size=32,
-            snapkv_window_size=8,
+            observation_window_size=8,
             snapkv_num_full_layers=0,
             sink_keep_tokens=0,
             decode_keep_tokens=100,
@@ -1966,7 +1982,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         manager.runtime_layout = identity_runtime_layout(1)
         manager.config = SimpleNamespace(
             sparse_method="snapkv",
-            snapkv_window_size=32,
+            observation_window_size=32,
             snapkv_num_full_layers=0,
             sink_keep_tokens=64,
             decode_keep_tokens=4_096,
@@ -2114,7 +2130,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
 
     def test_snapkv_remaining_prefill_no_longer_reserves_score_window_chunk(self):
         manager = object.__new__(SnapKVCacheManager)
-        manager.config = SimpleNamespace(engine_prefill_chunk_size=5, snapkv_window_size=2, sparse_method="snapkv")
+        manager.config = SimpleNamespace(engine_prefill_chunk_size=5, observation_window_size=2, sparse_method="snapkv")
         seq = seq_with_len(20)
 
         self.assertEqual(SnapKVCacheManager.remaining_prefill_tokens(manager, seq), 20)
@@ -3034,6 +3050,50 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         self.assertEqual(preempted, [])
         self.assertEqual(list(scheduler.waiting), [fresh])
         self.assertEqual(replay.current_chunk_size, 8)
+
+    def test_partial_prefill_progresses_when_cold_replay_cannot_fit(self):
+        class ReservedPrefillOracle(FakeMemoryOracle):
+            def reserved_prefill_slots(self, waiting, engine_prefill_chunk_size):
+                return sum(
+                    seq.num_prompt_tokens - seq.num_prefilled_tokens
+                    for seq in waiting
+                    if 0 < seq.num_prefilled_tokens < seq.num_prompt_tokens
+                )
+
+            def prompt_admission_budgets(self, waiting, engine_prefill_chunk_size):
+                return {"slots": self.num_free_slots - self.reserved_prefill_slots(
+                    waiting, engine_prefill_chunk_size,
+                )}
+
+            def prompt_admission_failure_action(self):
+                return "defer"
+
+        oracle = ReservedPrefillOracle(free_slots=20)
+        scheduler = make_scheduler_with_oracle(
+            PREFILL_POLICY_ALL_CHUNKED,
+            oracle,
+            method="snapkv",
+            chunk=8,
+            max_tokens=32,
+        )
+        fresh = seq_with_len(4)
+        replay = seq_with_len(16)
+        replay.append_token(90)
+        replay.start_recompute_replay()
+        partial = seq_with_len(12)
+        partial.num_prefilled_tokens = 4
+        scheduler.waiting.extend([fresh, replay, partial])
+
+        # The replay needs 16 slots, but the partial prefill owns eight of the
+        # 20 free slots for its remaining prompt. It must be able to advance.
+        self.assertEqual(oracle.prompt_admission_budgets(scheduler.waiting, 8)["slots"], 12)
+        scheduled, is_prefill, preempted = scheduler.schedule()
+
+        self.assertTrue(is_prefill)
+        self.assertEqual(scheduled, [partial])
+        self.assertEqual(partial.current_chunk_size, 8)
+        self.assertEqual(preempted, [])
+        self.assertEqual(list(scheduler.waiting), [fresh, replay])
 
     def test_multiple_replay_prefills_are_serialized(self):
         oracle = FakeMemoryOracle(free_slots=64)

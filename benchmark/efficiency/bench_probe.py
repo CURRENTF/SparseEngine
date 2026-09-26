@@ -539,7 +539,7 @@ def _resolve_sparse_probe_protocol(
     hyper_params.setdefault("max_num_batched_tokens", args.max_num_batched_tokens)
     hyper_params.setdefault("engine_prefill_chunk_size", 8192)
     if args.sparse_method == "snapkv":
-        hyper_params.setdefault("snapkv_window_size", 64)
+        hyper_params.setdefault("observation_window_size", 64)
         hyper_params.setdefault("sink_keep_tokens", 64)
         hyper_params.setdefault("decode_keep_tokens", 2048)
         hyper_params.setdefault("recent_keep_tokens", 64)
@@ -587,7 +587,7 @@ def _resolve_sparse_probe_protocol(
     )
     protocol = {
         "score_mode": hyper_params.get("sparse_prefill_score_mode"),
-        "score_window": hyper_params.get("snapkv_window_size"),
+        "score_window": hyper_params.get("observation_window_size"),
         "sparse_budget": sparse_budget,
         "max_num_batched_tokens": int(hyper_params["max_num_batched_tokens"]),
     }
@@ -597,6 +597,14 @@ def _resolve_sparse_probe_protocol(
             f"-{protocol['score_mode']}-budget{protocol['sparse_budget']}"
             f"-window{protocol['score_window']}"
         )
+        if bool(hyper_params.get("snapkv_decode_eviction", False)):
+            interval = int(hyper_params.get("decode_eviction_interval", 1024))
+            protocol.update(decode_eviction=True, decode_eviction_interval=interval)
+            protocol_label += f"-decode-evict-interval{interval}"
+    elif args.sparse_method == "pyramidkv":
+        interval = int(hyper_params.get("decode_eviction_interval", 1024))
+        protocol.update(decode_eviction=True, decode_eviction_interval=interval)
+        protocol_label += f"-decode-evict-interval{interval}"
     elif args.sparse_method == "h2o":
         protocol.update(
             {

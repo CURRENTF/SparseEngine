@@ -120,11 +120,22 @@ class Scheduler:
         if seq.num_prefilled_tokens == 0 and seq.num_completion_tokens == 0:
             self.prefix_cache_hit_refresher(seq)
 
-    def _prefill_mode_order(self) -> list[tuple[str, object]]:
+    @staticmethod
+    def _prefill_priority(seq: Sequence, replay_pending: bool) -> int:
+        if not replay_pending:
+            return 0
+        # While replay blocks fresh admission, a partial prefill already owns
+        # KV and reserves the capacity needed to finish its remaining prompt.
+        partial = 0 < seq.num_prefilled_tokens < seq.num_prompt_tokens
+        if partial:
+            return 1 if seq.is_recompute_replay else 0
+        return 2 if seq.is_recompute_replay else 3
+
+    def _prefill_mode_order(self) -> list[tuple[int, str, object]]:
         replay_pending = any(seq.is_recompute_replay for seq in self.waiting)
         candidates: list[Sequence] = []
         for seq in self.waiting:
-            if replay_pending and not seq.is_recompute_replay:
+            if replay_pending and self._prefill_priority(seq, replay_pending) == 3:
                 continue
             # Match candidate admission before prefix refresh, which broadcasts
             # an RPC to every TP rank. Blocked fresh prompts cannot run yet.
@@ -138,17 +149,18 @@ class Scheduler:
             ]
             if fresh:
                 self.prefix_cache_hits_refresher(fresh)
-        modes: list[tuple[str, object]] = []
-        for seq in candidates:
+        modes: list[tuple[int, str, object]] = []
+        for seq in sorted(candidates, key=lambda seq: self._prefill_priority(seq, replay_pending)):
             if self.prefix_cache_hits_refresher is None:
                 self._refresh_prefill_metadata(seq)
-            batch_key = self._prefill_batch_key(seq)
+            batch_key = (self._prefill_priority(seq, replay_pending), *self._prefill_batch_key(seq))
             if batch_key not in modes:
                 modes.append(batch_key)
         return modes
 
     def _pop_next_prefill_seq(
         self,
+        target_priority: int,
         target_mode: str,
         target_compatibility: object,
         *,
@@ -157,7 +169,8 @@ class Scheduler:
     ) -> Sequence | None:
         while self.waiting:
             seq = self.waiting[0]
-            eligible = not replay_pending or seq.is_recompute_replay
+            priority = self._prefill_priority(seq, replay_pending)
+            eligible = priority == target_priority and (not replay_pending or priority != 3)
             eligible = eligible and not (
                 len(self.decoding) >= self.max_decoding_seqs
                 and seq.num_prefilled_tokens == 0
@@ -555,7 +568,7 @@ class Scheduler:
 
         # --- 阶段 1: Prefill 调度 ---
         # Affinity may already have selected decode above.
-        prefill_mode_order: list[tuple[str, object]] = []
+        prefill_mode_order: list[tuple[int, str, object]] = []
         replay_waiting = [seq for seq in self.waiting if seq.is_recompute_replay]
         if self.waiting and not (replay_waiting and self.decoding):
             # A preempted request may only rebuild after the surviving decode
@@ -567,7 +580,7 @@ class Scheduler:
         # No replay is created during prefill selection, and accepting one ends
         # this step. Keep the snapshot local to this scheduling invocation.
         replay_pending = any(seq.is_recompute_replay for seq in self.waiting)
-        for target_mode, target_compatibility in prefill_mode_order:
+        for target_priority, target_mode, target_compatibility in prefill_mode_order:
             if scheduled_seqs:
                 break
             bucket_scan_budget = len(self.waiting)
@@ -585,6 +598,7 @@ class Scheduler:
                     )
                 ):
                     seq = self._pop_next_prefill_seq(
+                        target_priority,
                         target_mode,
                         target_compatibility,
                         replay_pending=replay_pending,

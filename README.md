@@ -20,7 +20,7 @@ A sparse-first inference engine for long-context LLM serving.
 128K input / 2K output on H100 80GB. Top: decode throughput at each method's
 largest measured batch. Bottom: throughput improvement relative to vLLM Vanilla
 at the same concurrency, with vLLM at 0%. Ours denotes SparseEngine.
-See the [measurement and figure notes](scripts/official_experiments/sparse_decode_efficiency/README.md#readme-figures).
+See the [measurement and figure notes on dev-paper-branch](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/sparse_decode_efficiency/README.md#readme-figures).
 
 ## Project Overview
 
@@ -52,8 +52,8 @@ SparseEngine is an inference framework built with sparsity as the first design p
 ## Core Sparse Methods
 
 SparseEngine supports physical eviction, logical masking, query-aware selection,
-and hybrid KV compression. The main method families are `streamingllm`,
-`snapkv`, `h2o`, `pyramidkv`, `omnikv`, `quest`, and `deltakv`.
+and KV compression. The main method families are `streamingllm`,
+`snapkv`, `h2o`, `pyramidkv`, `omnikv`, `quest`, `retroinfer`, and `deltakv`.
 
 | Method | Type | Short Description |
 | --- | --- | --- |
@@ -63,12 +63,21 @@ and hybrid KV compression. The main method families are `streamingllm`,
 | `h2o` | Physical eviction | Maintains independent cumulative attention importance for every layer, then physically compacts each layer's KV rows using its own heavy-hitter selection plus a recent suffix. |
 | `omnikv` | Logical masking | Keeps tokens in storage but masks the attention read view so sparse layers attend only selected context. |
 | `quest` | Query-aware selection | Uses decode-time query-aware page selection while keeping prefill dense. |
+| `retroinfer` | Query-aware cluster retrieval | Experimental GPU-only method that keeps full KV on GPU, reads top clusters exactly, and estimates the next ranked clusters. |
 | `deltakv` / `deltakv-*` | Hybrid compression | Keeps a small full-precision pool and stores older context through DeltaKV compression or related ablations. |
 
+Other registered cache methods include `kvzip`, `rkv`, `skipkv`, `palu`, and
+quantized KV (`kivi`, `turboquant`, `fp8_kv`). Their model, checkpoint, and
+runtime restrictions differ; see [Supported Models](docs/en/features/supported-models.md),
+[Core Sparse Methods](docs/en/features/sparse-methods.md),
+[Palu](docs/en/features/palu.md), and
+[Quantized KV Cache](docs/en/features/quantized-kv.md).
+
 Prefill acceleration is an independent axis: `h2o_prefill` compacts KV between
-prompt chunks, while `flashprefill_v2` sparsifies prefill attention
-computation. Both are selected with `prefill_sparse_method` and combined with a
-compatible `sparse_method` for cache/decode behavior.
+prompt chunks, `flashprefill_v2` sparsifies prefill attention computation, and
+`omnikv_prefill` selects cross-layer history during prefill.
+These are selected with `prefill_sparse_method` and combined with a compatible
+`sparse_method` for cache/decode behavior.
 
 Read the method overview and integration rules in
 [Core Sparse Methods](docs/en/features/sparse-methods.md).
@@ -81,7 +90,7 @@ Read the method overview and integration rules in
 | Qwen3 | ✅ |
 | Qwen3MoE | ✅ |
 | Qwen3.5 / 3.6 / 3.8 | ✅ |
-| Qwen3.5 / Qwen3.6 MoE | ✅ |
+| Qwen3.6 MoE | ✅ |
 | GLM-4.7-Flash | ✅ |
 | Gemma 4 Dense / MoE | ✅ |
 | Llama 3 / 3.1 | ✅ |
@@ -90,8 +99,9 @@ Read the method overview and integration rules in
 See [Supported Models](docs/en/features/supported-models.md) for the precision,
 parallelism, and sparse-method compatibility matrices.
 
-Native image, video, and audio inputs are enabled per checkpoint with
-`enable_multimodal=True`; see the supported-model matrix for media coverage.
+Native image and video inputs are enabled for listed checkpoints with
+`enable_multimodal=True`; audio is not yet supported. See the supported-model
+matrix for media coverage.
 
 ## Documentation
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
+from time import perf_counter
 from typing import Callable
 
 import torch
@@ -15,6 +17,7 @@ from sparseengine.engine.decode_graph_contract import (
 from sparseengine.engine.sequence import Sequence
 from sparseengine.method_registry import decode_graph_path_id
 from sparseengine.utils.context import get_context, set_context
+from sparseengine.utils.log import logger
 from sparseengine.utils.profiler import cpu_timing, profiler
 
 
@@ -356,8 +359,21 @@ class DecodeCudaGraphRunner:
         ctx = get_context()
         ctx.sparse_controller = self.sparse_controller
 
+        diagnostic = os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1"
+        started = perf_counter()
+
+        def mark(stage: str) -> None:
+            if diagnostic:
+                logger.info(
+                    "CUDA Graph capture diagnostic: pid={} method={} batch={} stage={} elapsed_s={:.3f}.",
+                    os.getpid(), self.method, state.key.batch_size, stage,
+                    perf_counter() - started,
+                )
+
+        mark("eager_prepare_begin")
         with profiler.record("decode_graph_warmup"):
             self.sparse_controller.prepare_forward(seqs, is_prefill=False)
+            mark("eager_forward_begin")
             participant = graph_state.runtime_state
             if participant is not None:
                 participant.prepare_in_graph()
@@ -366,13 +382,16 @@ class DecodeCudaGraphRunner:
                 if logits is None:
                     raise RuntimeError("decode_graph capture_sampling requires rank-0 logits.")
                 _ = logits.argmax(dim=-1)
+        mark("eager_forward_done")
         self.platform.synchronize()
+        mark("eager_synchronize_done")
 
         # In runtime-invariant mode, eager warmup consumes the prevalidated
         # storage scope. Establish a fresh scope for capture.
         self.cache_manager.validate_decode_cuda_graph_slot_mappings()
 
         with profiler.record("decode_graph_capture"):
+            mark("graph_prepare_begin")
             self.sparse_controller.prepare_forward(seqs, is_prefill=False)
             # Dynamic score paths can replace Python state fields during the
             # captured forward. Keep both input and post-forward refs alive;
@@ -380,6 +399,7 @@ class DecodeCudaGraphRunner:
             graph_input_sparse_state_refs = self._snapshot_sparse_state_refs()
             graph = torch.cuda.CUDAGraph()
             try:
+                mark("graph_forward_begin")
                 with torch.cuda.graph(graph, pool=self.graph_pool):
                     participant = graph_state.runtime_state
                     if participant is not None:
@@ -394,6 +414,7 @@ class DecodeCudaGraphRunner:
                         token_ids = None
             except Exception as exc:
                 raise RuntimeError(f"decode_graph capture failed: {exc!r}") from exc
+        mark("graph_forward_done")
 
         state.graph = graph
         state.logits = logits
@@ -451,7 +472,13 @@ class DecodeCudaGraphRunner:
 
         real_batch_size = len(seqs)
         force_eager = getattr(self.cache_manager, "decode_graph_force_eager", None)
-        if force_eager is not None and force_eager():
+        force_eager_for_seqs = getattr(
+            self.cache_manager, "decode_graph_force_eager_for_seqs", None
+        )
+        if (
+            (force_eager is not None and force_eager())
+            or (force_eager_for_seqs is not None and force_eager_for_seqs(seqs))
+        ):
             self.force_eager_count += 1
             return self.run_eager_static(seqs), None
 
@@ -467,7 +494,17 @@ class DecodeCudaGraphRunner:
         )
         self.last_state_key = state.key
         self.last_real_batch_size = real_batch_size
+        if os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1" and state.graph is None:
+            logger.info(
+                "CUDA Graph capture diagnostic: pid={} method={} batch={} stage=static_prepare_begin.",
+                os.getpid(), self.method, state.key.batch_size,
+            )
         input_ids, positions = self._prepare_static_step(state, seqs)
+        if os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1" and state.graph is None:
+            logger.info(
+                "CUDA Graph capture diagnostic: pid={} method={} batch={} stage=static_prepare_done.",
+                os.getpid(), self.method, state.key.batch_size,
+            )
 
         if state.graph is None:
             state = self._capture(state, seqs, input_ids, positions)

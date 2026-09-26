@@ -639,6 +639,10 @@ class MlaSglFa3Provider(MlaTritonProvider):
             return SupportResult.unsupported(
                 "does not satisfy the prepared score-output contract"
             )
+        if caps.compute_capability is None or caps.compute_capability < (9, 0):
+            return SupportResult.unsupported(
+                "FA3 MLA with distinct V head dimension requires Hopper"
+            )
         supported, reason = sgl_fa3_device_support(caps.device_index)
         return SupportResult.yes(reason) if supported else SupportResult.unsupported(reason)
 
@@ -786,6 +790,10 @@ class MlaTileLangScoreProvider(MlaSglFa3Provider):
         if spec.context_capacity is None:
             return SupportResult.unsupported(
                 "requires a capture-time context capacity"
+            )
+        if caps.compute_capability is None or caps.compute_capability < (9, 0):
+            return SupportResult.unsupported(
+                "FA3 MLA with distinct V head dimension requires Hopper"
             )
         supported, reason = sgl_fa3_device_support(caps.device_index)
         if not supported:

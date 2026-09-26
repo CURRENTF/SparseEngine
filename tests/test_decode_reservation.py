@@ -342,15 +342,17 @@ def test_h2o_window_covers_append_before_eviction(tokens, eviction):
 @pytest.mark.parametrize('resident,tokens', [
     (2, 3), (4, 0), (4, 1), (5, 1), (5, 9), (6, 1), (8, 9),
 ])
-def test_pyramidkv_window_starts_from_actual_residency(resident, tokens):
+@pytest.mark.parametrize('method', ['snapkv', 'pyramidkv'])
+def test_periodic_compaction_window_matches_append_before_eviction(resident, tokens, method):
     # A decode window does not perform final-prefill compaction. Existing
     # SnapKV/H2O tests use different retention policies and miss this regression.
     from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
 
     manager = object.__new__(SnapKVCacheManager)
     manager.config = SimpleNamespace(
-        sparse_method='pyramidkv', sink_keep_tokens=1, recent_keep_tokens=1,
+        sparse_method=method, sink_keep_tokens=1, recent_keep_tokens=1,
         decode_keep_tokens=2, pyramid_layer_ratios=[1.0], snapkv_num_full_layers=0,
+        decode_eviction_interval=2, snapkv_decode_eviction=True,
     )
     manager.kv_transformer_layer_indices = lambda: [0]
     manager.kv_layer_index = lambda layer: layer
@@ -364,6 +366,25 @@ def test_pyramidkv_window_starts_from_actual_residency(resident, tokens):
         if length >= 6:
             length = 4
     assert manager.decode_window_costs(request(), tokens) == {'layer_0': peak - resident}
+
+
+def test_pyramid_prompt_admission_does_not_charge_future_decode_peak():
+    from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
+
+    manager = object.__new__(SnapKVCacheManager)
+    manager.config = SimpleNamespace(
+        sparse_method="pyramidkv", pyramid_layer_ratios=[0.6, 0.01],
+        prefill_schedule_policy="long_bs1full_short_batch",
+        sink_keep_tokens=64, recent_keep_tokens=512,
+        decode_keep_tokens=15_808, decode_eviction_interval=1024,
+    )
+    manager.kv_transformer_layer_indices = lambda: [0, 1]
+    manager.kv_layer_index = lambda layer: layer
+    manager._num_free_slots = [1_000_000, 13_365]
+    short = Sequence(list(range(100)), SamplingParams(max_tokens=1))
+    long = Sequence(list(range(100)), SamplingParams(max_tokens=16_384))
+    assert manager.prompt_admission_costs(short) == manager.prompt_admission_costs(long)
+    assert manager.prompt_admission_costs(long) == {"layer_0": 100, "layer_1": 100}
 
 
 def make_kivi_manager(seqs, *, sink=8, residual=32, group=32):

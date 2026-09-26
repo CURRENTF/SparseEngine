@@ -178,6 +178,14 @@ def create_app(
         response = await router.forward_json(worker, "/v1/prefix_cache/inspect", payload)
         return _with_route_headers(response, route)
 
+    @app.post("/v1/prefix_cache/match")
+    async def prefix_cache_match(request: Request):
+        worker, payload, route = await router.select_worker(
+            "/v1/prefix_cache/match", await request.json()
+        )
+        response = await router.forward_json(worker, "/v1/prefix_cache/match", payload)
+        return _with_route_headers(response, route)
+
     @app.post("/v1/prefix_cache/delete_subtree")
     async def prefix_cache_delete_subtree(request: Request):
         return JSONResponse(await router.broadcast_json("/v1/prefix_cache/delete_subtree", await request.json()))
@@ -409,11 +417,18 @@ class SmartRouter:
         probes = await self._probe_workers(candidates, match_payload)
         if not probes:
             raise HTTPException(status_code=503, detail="No healthy SparseEngine worker responded to route probes.")
-        worker, reason = choose_worker(
-            probes,
-            overload_load_factor=self.overload_load_factor,
-            load_abs_threshold=self.load_abs_threshold,
-        )
+        if endpoint in {"/v1/prefix_cache/match", "/v1/prefix_cache/prune"}:
+            # Control operations must address the cache owner even when busy.
+            owner = min(probes, key=lambda probe: (
+                -probe.matched_tokens, probe.load_value, probe.worker.url,
+            ))
+            worker, reason = owner.worker, "prefix_owner"
+        else:
+            worker, reason = choose_worker(
+                probes,
+                overload_load_factor=self.overload_load_factor,
+                load_abs_threshold=self.load_abs_threshold,
+            )
         route = self._route_record(
             endpoint,
             worker,
@@ -825,6 +840,8 @@ def infer_route_profile(endpoint: str, payload: dict[str, Any]) -> str:
 
 
 def match_payload_for_request(endpoint: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    if endpoint == "/v1/prefix_cache/match":
+        return {key: payload[key] for key in ("chat", "token_ids", "text") if key in payload}
     if endpoint == "/v1/responses":
         return {"response": payload}
     if endpoint == "/v1/chat/completions":

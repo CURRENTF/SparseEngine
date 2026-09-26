@@ -93,10 +93,6 @@ def test_native_loop_distinguishes_unadmitted_requests_from_short_window(monkeyp
     assert row["actual_decode_peak"] == admitted
     assert row["completed_requests"] == (0 if preempt else admitted)
     assert engine.exited
-    from scripts.official_experiments.sparse_decode_efficiency.sweep_decode_capacity import capacity_failure
-    log = tmp_path / "run.log"
-    log.write_text(row["error"])
-    assert capacity_failure(row["error"], log) is (admitted < 4 or preempt)
     raw = [json.loads(line) for line in (tmp_path / "vanilla-2-4/raw_outputs.jsonl").read_text().splitlines()]
     assert len(raw) == (0 if preempt else admitted) and all(len(r["token_ids"]) == 3 for r in raw)
 

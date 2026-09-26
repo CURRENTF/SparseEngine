@@ -1,6 +1,7 @@
 """Real HTTP payload/correlation, closed-loop pacing, and artifact trust contracts."""
 from concurrent.futures import ThreadPoolExecutor
 import copy
+import hashlib
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
@@ -11,8 +12,8 @@ import pytest
 
 from benchmark.swe_bench_lite.agent_trace import AgentTrace, CURRENT_TRACE, install_http_recorder
 from benchmark.sparseengine_regression.agent_trace import (
-    export_legacy, grade, load_trace, parse_recording, replay_agent, replay_body,
-    run_replay, write,
+    digest, export_legacy, grade, load_trace, parse_recording, replay_agent, replay_body,
+    post_with_chain_recovery, run_replay, synthetic_think_time, write,
 )
 from benchmark.efficiency.metrics import http_trace_summary
 
@@ -26,6 +27,34 @@ def turn(index=0, gap=None):
     return {"turn": index, "think_time_s": gap, "completion_tokens": 2,
             "request": {"model": "original", "messages": [{"role": "user", "content": "hello"}],
                         "stop": ["end"], "max_completion_tokens": 9}, "response": response()}
+
+
+def test_synthetic_wait_is_stable_and_bounded_across_replays():
+    first = [synthetic_think_time("agent-a", turn, 42, 2.0) for turn in range(80)]
+    assert first[0] == 0
+    assert all(0 <= delay < 2.0 for delay in first)
+    assert first == [synthetic_think_time("agent-a", turn, 42, 2.0) for turn in range(80)]
+    assert first[1:] != [synthetic_think_time("agent-b", turn, 42, 2.0) for turn in range(1, 80)]
+
+
+def test_evicted_chain_retries_once_with_the_full_recorded_prompt():
+    sent = []
+
+    def handle(request):
+        sent.append(json.loads(request.content))
+        if len(sent) == 1:
+            return httpx.Response(410, json={"detail": {"code": "chain_gone"}})
+        return httpx.Response(200, json={"chain_id": "new-chain", "chain_status": "created"})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        result, recovered = post_with_chain_recovery(
+            client, "http://test/chat/completions",
+            {"messages": [{"role": "user", "content": "hello"}],
+             "chain_id": "old-chain", "chain_append_start": 2},
+        )
+    assert recovered and result["chain_id"] == "new-chain"
+    assert len(sent) == 2 and "chain_id" not in sent[1] and "chain_append_start" not in sent[1]
+    assert sent[1]["messages"] == sent[0]["messages"]
 
 
 def test_http_recorder_preserves_payloads_and_thread_identity(tmp_path, monkeypatch):
@@ -142,6 +171,28 @@ def test_legacy_join_preserves_terminal_failures_and_marks_estimated_timing(tmp_
         load_trace(out)
 
 
+def test_legacy_selection_ranks_complete_trajectories_and_keeps_source_order_on_ties(tmp_path):
+    from benchmark.sparseengine_regression.agent_trace import select_legacy_ids
+
+    run = tmp_path / "run"
+    for iid, prompt_counts in (("short", [20]), ("long_a", [10, 30]),
+                               ("long_b", [25, 25])):
+        directory = run / "batches" / "batch_000" / iid
+        directory.mkdir(parents=True)
+        messages = [{"extra": {"response": {"usage": {"prompt_tokens": count}}}}
+                    for count in prompt_counts]
+        write(directory / f"{iid}.traj.json", {
+            "info": {"model_stats": {"api_calls": len(messages)}}, "messages": messages,
+        })
+    ids = ["short", "long_b", "long_a"]
+    assert select_legacy_ids(run, ids, 2, "longest_turns") == ["long_b", "long_a"]
+    assert select_legacy_ids(run, ids, 2, "total_prompt_tokens") == ["long_b", "long_a"]
+    assert select_legacy_ids(run, ids, 1, "max_prompt_tokens") == ["long_a"]
+    assert select_legacy_ids(run, ids, 2, "longest_turns", ("long_b",)) == ["long_a", "short"]
+    with pytest.raises(ValueError, match="absent from source order"):
+        select_legacy_ids(run, ids, 2, "longest_turns", ("missing",))
+
+
 def test_legacy_import_rejects_missing_response_and_duplicate_ids(tmp_path):
     run, logs = legacy_fixture(tmp_path)
     files = sorted(logs.glob("*.json"))
@@ -165,6 +216,68 @@ def test_legacy_replay_requires_explicit_timing_acceptance(tmp_path):
         run_replay(args)
 
 
+@pytest.mark.parametrize(
+    ("synthetic_wait", "think_scale", "keep_ratio", "expected_protocol"),
+    [
+        (None, 1.0, None, "closed_loop_forced_recorded_answers_v1"),
+        (0.1, 1.0, None, "closed_loop_forced_recorded_answers_synthetic_wait_v1"),
+        (None, 0.5, None, "closed_loop_forced_recorded_answers_v2"),
+        (0.1, 1.0, 0.5, "closed_loop_forced_recorded_answers_synthetic_wait_v2"),
+    ],
+)
+def test_forced_replay_manifest_names_its_actual_protocol(
+    tmp_path, synthetic_wait, think_scale, keep_ratio, expected_protocol,
+):
+    run, logs = legacy_fixture(tmp_path)
+    trace = tmp_path / "export"
+    manifest = export_legacy(run, [logs], trace, 1)
+    server_path = tmp_path / "server.json"
+    write(server_path, {
+        "model_path": "test-model", "served_model_name": "target",
+        "model_config": {"vocab_size": 128},
+        "engine_kwargs": {"max_model_len": 128},
+        "hardware": {"gpus": "GPU-1234-abcd"},
+    })
+    prepared = {}
+    forced_digest = hashlib.sha256()
+    for entry in manifest["agents"]:
+        agent = json.loads((trace / entry["file"]).read_text())
+        prepared[entry["file"]] = [
+            {
+                "token_ids": [11] * turn["completion_tokens"],
+                "chain_append_start": len(turn["request"]["messages"]) + 1,
+            }
+            for turn in agent["turns"]
+        ]
+        for turn, spec in zip(agent["turns"], prepared[entry["file"]]):
+            ids = spec["token_ids"]
+            forced_digest.update(json.dumps(
+                [entry["instance_id"], turn["turn"], ids, len(ids)],
+                separators=(",", ":"),
+            ).encode())
+    forced_path = tmp_path / "forced.json"
+    write(forced_path, {
+        "schema": "agent_forced_workload_v1",
+        "trace_sha256": digest(trace / "manifest.json"),
+        "model_path": "test-model", "agents": prepared,
+        "forced_workload_sha256": forced_digest.hexdigest(),
+    })
+    args = SimpleNamespace(
+        agent_trace=trace, agent_api_base="http://test/v1",
+        agent_server_manifest=server_path, agent_concurrency=1,
+        agent_request_timeout=2, agent_allow_estimated_timing=True,
+        output_root=tmp_path, run_id="replay", dry_run=True,
+        agent_force_recorded_responses=True, agent_forced_workload=forced_path,
+        agent_synthetic_think_time_max_s=synthetic_wait,
+        agent_think_time_scale=think_scale,
+        agent_prefix_prune_keep_ratio=keep_ratio,
+        agent_prefix_prune_tokenizer="unused" if keep_ratio is not None else None,
+    )
+    assert run_replay(args) == 0
+    resolved = json.loads((tmp_path / "sparseengine_regression/replay/resolved_manifest.json").read_text())
+    assert resolved["comparison_contract"]["protocol"] == expected_protocol
+
+
 def test_grading_cannot_pass_different_workload_or_failed_samples():
     base = {"status": "success", "comparison_contract": {"trace": "a"}, "latency_s_p95": 2, "elapsed_s": 10}
     assert grade({**base, "elapsed_s": 12}, base)["status"] == "failed"
@@ -184,7 +297,9 @@ def test_real_http_replay_writes_results_and_detects_regression(tmp_path):
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(body)
-            data = json.dumps(response(count=body["max_tokens"])).encode()
+            answer = response(count=body["max_tokens"])
+            answer["usage"]["prompt_tokens_details"] = {"cached_tokens": int(len(requests) > 1)}
+            data = json.dumps(answer).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
@@ -204,13 +319,14 @@ def test_real_http_replay_writes_results_and_detects_regression(tmp_path):
                            agent_server_manifest=manifest, agent_concurrency=1, agent_request_timeout=2,
                            agent_allow_estimated_timing=True, output_root=tmp_path, run_id="replay",
                            dry_run=False, agent_api_key_env="UNUSED_TEST_KEY", agent_baseline=None,
-                           agent_max_slowdown=1.1)
+                           agent_max_slowdown=1.1, agent_require_cache_hit=True)
     try:
         assert run_replay(args) == 0
     finally:
         server.shutdown(); thread.join(); server.server_close()
     result = json.loads((tmp_path / "sparseengine_regression/replay/agent_trace.json").read_text())
     assert result["status"] == "success" and result["request_count"] == 2
+    assert result["cache_reuse"]["successful_requests_with_cached_tokens"] == 1
     assert result["elapsed_s"] >= 1.5
     assert all(body["model"] == "target" and body["ignore_eos"] for body in requests)
 

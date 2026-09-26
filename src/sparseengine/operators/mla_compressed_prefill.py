@@ -40,6 +40,10 @@ class SglLatentPrefill:
         base = _contract(spec, caps)
         if not base.supported:
             return base
+        if caps.compute_capability is None or caps.compute_capability < (9, 0):
+            return SupportResult.unsupported(
+                "FA3 latent prefill with distinct V head dimension requires Hopper"
+            )
         health = sgl_kernel_metadata_health()
         if health.state is KernelFamilyState.ABSENT:
             return SupportResult.dependency_absent(health.reason)

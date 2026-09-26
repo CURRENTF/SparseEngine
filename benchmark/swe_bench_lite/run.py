@@ -875,6 +875,8 @@ class SweBenchLiteRunner:
                     raise RunnerError("--prefix-prune-keep-ratio must be in [0, 1)")
                 if args.prefix_prune_trigger_tokens <= 0:
                     raise RunnerError("--prefix-prune-trigger-tokens must be positive")
+                if args.prefix_prune_tool_result_lag < 0:
+                    raise RunnerError("--prefix-prune-tool-result-lag must be non-negative")
             else:
                 range_start = int(args.prefix_prune_range_start)
                 range_end = int(args.prefix_prune_range_end)
@@ -1012,6 +1014,7 @@ class SweBenchLiteRunner:
             "SPARSEENGINE_PREFIX_PRUNE_TARGET",
             "SPARSEENGINE_PREFIX_PRUNE_TOKENIZER",
             "SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO",
+            "SPARSEENGINE_PREFIX_PRUNE_TOOL_RESULT_LAG",
         )
         prune_policy = getattr(self.args, "prefix_prune_policy", None)
         for key in prune_env_vars:
@@ -1021,6 +1024,7 @@ class SweBenchLiteRunner:
             if self.args.prefix_prune_target == "tool_results":
                 env["SPARSEENGINE_PREFIX_PRUNE_TOKENIZER"] = str(self.args.prefix_prune_tokenizer)
                 env["SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO"] = str(self.args.prefix_prune_keep_ratio)
+                env["SPARSEENGINE_PREFIX_PRUNE_TOOL_RESULT_LAG"] = str(self.args.prefix_prune_tool_result_lag)
             env["SPARSEENGINE_PREFIX_PRUNE_POLICY"] = str(prune_policy)
             env["SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS"] = str(
                 self.args.prefix_prune_trigger_tokens
@@ -1122,7 +1126,9 @@ class SweBenchLiteRunner:
                 prune_config.update(
                     target="tool_results", tokenizer=self.args.prefix_prune_tokenizer,
                     keep_ratio=self.args.prefix_prune_keep_ratio,
-                    schedule="accumulated_tool_tokens",
+                    schedule=("delayed_tool_result" if self.args.prefix_prune_tool_result_lag
+                              else "accumulated_tool_tokens"),
+                    tool_result_lag=self.args.prefix_prune_tool_result_lag,
                 )
             else:
                 prune_config.update(
@@ -1478,7 +1484,7 @@ class SweBenchLiteRunner:
         model_env = self._model_env()
         mini_prefix = shlex.split(self.args.mini_command)
         if getattr(self.args, "record_agent_trace", False):
-            timed = self.repo_root / "scripts/official_experiments/chain_cache_miniswe/timed_mini.py"
+            timed = self.repo_root / "benchmark/swe_bench_lite/timed_mini.py"
             if mini_prefix != ["mini-extra"] and mini_prefix != [sys.executable, str(timed)]:
                 raise RunnerError("--record-agent-trace requires the default mini-extra or timed_mini command")
             mini_prefix = [sys.executable, str(timed)]
@@ -1837,6 +1843,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prefix-prune-tokenizer", help="Local tokenizer directory matching the server; required for tool_results.")
     parser.add_argument("--prefix-prune-keep-ratio", type=float, default=0.5,
                         help="Shared retention fraction of aligned tool-body tokens; used only for tool_results.")
+    parser.add_argument("--prefix-prune-tool-result-lag", type=int, default=0,
+                        help="Prune one tool result this many later tool returns after it arrives; 4 selects the fifth most recent.")
     parser.add_argument("--prefix-prune-trigger-tokens", type=int, default=8192,
                         help="Pending aligned tool-token threshold; cached-length trigger in static range mode.")
     parser.add_argument("--prefix-prune-range-start", type=int, default=512)

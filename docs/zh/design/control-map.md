@@ -6,7 +6,7 @@
 
 - 选择文档位置时，从 `docs/zh/README.md` 开始。
 - 稳定的 runbook 和 contract 位于 `docs/zh/` 下对应主题目录。
-- 不要在仓库文档中保存本地 run ledger。面向仓库的声明需要证据时，应使用 run artifact 本身。已完成的正式结果包保存在 `scripts/official_experiments/<experiment>/`。
+- 不要在仓库文档中保存本地 run ledger。面向仓库的声明需要证据时，应使用 run artifact 本身。已完成的论文实验结果包保存在 [dev-paper-branch](https://github.com/CURRENTF/SparseEngine/tree/dev-paper-branch/scripts/official_experiments)。
 - `docs/zh/configuration/runtime-parameter-semantics.md` 是规范参数 contract。添加新的 public run config 前应保持它同步。
 
 ## 一句话模型

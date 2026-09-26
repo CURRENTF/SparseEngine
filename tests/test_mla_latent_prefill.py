@@ -47,6 +47,20 @@ def test_absent_fa3_can_bind_compressed_prefill_fallback(monkeypatch):
     probe.assert_not_called()
 
 
+def test_ada_rejects_fa3_latent_prefill_before_kernel_probe(monkeypatch):
+    # FA3's general device probe accepts Ada, but its distinct V head dimension does not.
+    probe = Mock(side_effect=AssertionError("unsupported FA3 path must not be probed"))
+    monkeypatch.setattr(prefill, "sgl_fa3_device_support", probe)
+    monkeypatch.setattr(prefill.TritonLatentPrefill, "bind", classmethod(lambda cls, *a, **kw: object.__new__(cls)))
+    caps = _h100_caps(compute_capability=(8, 9), device_name="NVIDIA RTX 4090")
+    resolved = OpResolver(prefill.MLA_COMPRESSED_PREFILL_REGISTRY).resolve(
+        _spec(), caps, max_batch_size=1,
+    )
+    assert resolved.provider.name == "triton_latent"
+    assert "requires Hopper" in resolved.rejected[0][1]
+    probe.assert_not_called()
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("splits", [1, 8])

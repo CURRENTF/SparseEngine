@@ -14,16 +14,26 @@ Set `sparse_method` to one of the following method names.
 | `vanilla` | Dense baseline | Full attention baseline. Use it to verify correctness and measure the non-sparse engine path. | Common engine knobs only. |
 | `streamingllm` | Physical eviction | StreamingLLM-style fixed sink plus recent-window cache. Tokens outside the retained prefix/tail policy are physically evicted from the active KV cache. | `sink_keep_tokens`, `recent_keep_tokens` |
 | `attention-sink` | Physical eviction | Alias-style attention-sink policy with the same sink-token and recent-window retention model. It is useful for comparing sink-window behavior against other physical eviction methods. | `sink_keep_tokens`, `recent_keep_tokens` |
-| `snapkv` | Physical eviction | SnapKV-style token selection uses an end-of-prompt observation window to keep a compact set of important prompt KV positions before generation. The current paper-aligned decode path is score-free and appends generated tokens without another SnapKV selection pass. | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `sparse_prefill_score_mode` |
+| `snapkv` | Physical eviction | SnapKV-style token selection uses an end-of-prompt observation window to keep important prompt KV. Decode eviction is optional (`snapkv_decode_eviction=false` by default). When enabled, each sparse layer scores its last `observation_window_size` decode queries and compacts after its physical row reaches the layer budget plus `decode_eviction_interval`. Scoring runs after the decode Graph replay, only at eviction boundaries. | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `snapkv_decode_eviction`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
 | `kvzip` | Physical eviction | Repository token-shared KVzip reconstruction scoring, followed by one global prompt-token compaction. | `kvzip_token_budget`, `kvzip_score_chunk_size`, `kvzip_prev_postfix_size` |
 | `h2o` | Physical eviction | Intermediate prefill chunks can be compacted to `h2o_prefill_budget`; the final prompt is compacted to `h2o_decode_budget`. Decode is score-free by default and grows with generated tokens. Optional `h2o_decode_eviction` accumulates decode probabilities and periodically evicts physical KV. | `h2o_decode_eviction`, `h2o_decode_budget`, `h2o_decode_eviction_interval`, `h2o_prefill_budget`, `h2o_recent_ratio`, `h2o_prefill_score_window`, `sparse_prefill_score_mode` |
-| `pyramidkv` | Physical eviction | PyramidKV-style layer-dependent KV retention. It allocates sparse budgets across layers and physically stores the selected context tokens. | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `sparse_prefill_score_mode` |
+| `pyramidkv` | Physical eviction | PyramidKV-style layer-dependent KV retention. Decode eviction is always enabled. Each sparse layer scores its last `observation_window_size` decode queries and compacts after its physical row reaches that layer's budget plus `decode_eviction_interval` (default 1024). Scoring runs after the decode Graph replay, only at eviction boundaries. | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
 | `omnikv` | Logical masking with optional offload | Cross-layer token selection; optionally keep sparse-layer history in pinned CPU memory and fetch the exact selected KV for decode. | `full_attention_layers`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `enable_omnikv_offload` |
 | `quest` | Query-aware page selection | QuEST selects token pages from persistent min/max page summaries. Prefill stays dense. Explicit-KV models score in key coordinates; GLM-4.7-Flash scores the fused MLA latent/RoPE cache with the matching absorbed decode query while keeping the compute payload latent. | `quest_chunk_size`, `quest_skip_layers`, `sink_keep_tokens`, `decode_keep_tokens`, `recent_keep_tokens` |
+| `retroinfer` | Query-aware cluster retrieval | Experimental GPU-only RetroInfer. Dense prefill builds per-KV-head key clusters; decode reads top clusters exactly and estimates the contribution of the next ranked clusters. The full KV cache remains on GPU. | `retroinfer_retrieval_ratio`, `retroinfer_estimation_ratio`, `retroinfer_sink_tokens`, `retroinfer_recent_tokens` |
 | `deltakv` | Hybrid compression | Slim compressor-backed DeltaKV runtime. Legacy `deltakv-less-memory*` names normalize here for older configs, but real benchmark runs still require a matching compressor checkpoint. | `deltakv_checkpoint_path`, `deltakv_latent_dim`, `deltakv_center_ratio`, `deltakv_neighbor_count`, `deltakv_latent_quant_bits`, `full_layer_kv_quant_bits` |
 
 SparseEngine uses `sparse_method` unchanged in public commands, `LLM(...)`, the
 runtime config, and internal consumers.
+
+RetroInfer GPU-only currently supports Llama, Qwen2, Qwen3, Qwen3-MoE, and
+MiniMax-M2 with uniform FP16/BF16 explicit KV, full causal attention, and
+attention TP=1. MoE routing does not change this attention contract. Set
+`decode_graph=False`; prefix
+caching and async scheduling are unavailable. The default 4-token sink and
+64-token recent region stay exact. An index is built after at least 16,384
+older tokens are available and extended in 1,024-token segments. Shorter
+contexts read their full KV exactly.
 
 
 

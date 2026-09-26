@@ -369,7 +369,7 @@ def get_pred(rank: int, data, dataset: str, args, model, tokenizer, out_path: st
 
 
 def worker(rank: int, world_size: int, datasets: List[str], args, out_root: str) -> None:
-    seed_everything(42)
+    seed_everything(args.seed)
     model, tokenizer = load_model_and_tokenizer(rank, args)
     perf_records = []
 
@@ -448,6 +448,7 @@ def worker(rank: int, world_size: int, datasets: List[str], args, out_root: str)
         "temperature": args.temperature,
         "top_p": args.top_p,
         "top_k": args.top_k,
+        "seed": args.seed,
         "prompt_style": args.prompt_style,
         "prefill_think_prefix": args.prefill_think_prefix,
         "force_think_prefix": args.force_think_prefix,
@@ -513,6 +514,7 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top_p", type=float, default=1.0)
     parser.add_argument("--top_k", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--think_prefix", type=str, default="<think>\n")
     parser.add_argument(
         "--prefill_think_prefix",
@@ -535,6 +537,8 @@ if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
     if not (0.5 <= float(args.temperature) <= 0.7):
         raise ValueError(f"--temperature must be within [0.5, 0.7], got {args.temperature}")
+    if args.seed < 0:
+        raise ValueError(f"--seed must be non-negative, got {args.seed}")
 
     model_name = args.model
     compressor_name = os.path.basename(args.deltakv_checkpoint_path.rstrip("/")) if args.deltakv_checkpoint_path else "None"

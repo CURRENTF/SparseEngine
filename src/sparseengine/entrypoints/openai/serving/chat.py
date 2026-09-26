@@ -60,7 +60,14 @@ async def serve_chat_completion(
     request_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
     started = time.perf_counter()
-    sampling_params = _sampling_params_from_request(request)
+    try:
+        sampling_params = _sampling_params_from_request(request)
+        if sampling_params.benchmark_forced_token_ids is not None:
+            sampling_params.validate_for_vocab(
+                int(dispatcher.engine.config.hf_config.vocab_size)
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     logger.info(
         "request_start id={} model={} endpoint=chat stream={} messages={} max_tokens={} temperature={} top_p={} top_k={}",
         request_id,
