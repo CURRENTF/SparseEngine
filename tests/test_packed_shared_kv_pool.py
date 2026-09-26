@@ -51,3 +51,23 @@ def test_page_accounting_includes_scale_tail_and_alignment_without_double_counti
     assert sum(t.numel() * t.element_size() for t in pool.accounting_tensors()) == (
         7 * payload.pages.stride(0)
     )
+
+
+def test_attention_and_index_storage_share_family_ownership_not_tensor_bytes():
+    from sparseengine.engine.cache_manager.storage.packed_index_kv import PackedIndexKVPool
+
+    first = make_pool()
+    second = PackedSharedKVPool(num_pages=7, page_size=64, reserved_pages=2,
+                                device=torch.device("cpu"), allocator=first.allocator)
+    index = PackedIndexKVPool(allocator=first.allocator, page_size=64, device="cpu")
+    pages = first.allocator.allocate_pages(3)
+    first.allocator.retain_pages(pages)  # Prefix owns all layer payloads.
+    first.allocator.release_pages(pages)  # Active request ends.
+    assert first.num_free_pages == second.num_free_pages == index.allocator.num_free_pages == 2
+    storages = [first.byte_storage, second.byte_storage, index.byte_storage]
+    assert len({tensor.data_ptr() for tensor in storages}) == 3
+    first.allocator.release_pages(pages)
+    assert second.num_free_pages == 5
+    with pytest.raises(ValueError):
+        PackedSharedKVPool(num_pages=8, page_size=64, reserved_pages=2,
+                           device=torch.device("cpu"), allocator=first.allocator)
