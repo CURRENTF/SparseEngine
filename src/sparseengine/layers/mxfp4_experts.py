@@ -70,6 +70,10 @@ class PackedMxfp4Experts(PackedMoeExperts):
         key = (global_expert_id, projection)
         if key in self._loaded_expert_shards:
             raise ValueError(f"Duplicate MXFP4 checkpoint projection {key}")
+        # Original V4 safetensors declares packed E2M1 bytes as I8. Preserve
+        # their bit pattern; interpreting signed bytes numerically corrupts FP4.
+        if loaded_weight.dtype == torch.int8:
+            loaded_weight = loaded_weight.view(torch.uint8)
         if loaded_weight.dtype != torch.uint8 or loaded_scale is None:
             raise ValueError("MXFP4 checkpoint requires packed E2M1 weights and UE8M0 scales")
         if loaded_scale.dtype != torch.float8_e8m0fnu:
