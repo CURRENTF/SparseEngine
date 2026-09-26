@@ -110,9 +110,27 @@ class FlashInferHyperConnectionProvider(HyperConnectionProvider):
     def post(self, output, residual, post_mix, residual_mix):
         return self._post(output, residual, post_mix, residual_mix)
 
+    def head(self, residual, projection, scale, base):
+        streams, hidden = self.spec.residual_streams, self.spec.hidden_size
+        if residual.shape[1:] != (streams, hidden) or projection.shape != (streams, streams*hidden):
+            raise ValueError("mHC head residual/projection differs from the bound contract")
+        if scale.numel() != 1 or base.shape != (streams,):
+            raise ValueError("mHC head requires one scale and one bias per stream")
+        return _head_reference(residual, projection, scale, base,
+                               self.spec.rms_eps, self.spec.mixing_eps)
+
 
 def resolve_hyper_connection_provider(spec: HyperConnectionOpSpec, *, device_index: int):
     caps = platforms.current_platform.get_device_caps(device_index)
     return OpResolver(HYPER_CONNECTION_REGISTRY).resolve(
         spec, caps, op_spec=spec,
     ).provider
+
+
+@torch.compile(fullgraph=True, dynamic=True)
+def _head_reference(residual, projection, scale, base, rms_eps, mixing_eps):
+    flat = residual.flatten(1).float()
+    mixes = torch.nn.functional.linear(flat, projection)
+    mixes = mixes * torch.rsqrt(flat.square().mean(-1, keepdim=True) + rms_eps)
+    pre = torch.sigmoid(mixes * scale + base) + mixing_eps
+    return (pre[..., None] * residual.float()).sum(1).to(residual.dtype)

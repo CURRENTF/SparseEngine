@@ -22,6 +22,16 @@ def _load(kind: str, head_dim: int, input_dtype: torch.dtype,
         header = "fused_norm_rope.cuh"
         kernel = f"sglang::FusedNormRopeKernel<{_TYPES[input_dtype]}, {head_dim}, 64, false>"
         exports = f"using Kernel = {kernel};\nTVM_FFI_DLL_EXPORT_TYPED_FUNC(forward, Kernel::forward);"
+    elif kind == "query":
+        header = "main_norm_rope.cuh"
+        kernel = "sglang::FusedQNormRopeKernel<__nv_bfloat16, 512, 64, false>"
+        exports = f"using Kernel = {kernel};\nTVM_FFI_DLL_EXPORT_TYPED_FUNC(forward, Kernel::forward);"
+    elif kind.startswith("store_"):
+        header = "store.cuh"
+        page_size = int(kind.split("_")[1])
+        kernel = (f"sglang::FusedStoreCacheFlashMLAKernel<{_TYPES[input_dtype]}, int32_t, "
+                  f"{page_size}, sglang::deepseek_v4::KVLayout::V4, false>")
+        exports = f"using Kernel = {kernel};\nTVM_FFI_DLL_EXPORT_TYPED_FUNC(forward, Kernel::run);"
     else:
         ratio = int(kind)
         header = f"c{ratio}.cuh"

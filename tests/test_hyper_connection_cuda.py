@@ -69,3 +69,34 @@ def test_mhc_pre_post_and_graph_dynamic_residual(rows):
         output.copy_(torch.randn_like(output))
         graph.replay()
         check(captured)
+
+
+def test_mhc_head_merge_and_graph():
+    torch.manual_seed(122)
+    residual = torch.randn(3, 4, 4096, device="cuda", dtype=torch.bfloat16)
+    projection = torch.randn(4, 16384, device="cuda") * .005
+    scale = torch.tensor([.7], device="cuda")
+    base = torch.randn(4, device="cuda") * .2
+    provider = resolve_hyper_connection_provider(
+        HyperConnectionOpSpec(4096, 4, torch.bfloat16, 1e-6, 1e-6, 20),
+        device_index=torch.cuda.current_device(),
+    )
+
+    def run():
+        return provider.head(residual, projection, scale, base)
+
+    def check(actual):
+        x = residual.double()
+        mixes = x.flatten(1) @ projection.double().T
+        mixes *= (x.square().mean((1, 2)) + 1e-6).rsqrt()[:, None]
+        pre = (mixes * scale.double() + base.double()).sigmoid() + 1e-6
+        torch.testing.assert_close(actual, (pre[..., None]*x).sum(1).bfloat16(),
+                                   rtol=.015, atol=.015)
+
+    check(run())
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        captured = run()
+    residual.copy_(torch.randn_like(residual))
+    graph.replay()
+    check(captured)
