@@ -29,6 +29,7 @@ from sparseengine.engine.sparse_methods.base import AuxiliaryPrefillRequest
 from sparseengine.engine.sequence import Sequence
 from sparseengine.engine.async_scheduling.execution import AsyncExecution, DeviceLogprobs
 from sparseengine.models.qwen2 import Qwen2ForCausalLM
+from sparseengine.models.deepseek_v4 import DeepseekV4ForCausalLM
 from sparseengine.models.llama import LlamaForCausalLM
 from sparseengine.layers.sampler import Sampler
 from sparseengine.kernels.external.required import (

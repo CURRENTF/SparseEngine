@@ -20,7 +20,7 @@ from sparseengine.models.rope import (
     resolve_rope_max_position,
     resolve_rope_parameters,
 )
-from sparseengine.models.spec import ModelSpec, resolve_model_spec
+from sparseengine.models.spec import MODEL_SPECS, ModelSpec, resolve_model_spec
 from sparseengine.quantization import QuantizationConfig
 from sparseengine.utils.config import config_get
 from sparseengine.utils.log import logger, log_once
@@ -40,6 +40,13 @@ def _config_to_namespace(config: dict[str, Any]) -> SimpleNamespace:
 
 
 def _load_model_config(model_path: str) -> Any:
+    config_path = os.path.join(model_path, "config.json")
+    if os.path.isfile(config_path):
+        with open(config_path, encoding="utf-8") as handle:
+            raw = json.load(handle)
+        spec = MODEL_SPECS.get(str(raw.get("model_type", "")))
+        if spec is not None and spec.prefer_raw_config:
+            return _config_to_namespace(raw)
     try:
         return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     except Exception as error:
@@ -206,6 +213,10 @@ def load_and_validate_model(config) -> None:
     outer_dtype = _normalize_hf_config_dtype(config.outer_hf_config, torch.bfloat16)
     _normalize_hf_config_dtype(config.hf_config, outer_dtype)
     config.model_spec = model_spec
+    if model_spec.native_sparse_method is not None:
+        if config.sparse_method not in {"", model_spec.native_sparse_method} or config.prefill_sparse_method:
+            raise ValueError(f"{model_spec.name} requires its native sparse method")
+        config.sparse_method = config.resolved_cache_sparse_method = model_spec.native_sparse_method
     config.parallel_topology = ParallelTopology(
         attn_tp_size=config.tensor_parallel_size,
         attn_dp_size=config.data_parallel_size,

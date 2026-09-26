@@ -55,6 +55,8 @@ class SGLSharedKVTransformProvider:
         from sparseengine.kernels.external.sgl.v4_compression import _load
         from sparseengine.kernels.external.sgl.v4_compression.gather import gather_packed_kv
 
+        from sgl_kernel import dsv4_fused_k_norm_rope_flashmla
+        self._normalize_store = dsv4_fused_k_norm_rope_flashmla
         self.spec = op_spec
         self._query = _load("query", 512, torch.bfloat16, torch.bfloat16, architecture)
         self._stores = {
@@ -69,6 +71,10 @@ class SGLSharedKVTransformProvider:
         out = torch.empty_like(query) if out is None else out
         self._query.forward(query, out, freqs, positions, self.spec.rms_eps)
         return out
+
+    def normalize_rotate_store(self, values, norm_weight, freqs, positions, slots, byte_storage):
+        self._normalize_store(values, norm_weight, freqs, positions.to(torch.int32), slots,
+                              byte_storage, eps=self.spec.rms_eps, page_size=self.spec.page_size)
 
     def store(self, values, byte_storage, slots):
         """Store already normalized/rotated values; every slot must be valid.

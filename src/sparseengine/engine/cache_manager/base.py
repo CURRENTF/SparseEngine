@@ -556,6 +556,9 @@ class CacheManager(ABC):
             raise ValueError(f"Unsupported sparse_method={sparse_method!r}.")
         from sparseengine.method_registry import QUANTIZED_KV_METHODS
 
+        if sparse_method == "deepseek_v4":
+            from .methods.deepseek_v4 import DeepSeekV4CacheManager
+            return create_manager(DeepSeekV4CacheManager)
         if sparse_method == "palu":
             from .methods.palu import PaluCacheManager
 
