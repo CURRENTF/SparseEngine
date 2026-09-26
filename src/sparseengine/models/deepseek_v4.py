@@ -24,6 +24,7 @@ from sparseengine.operators.shared_kv_transform import (
     SharedKVTransformOpSpec, resolve_shared_kv_transform_provider,
     GroupedSharedKVProjection, inverse_shared_kv_rope,
 )
+from sparseengine.platforms.device_runtime import is_stream_capturing, synchronize
 from sparseengine.utils.context import get_context
 from sparseengine.utils.weight_target import WeightTarget
 
@@ -139,7 +140,7 @@ class PreparedSharedKVDecode:
 
     def prepare_decode_graph_in(self, state):
         self.active = state
-        if torch.cuda.is_current_stream_capturing():
+        if is_stream_capturing():
             state.captured = True
 
     def decode_graph_keepalive_tensors(self, state):
@@ -150,7 +151,7 @@ class PreparedSharedKVDecode:
             self.active = None
 
     def run(self, query, payload, indices, lengths, sink):
-        if torch.cuda.is_current_stream_capturing() and self.active is not None:
+        if is_stream_capturing() and self.active is not None:
             state = self.active.planner
         else:
             capacity = len(query)
@@ -309,22 +310,22 @@ class DeepseekV4ForCausalLM(nn.Module):
     @staticmethod
     def build_runtime_kwargs(config, *, engine_config, parallel_context, collective_runtime,
                              device, max_decode_tokens, **_):
-        return {"max_length": engine_config.max_model_len,
+        return {"max_length": engine_config.max_model_len, "device": device,
                 "parallel_collectives": collective_runtime.request_moe_collectives(
                     attention_max_rows=max_decode_tokens, moe_max_rows=max_decode_tokens,
                     max_local_tokens=engine_config.max_num_batched_tokens,
                     hidden_size=config.hidden_size, dtype=torch.bfloat16, backend=engine_config.moe_backend,
                     num_experts=config.n_routed_experts, top_k=config.num_experts_per_tok)}
 
-    def __init__(self, config, *, max_length, parallel_collectives=None):
+    def __init__(self, config, *, max_length, device, parallel_collectives=None):
         super().__init__()
         self.config = config
         parallel = get_parallel_context()
         if parallel.attn_tp_size != 1 or parallel.moe_tp_size != 1:
             raise ValueError("DeepSeek V4 native inference requires attention and MoE TP=1")
         self.communication = prepare_moe_communication(parallel, parallel_collectives)
-        device_index = torch.cuda.current_device()
-        device = torch.device("cuda", device_index)
+        device = torch.device(device)
+        device_index = device.index or 0
         self.mhc = resolve_hyper_connection_provider(
             HyperConnectionOpSpec(config.hidden_size, 4, torch.bfloat16, config.rms_norm_eps,
                                    config.hc_eps, config.hc_sinkhorn_iters), device_index=device_index)
@@ -422,4 +423,4 @@ class DeepseekV4ForCausalLM(nn.Module):
                .view(num_tokens, top_k))
         weights = torch.full((num_tokens, top_k), 1./top_k, device=device, dtype=torch.float32)
         experts(hidden, ids, weights)
-        torch.cuda.synchronize(device)
+        synchronize()
