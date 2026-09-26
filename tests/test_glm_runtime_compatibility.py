@@ -149,14 +149,14 @@ def test_glm_config_rejects_disabling_default_startup_graph_capture():
         )
 
 
-def test_glm_config_defaults_to_larger_sparse_startup_capture_budget():
+def test_glm_config_uses_shared_sparse_startup_capture_budget():
     config = _glm_config(
         decode_graph=True,
         sparse_method="snapkv",
     )
 
     assert config.decode_graph_startup_capture is True
-    assert config.decode_graph_startup_capture_limit == 48
+    assert config.decode_graph_startup_capture_limit == 32
 
 
 def test_glm_config_rejects_startup_capture_without_cuda_graph():

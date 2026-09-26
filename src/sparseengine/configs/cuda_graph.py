@@ -13,26 +13,33 @@ from sparseengine.method_registry import (
 from sparseengine.utils.log import log_once
 
 
-def _default_decode_cuda_graph_capture_sizes(max_batch_size: int) -> list[int]:
-    """Return at most 32 batch buckets, dense where padding hurts most."""
+def _default_decode_cuda_graph_capture_sizes(
+    max_batch_size: int, capture_limit: int = 32
+) -> list[int]:
+    """Fill the graph budget, with shorter padding gaps at small batches."""
     max_batch_size = int(max_batch_size)
     if max_batch_size <= 0:
         raise ValueError(f"max_batch_size must be > 0, got {max_batch_size}.")
+    capture_limit = int(capture_limit)
+    if capture_limit <= 0:
+        raise ValueError(f"decode graph capture limit must be positive, got {capture_limit}.")
+    if max_batch_size <= capture_limit:
+        return list(range(1, max_batch_size + 1))
+    if capture_limit == 1:
+        return [max_batch_size]
 
-    dense_limit = min(8, max_batch_size)
+    dense_limit = min(8, max(1, capture_limit // 4))
     sizes = list(range(1, dense_limit + 1))
-    if max_batch_size <= dense_limit:
-        return sizes
-
-    # Keep small decode batches exact, then use aligned, bounded-width buckets.
-    # The adaptive stride caps the auto plan at 32 batch families even for a
-    # very large scheduler limit; explicit capture sizes remain unrestricted.
-    remaining_bucket_budget = 32 - dense_limit
+    remaining_bucket_budget = capture_limit - dense_limit
     span = max_batch_size - dense_limit
-    stride = max(4, (span + remaining_bucket_budget - 1) // remaining_bucket_budget)
-    stride = ((stride + 3) // 4) * 4
-    sizes.extend(range(dense_limit + stride, max_batch_size, stride))
-    sizes.append(max_batch_size)
+    stride = (span + remaining_bucket_budget - 1) // remaining_bucket_budget
+    slack = stride * remaining_bucket_budget - span
+    current = dense_limit
+    for _ in range(remaining_bucket_budget):
+        gap = stride - min(slack, stride - 1)
+        slack -= stride - gap
+        current += gap
+        sizes.append(current)
     return sizes
 
 
@@ -75,12 +82,13 @@ def _resolve_positive_sizes(
 def _resolve_decode_cuda_graph_capture_sizes(
     value: str | int | list[int] | tuple[int, ...] | None,
     max_real_batch_size: int,
+    capture_limit: int = 32,
 ) -> list[int]:
     sizes = _resolve_positive_sizes(
         value,
         name="decode_graph_capture_sizes",
         default_factory=lambda: _default_decode_cuda_graph_capture_sizes(
-            max_real_batch_size
+            max_real_batch_size, capture_limit
         ),
     )
     max_real_batch_size = int(max_real_batch_size)
@@ -148,32 +156,6 @@ def _resolve_decode_static_batch_capacity(
     )
 
 
-def _select_evenly_spaced_sizes(
-    sizes: list[int] | tuple[int, ...], limit: int
-) -> list[int]:
-    candidates = sorted(set(int(size) for size in sizes))
-    limit = int(limit)
-    if limit <= 0:
-        raise ValueError(f"decode graph capture limit must be positive, got {limit}.")
-    if len(candidates) <= limit:
-        return candidates
-    dense = candidates[: min(8, limit)]
-    remaining = limit - len(dense)
-    if remaining <= 0:
-        dense[-1] = candidates[-1]
-        return sorted(set(dense))
-    tail = candidates[len(dense) :]
-    indices = (
-        {
-            round(index * (len(tail) - 1) / (remaining - 1))
-            for index in range(remaining)
-        }
-        if remaining > 1
-        else {len(tail) - 1}
-    )
-    return sorted(set(dense + [tail[index] for index in sorted(indices)]))
-
-
 def build_decode_cuda_graph_startup_plan(config) -> list[tuple[int, int]]:
     """Capture each batch bucket once, with capacity for every request length."""
     batches = sorted(set(int(size) for size in config.decode_graph_capture_sizes))
@@ -198,7 +180,7 @@ def normalize_decode_cuda_graph(config) -> None:
         )
 
     if config.decode_graph_startup_capture_limit is None:
-        config.decode_graph_startup_capture_limit = 48 if config.sparse_method else 32
+        config.decode_graph_startup_capture_limit = 32
     config.decode_graph_startup_capture_limit = int(
         config.decode_graph_startup_capture_limit
     )
@@ -262,22 +244,14 @@ def normalize_decode_cuda_graph(config) -> None:
         raise ValueError(f"decode_graph supports these methods only: '', {supported}.")
 
     capture_sizes_setting = config.decode_graph_capture_sizes
-    capture_sizes_auto = capture_sizes_setting is None or (
-        isinstance(capture_sizes_setting, str)
-        and capture_sizes_setting.strip().lower() in {"", "auto"}
-    )
     max_real_batch_size = _decode_cuda_graph_max_real_batch_size(
         max_decoding_seqs=config.max_decoding_seqs,
     )
     config.decode_graph_capture_sizes = _resolve_decode_cuda_graph_capture_sizes(
         capture_sizes_setting,
         max_real_batch_size,
+        int(config.decode_graph_startup_capture_limit),
     )
-    if capture_sizes_auto:
-        config.decode_graph_capture_sizes = _select_evenly_spaced_sizes(
-            config.decode_graph_capture_sizes,
-            int(config.decode_graph_startup_capture_limit),
-        )
 
     startup_plan = build_decode_cuda_graph_startup_plan(config)
     path_summary = [{

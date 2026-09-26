@@ -4,8 +4,14 @@ import pytest
 import torch
 from glm_test_helpers import _glm_config, _single_rank_parallel_context
 
-from sparseengine.engine.cache_manager import MlaLatentWrite, SparseSelection
+from sparseengine.engine.cache_manager import MlaLatentSelectionQuery, MlaLatentWrite
 from sparseengine.engine.cache_manager.methods.quest import QuestCacheManager
+from sparseengine.engine.sparse_methods.base import (
+    DecodeSelectionRequest,
+    SparseStepContext,
+)
+from sparseengine.engine.sparse_methods.quest import QuestRuntime
+from sparseengine.engine.sparse_methods.factory import create_sparse_method_runtime
 from sparseengine.engine.decode_graph_contract import (
     DecodeGraphContract,
     DecodeGraphInputs,
@@ -137,19 +143,17 @@ def test_mla_quest_prefix_graph_replay_updates_pages_rows_and_padding(long_only)
     q_latent = torch.zeros(3, 2, 512, dtype=torch.bfloat16, device=manager.device)
     q_latent[:, :, 0] = 1
     q_rope = torch.zeros(3, 2, 64, dtype=torch.bfloat16, device=manager.device)
-    query = manager.build_decode_selection_query(
-        torch.empty(0), mla_latent=q_latent, mla_rope=q_rope
-    )
-    selection = SparseSelection(
-        kind="full",
-        req_indices=inputs.request_indices,
-        context_lens=inputs.context_lens,
-        max_context_len=128,
-    )
+    query = MlaLatentSelectionQuery(latent=q_latent, rope=q_rope)
+    runtime = create_sparse_method_runtime(manager.config, manager)
+    assert isinstance(runtime, QuestRuntime)
+    runtime.prepare_step(SparseStepContext(seqs, False, None))
 
     def forward():
         manager.prepare_decode_graph_in(state)
         manager.store_attention_payload(0, writes)
+        selection = runtime.build_decode_selection(
+            DecodeSelectionRequest(0, torch.empty(0), None, query)
+        )
         return manager.build_decode_compute_view(
             0, query, selection, num_heads=2, num_kv_heads=1
         )

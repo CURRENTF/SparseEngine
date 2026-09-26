@@ -7,12 +7,13 @@ from sparseengine.kernels.triton.mla.prefill import merge_partial
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
 @pytest.mark.parametrize("blocks", [1, 2, 5])
-def test_fused_merge_endpoints_preserve_fp32_history_accumulation(dtype, blocks):
+@pytest.mark.parametrize("tokens", [1, 7, 16, 17, 32, 33])
+def test_fused_merge_endpoints_preserve_fp32_history_accumulation(dtype, blocks, tokens):
     torch.manual_seed(631)
     # Non-contiguous head/LSE views and a non-power-of-two width.
-    current = torch.randn(17, 10, 13, device="cuda", dtype=dtype)[:, ::2]
+    current = torch.randn(tokens, 10, 13, device="cuda", dtype=dtype)[:, ::2]
     parts = [torch.randn_like(current) for _ in range(blocks)]
-    all_lse = [torch.randn(10, 17, device="cuda")[::2] for _ in range(blocks + 1)]
+    all_lse = [torch.randn(10, tokens, device="cuda")[::2] for _ in range(blocks + 1)]
     expected = current.float().clone()
     expected_lse = all_lse[0].clone()
     for part, weight in zip(parts, all_lse[1:]):

@@ -233,6 +233,12 @@ def profiling_kv_budget_bytes(config, num_slots: int) -> int:
         config.sparse_method,
         prefill_sparse_method=getattr(config, "prefill_sparse_method", None),
     )
+    if method == "deltakv" and int(config.full_layer_kv_quant_bits) == 0:
+        from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
+
+        return DeltaKVCacheManager.profiling_kv_budget_bytes(
+            config, num_slots, bytes_per_slot // int(layout.num_kv_layers),
+        )
     if method == "omnikv" and getattr(config, "enable_omnikv_offload", False):
         from sparseengine.engine.cache_manager.methods.omnikv.capacity import plan_omnikv_pools
 

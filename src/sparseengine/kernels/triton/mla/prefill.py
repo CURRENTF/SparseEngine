@@ -140,7 +140,9 @@ def attention_partial(q, k, v, cu_q, cu_k, max_q, max_k, *, scale, causal):
     return output, lse
 
 
-@triton.jit
+# Head-major LSE row strides vary with query length. Keep those lengths
+# dynamic, including their divisibility, across prefill chunk tails.
+@triton.jit(do_not_specialize=["QN", "l0", "pl0"])
 def _merge(
     O,
     L,

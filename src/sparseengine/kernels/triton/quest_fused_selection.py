@@ -180,9 +180,9 @@ def fused_exact_select_quest_paged_view(
         raise ValueError(f"Fused QuEST selection requires 0 < k < {width}, got {k}.")
     if int(page_size) <= 0:
         raise ValueError("Fused QuEST selection requires a positive page size.")
-    if width > 512:
+    if width > 2048:
         raise ValueError(
-            f"Profiled fused QuEST selection supports width <= 512, got {width}."
+            f"Profiled fused QuEST selection supports width <= 2048, got {width}."
         )
     output_width = int(output_page_table.shape[1])
     required_width = max(k + 1, triton.cdiv(int(token_budget), int(page_size))) if use_dense_fallback else k + 1

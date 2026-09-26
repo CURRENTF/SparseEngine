@@ -151,6 +151,20 @@ class SparseSelection:
     global_req_indices: torch.Tensor | None = None
     chunk_lens: torch.Tensor | None = None
     release_temp_slots: bool = False
+    page_selection: PageSelectionPlan | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PageSelectionPlan:
+    """Current-step page scores and policy; physical view buffers stay cache-owned."""
+
+    scores: torch.Tensor
+    row_page_slots: torch.Tensor
+    num_pages: torch.Tensor
+    previous_page_counts: torch.Tensor
+    previous_page_budget: int
+    token_budget: int
+    max_keep_tokens: int
 
 
 @dataclass(frozen=True)
@@ -1504,17 +1518,6 @@ class CacheManager(ABC):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Optional method-specific decode-time logical view builder."""
         return active_slots, req_indices, context_lens
-
-    def build_decode_selection_query(
-        self,
-        q: torch.Tensor,
-        *,
-        mla_latent: torch.Tensor | None = None,
-        mla_rope: torch.Tensor | None = None,
-    ) -> AttentionSelectionQuery:
-        """Translate an attention query into this cache manager's score space."""
-        del mla_latent, mla_rope
-        return q
 
     def build_decode_compute_view(
         self,

@@ -42,8 +42,19 @@ class DeltaKVLessMemoryCudaGraphCacheManager(DeltaKVLessMemoryCacheManager):
     def decode_graph_force_eager(self) -> bool:
         return _env_bool("SPARSEENGINE_DELTAKV_CUDAGRAPH_FORCE_EAGER", False)
 
+    @classmethod
+    def profiling_kv_budget_bytes(cls, config, num_slots: int, slot_bytes_per_layer: int) -> int:
+        return (
+            super().profiling_kv_budget_bytes(config, num_slots, slot_bytes_per_layer)
+            + cls.decode_cuda_graph_memory_reserve_bytes(config)
+        )
+
     def _decode_cuda_graph_memory_reserve_bytes(self) -> int:
-        if not bool(getattr(self.config, "decode_graph", False)):
+        return self.decode_cuda_graph_memory_reserve_bytes(self.config)
+
+    @staticmethod
+    def decode_cuda_graph_memory_reserve_bytes(config) -> int:
+        if not bool(getattr(config, "decode_graph", False)):
             return 0
 
         env_value = os.getenv("SPARSEENGINE_DELTAKV_CUDAGRAPH_RESERVE_BYTES")

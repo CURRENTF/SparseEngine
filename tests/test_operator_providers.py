@@ -197,6 +197,36 @@ def test_quest_fused_paged_view_is_the_default_h100_profile(
     assert isinstance(resolved.provider, H100ExactQuestPagedViewDispatch)
     assert resolved.report.selection_basis == "profile_override"
 
+
+@pytest.mark.parametrize(
+    ("graph_mode", "width", "expected_route"),
+    [(True, 256, "fused"), (True, 2048, "flashinfer"),
+     (False, 2048, "fused")],
+)
+def test_quest_profile_routes_dense_fallback_by_execution_mode(
+    graph_mode: bool, width: int, expected_route: str,
+) -> None:
+    spec = QuestPageSelectionOpSpec(score_dtype=torch.bfloat16, cuda_graph=graph_mode)
+    provider = H100ExactQuestPagedViewDispatch(op_spec=spec)
+    outputs = tuple(object() for _ in range(5))
+    with (
+        patch.object(provider.fused, "select_and_finalize_paged_view", return_value=outputs) as fused,
+        patch.object(provider.fallback, "select_and_finalize_paged_view", return_value=outputs) as fallback,
+        patch("sparseengine.operators.quest_selection.device_runtime.is_stream_capturing", return_value=False),
+    ):
+        result = provider.select_and_finalize_paged_view(
+            torch.empty(1, width, dtype=torch.bfloat16),
+            torch.empty(1, width, dtype=torch.int32),
+            torch.tensor([width - 1], dtype=torch.int32),
+            torch.tensor([width], dtype=torch.int32),
+            torch.tensor([width * 16], dtype=torch.int32),
+            k=1, page_size=16, token_budget=16,
+            outputs=outputs, use_dense_fallback=True,
+        )
+    assert result is outputs
+    assert fused.call_count == (expected_route == "fused")
+    assert fallback.call_count == (expected_route == "flashinfer")
+
 def test_quest_triton_exact_atomic_capability_is_portable_cuda() -> None:
     spec = QuestPageSelectionOpSpec(
         score_dtype=torch.bfloat16,

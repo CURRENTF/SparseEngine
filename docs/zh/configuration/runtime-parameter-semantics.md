@@ -11,6 +11,8 @@
 | `gpu_memory_utilization` | float | `0.9` | 引擎可使用的 GPU 显存比例。 |
 | `tensor_parallel_size` | int | `1` | Attention 张量并行度。 |
 | `decode_graph` | bool | `True` | 启用 decode CUDA Graph；需要 eager 执行或方法不支持时设为 `False`。 |
+| `decode_graph_capture_sizes` | `auto` / list[int] | `auto` | 捕获的 decode batch size。自动计划在图数量预算内优先覆盖小 batch，并将其余图分布到 `max_decoding_seqs`；显式列表须包含 `max_decoding_seqs`。 |
+| `decode_graph_startup_capture_limit` | int / None | `None`（32） | 启动时 decode graph 的数量上限；自动计划最多使用该数量。 |
 
 GLM-4.7-Flash、Qwen3.5/3.6 MoE 和 Gemma 4 MoE（稠密 MLP 分支）的
 DP=1 decode 默认并行执行 shared 和 routed 分支，包括已支持的 FP8 配置。
@@ -26,6 +28,7 @@ Prefill 保持串行；已有的 shared expert 融合路径继续使用融合。
 | --- | --- | --- | --- |
 | `max_num_batched_tokens` | int / `auto` | `auto` | 每轮调度的 token 预算；启动时按模型、TP 和设备显存估算。 |
 | `max_num_seqs_in_batch` | int | `32` | 单个 batch 的最大请求数。 |
+| `max_decoding_seqs` | int / None | `None` | decode batch 的最大请求数；默认跟随 `max_num_seqs_in_batch`，也是 graph 计划的最大捕获尺寸。 |
 | `engine_prefill_chunk_size` | int / `auto` / None | `auto` | 单请求每步的 prefill token 上限；`auto`（或 `None`）跟随最终 batch token 预算，并遵守方法约束。 |
 | `long_prefill_offload_threshold` | int | `65536` | 长请求阈值，单位 token；用于长请求整段 prefill、短请求批处理策略。 |
 | `mla_prefill_history_chunk_size` | int | `16384` | MLA prefill 每次处理的历史 KV token 上限；调小可减少历史工作区显存。 |

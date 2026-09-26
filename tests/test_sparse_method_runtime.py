@@ -94,7 +94,7 @@ def test_passthrough_runtime_preserves_cache_manager_batch_tensor_identity():
             req_indices=req_indices,
         ),
     )
-    runtime = create_sparse_method_runtime(_config("quest"), manager)
+    runtime = create_sparse_method_runtime(_config("retroinfer"), manager)
     forward_context = SimpleNamespace(is_prefill=True)
 
     runtime.prepare_step(

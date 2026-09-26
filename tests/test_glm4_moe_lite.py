@@ -136,6 +136,12 @@ def _construction_context(context: ParallelContext):
     with ExitStack() as stack:
         stack.enter_context(
             patch(
+                "sparseengine.models.glm4_moe_lite.resolve_glm_rope_provider",
+                return_value=lambda rope, positions, q, k: rope(positions, q, k),
+            )
+        )
+        stack.enter_context(
+            patch(
                 "sparseengine.models.glm4_moe_lite.get_parallel_context",
                 return_value=context,
             )
@@ -789,6 +795,7 @@ def test_prefill_q_assembly_preserves_projection_and_rotated_tail(monkeypatch, d
         _project_kv_history=None, _decode_absorbed_query=None,
         _reconstruct_decode_values=None, _project_output=lambda v, h: v,
         parallel_collectives=None,
+        prefill_rope=lambda rope, positions, q, k: rope(positions, q, k),
     )
     monkeypatch.setattr(module, "get_context", lambda: SimpleNamespace(is_prefill=True))
     before = compressed.clone()

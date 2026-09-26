@@ -74,7 +74,15 @@ class ParallelAllReduceHandle:
         if binding is None:
             return tensor
         if get_context().is_prefill:
-            return self._group.all_reduce(tensor)
+            op = binding.op
+            if (
+                op is None
+                or tensor.ndim < 2
+                or not 0 < tensor.numel() <= op.prefill_max_rows * binding.hidden_size
+                or not tensor.is_contiguous()
+            ):
+                return self._group.all_reduce(tensor)
+            return op.run_prefill(tensor)
         if binding.op is None:
             raise RuntimeError("Parallel all-reduce handle is not prepared.")
         return binding.op.run(tensor)
@@ -317,6 +325,7 @@ class ParallelCollectiveRuntime:
                     tuple(sorted(binding.roles)),
                     binding.group.ranks,
                     binding.max_rows,
+                    op.prefill_max_rows,
                     binding.hidden_size,
                     str(binding.dtype),
                     op.name,

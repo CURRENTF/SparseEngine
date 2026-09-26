@@ -11,6 +11,8 @@ Common runtime parameters below can be passed to `LLM(model, **kwargs)` or `Conf
 | `gpu_memory_utilization` | float | `0.9` | Fraction of GPU memory available to the engine. |
 | `tensor_parallel_size` | int | `1` | Attention tensor parallel size. |
 | `decode_graph` | bool | `True` | Enable decode CUDA Graphs. Set to `False` for eager execution or methods without graph support. |
+| `decode_graph_capture_sizes` | `auto` / list[int] | `auto` | Decode batch sizes to capture. Automatic planning captures every size up to the graph budget, then favors small batches and spreads the remaining sizes through `max_decoding_seqs`. An explicit list must include `max_decoding_seqs`. |
+| `decode_graph_startup_capture_limit` | int / None | `None` (32) | Maximum number of startup decode graphs. Automatic capture plans use up to this many graphs. |
 
 Shared and routed MoE branches run concurrently by default during DP=1 decode
 in GLM-4.7-Flash, Qwen3.5/3.6 MoE, and Gemma 4 MoE (its dense MLP branch),
@@ -28,6 +30,7 @@ model's gating, normalization, and reduction order are preserved.
 | --- | --- | --- | --- |
 | `max_num_batched_tokens` | int / `auto` | `auto` | Token budget per scheduling step, estimated at startup from model metadata, TP and device memory. |
 | `max_num_seqs_in_batch` | int | `32` | Maximum requests per batch. |
+| `max_decoding_seqs` | int / None | `None` | Maximum decode batch size; defaults to `max_num_seqs_in_batch` and sets the final graph capture size. |
 | `engine_prefill_chunk_size` | int / `auto` / None | `auto` | Per-request prefill token limit per step; `auto` (or `None`) follows the final batch token budget, subject to method constraints. |
 | `long_prefill_offload_threshold` | int | `65536` | Long-request threshold in tokens for the policy that prefills long requests in full and batches short requests. |
 | `mla_prefill_history_chunk_size` | int | `16384` | Maximum historical KV tokens processed at once during MLA prefill. Smaller values reduce history workspace memory. |

@@ -192,7 +192,8 @@ the number of observation layers and chunk/budget settings and require measureme
 
 | Runtime mechanism | Current methods | Meaning |
 | --- | --- | --- |
-| `PassThroughRuntime` | vanilla, QuEST | Controller selection is full; any native query-aware physical view remains cache-manager/provider owned. |
+| `PassThroughRuntime` | vanilla | Controller selection is full. |
+| `QuestRuntime` | QuEST | Scores current pages and prepares query-aware page selection; CacheManager owns physical views. |
 | `StreamingLLMRuntime` | StreamingLLM | Pass-through attention view followed by physical sink/recent retention. |
 | `ScoredCompactionRuntime` | SnapKV, PyramidKV | Shared score lifecycle and physical compaction; PyramidKV specializes layer budgets and triggers. |
 | `H2ORuntime` | H2O prefill and/or H2O decode | Prompt-score workspace and independent prefill/final-prompt compaction; optional decode probability accumulation and periodic eviction. |
@@ -251,10 +252,13 @@ Use the existing data-plane types:
 Do not pass method-specific tuples, config objects, hidden side-channel tensors,
 or method names through `layers/attention.py`.
 
-QuEST demonstrates an important case: its runtime returns the ordinary full
-logical selection, while `QuestCacheManager` and the selection provider use the
-current query to construct the native paged view. The runtime should not copy
-persistent page metadata merely to make the method look controller-owned.
+QuEST demonstrates query-aware page selection with cache-owned metadata.
+`QuestRuntime` decides whether to score, computes page scores from borrowed
+metadata, and returns a typed page-selection plan. `QuestCacheManager` owns the
+physical page tables and output buffers and turns the plan into a paged or MLA
+decode view. The explicit-KV provider may fuse top-k selection with physical
+view construction in one kernel. Persistent page metadata stays in the cache
+manager; the runtime does not copy or own it.
 
 ## Ordered Submission And Result Retirement
 

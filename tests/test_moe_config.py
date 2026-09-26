@@ -86,3 +86,58 @@ def test_h20_ep2_profile_misses_preserve_portfolio(change, num_tokens, stage):
     assert _glm_sm90_tp2_ep2_config(
         replace(shape, **change), num_tokens=num_tokens, stage=stage
     ) is None
+
+
+@pytest.mark.parametrize("stage", ["w13", "w2"])
+@pytest.mark.parametrize("num_tokens", range(1, 17))
+def test_h20_packed_decode_profile_resolves_measured_interval(stage, num_tokens):
+    from sparseengine.kernels.triton.moe_config import (
+        MoeGemmShape,
+        _glm_h20_packed_decode_config,
+    )
+
+    shape = MoeGemmShape("h20", (9, 0), torch.bfloat16, 5, 65, 2048, 1536)
+    config = _glm_h20_packed_decode_config(shape, num_tokens=num_tokens, stage=stage)
+    assert config is not None
+    resolved = resolve_moe_gemm_config(
+        dtype=shape.dtype,
+        num_tokens=num_tokens,
+        top_k=shape.top_k,
+        num_local_experts=shape.num_local_experts,
+        hidden_size=shape.hidden_size,
+        intermediate_size=shape.intermediate_size,
+        stage=stage,
+        device_name="NVIDIA H20",
+        device_capability=shape.capability,
+    )
+    assert resolved == config
+
+
+@pytest.mark.parametrize(
+    "change,num_tokens,stage",
+    [
+        ({}, 0, "w13"),
+        ({}, 17, "w13"),
+        ({}, 32, "w2"),
+        ({}, 4, "gate_up_swiglu"),
+        ({"hardware": "h100"}, 4, "w13"),
+        ({"capability": (8, 0)}, 4, "w13"),
+        ({"dtype": torch.float16}, 4, "w13"),
+        ({"num_local_experts": 64}, 4, "w13"),
+        ({"hidden_size": 4096}, 4, "w13"),
+        ({"intermediate_size": 768}, 4, "w13"),
+        ({"top_k": 4}, 4, "w13"),
+    ],
+)
+def test_h20_packed_decode_profile_misses(change, num_tokens, stage):
+    from dataclasses import replace
+
+    from sparseengine.kernels.triton.moe_config import (
+        MoeGemmShape,
+        _glm_h20_packed_decode_config,
+    )
+
+    shape = MoeGemmShape("h20", (9, 0), torch.bfloat16, 5, 65, 2048, 1536)
+    assert _glm_h20_packed_decode_config(
+        replace(shape, **change), num_tokens=num_tokens, stage=stage
+    ) is None

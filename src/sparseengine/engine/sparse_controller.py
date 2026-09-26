@@ -144,6 +144,8 @@ class SparseController:
         active_slots: torch.Tensor | None = None,
         req_indices: torch.Tensor | None = None,
         context_lens: torch.Tensor | None = None,
+        *,
+        selection_query=None,
     ) -> SparseSelection:
         del active_slots, req_indices, context_lens
         return self.runtime.build_decode_selection(
@@ -151,6 +153,7 @@ class SparseController:
                 layer_idx=layer_idx,
                 query=q,
                 forward_context=get_context(),
+                selection_query=selection_query,
             )
         )
 

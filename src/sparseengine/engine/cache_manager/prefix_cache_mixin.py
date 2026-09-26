@@ -43,6 +43,25 @@ class PrefixLookupCacheEntry:
     result: tuple[int, bytes | None, int]
 
 
+class _ResidentWeightCache:
+    def __init__(self, index: RadixPrefixIndex) -> None:
+        self.index = index
+        self.payload_epoch = index.resident_payload_epoch
+        self.totals: dict[str, tuple[frozenset[bytes], int]] = {}
+        self.weights: dict[bytes, int] = {}
+
+    def discard(self, removed_ids: set[bytes]) -> None:
+        for view, (block_ids, total) in self.totals.items():
+            removed = block_ids & removed_ids
+            if removed:
+                self.totals[view] = (
+                    block_ids - removed,
+                    total - sum(self.weights[block_id] for block_id in removed),
+                )
+        for block_id in removed_ids:
+            self.weights.pop(block_id, None)
+
+
 class PrefixLookupCache:
     """Live requests, the last lookup batch, and bounded individual TP lookups."""
 
@@ -260,7 +279,59 @@ def prefix_hit_capacity_counts(
 class PrefixCacheMixin:
     """Shared prefix-cache block materialization for cache managers."""
 
+    def _prefix_resident_weight_for_ids(
+        self, block_ids: frozenset[bytes], *, view: str = "explicit"
+    ) -> int:
+        index = self.prefix_cache
+        if index is None:
+            return 0
+        # Reference/priority changes alter membership, not physical weights.
+        # Reuse unchanged weights and adjust only the changed part of each view.
+        # Deletions invalidate only their own weights, including when an ID is
+        # reinserted with different storage before the next capacity query.
+        removed_ids = index.take_removed_block_ids_for_capacity()
+        cache = self._prefix_resident_weight_cache
+        if (cache is None or cache.index is not index
+                or cache.payload_epoch != index.resident_payload_epoch
+                or removed_ids is None):
+            cache = _ResidentWeightCache(index)
+            self._prefix_resident_weight_cache = cache
+        elif removed_ids:
+            cache.discard(removed_ids)
+        totals, weights = cache.totals, cache.weights
+        previous_ids, total = totals.get(view, (frozenset(), 0))
+        if previous_ids is block_ids:
+            return total
+        for block_id in previous_ids - block_ids:
+            total -= weights[block_id]
+        missing_block = False
+        for block_id in block_ids - previous_ids:
+            weight = weights.get(block_id)
+            if weight is None:
+                block = index.get_block(block_id)
+                if block is None:
+                    # An older immutable view can outlive a deletion. Do not
+                    # memoize absence across a later insertion of the same ID.
+                    missing_block = True
+                    continue
+                weight = (
+                    self._prefix_block_capacity_weight(block)
+                    if block.residency.device_present else 0
+                )
+                weights[block_id] = weight
+            total += weight
+        if missing_block:
+            totals.pop(view, None)
+        else:
+            totals[view] = (block_ids, int(total))
+        return int(total)
+
+    def _prefix_block_capacity_weight(self, block: PrefixCacheBlock) -> int:
+        """Physical capacity units owned by a device-resident block."""
+        raise NotImplementedError
+
     def _init_prefix_cache_runtime(self) -> None:
+        self._prefix_resident_weight_cache: _ResidentWeightCache | None = None
         self.seq_id_to_materialized_blocks: dict[int, dict[bytes, PrefixCacheBlock]] = {}
         self.prefix_runtime_states: dict[int, PrefixRuntimeState] = {}
         self.pending_prefix_blocks: dict[int, list[PendingPrefixBlock]] = {}
