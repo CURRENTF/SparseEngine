@@ -169,6 +169,24 @@ class DeepSeekV4CacheManager(CacheManager):
                 if compressor is not None:
                     self.compression_planners[compressor.provider.spec.ratio] = compressor.provider.kernels.prefill_plan
 
+    @classmethod
+    def create_prefill_history_manager(cls, config, parallel_context):
+        return cls(config, parallel_context,
+                   allocation_budget_bytes=cls.profiling_budget_bytes(config, config.num_kvcache_slots))
+
+    def seed_history(self, seq):
+        """Synthetic startup history retains the native physical contract."""
+        request = self._new_request(seq.seq_id)
+        length = int(seq.num_prefilled_tokens)
+        self._reserve(request, length)
+        for ratio, lease in request.leases.items():
+            family = self.families[ratio]
+            for pool in (*family.attention.values(), *family.index.values()):
+                for page in lease.pages:
+                    pool.byte_storage[page].zero_()
+            family.mark_materialized(lease, length//ratio)
+        request.length = length
+
     @property
     def num_free_slots(self):
         return min((f.allocator.num_free_pages*self.page_size*r for r, f in self.families.items()),
