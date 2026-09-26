@@ -265,7 +265,6 @@ class DeepSeekV4CacheManager(CacheManager):
                 raise ValueError("Native KV prefill length differs from scheduler position")
             end, offset = start+size, len(input_ids)
             self._reserve(request, end)
-            self._record_prefix_materialization(seq, [], None)
             history_len = min(start, self.window_size-1)
             histories.extend(request.row*self.window_size+(p%self.window_size) for p in range(start-history_len, start))
             layouts.append((offset, size, request.row, start, end, history_len))

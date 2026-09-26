@@ -109,7 +109,7 @@ def resolve_shared_kv_transform_provider(spec, *, device_index):
 
 @torch.compile(fullgraph=True, dynamic=True)
 def inverse_shared_kv_rope(values, positions, freqs):
-    """Torch baseline for the grouped output projection's inverse rotation."""
+    """Apply inverse interleaved RoPE before the grouped output projection."""
     tail = values[..., -64:].float().reshape(*values.shape[:-1], 32, 2)
     cs = freqs[positions].reshape(-1, 1, 32, 2)
     real, imag = tail.unbind(-1)
@@ -119,7 +119,7 @@ def inverse_shared_kv_rope(values, positions, freqs):
 
 
 class GroupedSharedKVProjection:
-    """Prepared BF16 cuBLAS baseline for block-FP8 grouped output weights.
+    """Prepared BF16 cuBLAS projection for block-FP8 grouped output weights.
 
     The checkpoint's 128x128 scales apply before grouping. This object owns
     only the converted physical weight; the loader releases raw FP8 storage.

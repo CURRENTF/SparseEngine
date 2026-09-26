@@ -96,8 +96,8 @@ class FlashInferHyperConnectionProvider(HyperConnectionProvider):
             raise TypeError("mHC projection, scale and bias must be FP32")
         if not residual.is_cuda or any(t.device != residual.device for t in (projection, scale, base)):
             raise ValueError("mHC inputs must share a CUDA device")
-        # The checkpoint projection is FP32. Keep this baseline separate from
-        # the external mix/Sinkhorn kernel so projection can later be fused.
+        # The checkpoint projection is FP32; the external kernel consumes its
+        # dot products to normalize and mix the residual streams.
         dot = torch.nn.functional.linear(residual.flatten(1).float(), projection)
         return self._pre(
             dot, residual, scale, base,
@@ -116,8 +116,8 @@ class FlashInferHyperConnectionProvider(HyperConnectionProvider):
             raise ValueError("mHC head residual/projection differs from the bound contract")
         if scale.numel() != 1 or base.shape != (streams,):
             raise ValueError("mHC head requires one scale and one bias per stream")
-        return _head_reference(residual, projection, scale, base,
-                               self.spec.rms_eps, self.spec.mixing_eps)
+        return _mix_head(residual, projection, scale, base,
+                         self.spec.rms_eps, self.spec.mixing_eps)
 
 
 def resolve_hyper_connection_provider(spec: HyperConnectionOpSpec, *, device_index: int):
@@ -128,7 +128,7 @@ def resolve_hyper_connection_provider(spec: HyperConnectionOpSpec, *, device_ind
 
 
 @torch.compile(fullgraph=True, dynamic=True)
-def _head_reference(residual, projection, scale, base, rms_eps, mixing_eps):
+def _mix_head(residual, projection, scale, base, rms_eps, mixing_eps):
     flat = residual.flatten(1).float()
     mixes = torch.nn.functional.linear(flat, projection)
     mixes = mixes * torch.rsqrt(flat.square().mean(-1, keepdim=True) + rms_eps)

@@ -109,15 +109,14 @@ class SGLCompressedIndexProvider:
         rotated = self._hadamard(normalized_rotated_keys, scale=128 ** -0.5)
         payload = torch.empty((rows, 64), dtype=torch.uint8, device=pages.device)
         scales = torch.empty((rows,), dtype=torch.int32, device=pages.device)
-        if rows:
-            self._compute._quantize_fp4_indexer_rows[( (rows + 7) // 8, )](
-                rotated, payload, scales, rows, 8, BLOCK_N=128, GROUP_N=32,
-                RNE=True, num_warps=4,
-            )
-            self._compute._store_fp4_index_k_cache_kernel[(rows,)](
-                payload, scales, pages, slots, self.spec.page_size,
-                pages.stride(0), BLOCK=64,
-            )
+        self._compute._quantize_fp4_indexer_rows[((rows + 7) // 8,)](
+            rotated, payload, scales, rows, 8, BLOCK_N=128, GROUP_N=32,
+            RNE=True, num_warps=4,
+        )
+        self._compute._store_fp4_index_k_cache_kernel[(rows,)](
+            payload, scales, pages, slots, self.spec.page_size,
+            pages.stride(0), BLOCK=64,
+        )
 
     def _validate_pages(self, pages):
         if (pages.dtype != torch.uint8 or pages.ndim != 2 or

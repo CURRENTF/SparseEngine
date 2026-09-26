@@ -327,19 +327,6 @@ def _gemma4_checkpoint(outer, config, _raw, quantization, topology) -> None:
         raise ValueError("Gemma 4 MoE requires a positive num_experts.")
 
 
-CHECKPOINT_VALIDATORS = {
-    "llama": _llama_checkpoint,
-    "qwen2": _qwen2_checkpoint,
-    "qwen3": _qwen3_checkpoint,
-    "qwen3_moe": _qwen3_moe_checkpoint,
-    "qwen3_5": _qwen35_checkpoint,
-    "qwen3_5_moe": _qwen35_moe_checkpoint,
-    "minimax_m2": _minimax_checkpoint,
-    "gemma4": _gemma4_checkpoint,
-}
-
-
-
 def _deepseek_v4_checkpoint(outer, config, raw, quantization, topology):
     _validate_architecture("DeepSeek V4", outer, "DeepseekV4ForCausalLM")
     _validate_bf16("DeepSeek V4", config, "BF16 activations")
@@ -359,4 +346,14 @@ def _deepseek_v4_checkpoint(outer, config, raw, quantization, topology):
         raise ValueError("DeepSeek V4 requires valid native compression ratios")
 
 
-CHECKPOINT_VALIDATORS["deepseek_v4"] = _deepseek_v4_checkpoint
+CHECKPOINT_VALIDATORS = {
+    "deepseek_v4": _deepseek_v4_checkpoint,
+    "llama": _llama_checkpoint,
+    "qwen2": _qwen2_checkpoint,
+    "qwen3": _qwen3_checkpoint,
+    "qwen3_moe": _qwen3_moe_checkpoint,
+    "qwen3_5": _qwen35_checkpoint,
+    "qwen3_5_moe": _qwen35_moe_checkpoint,
+    "minimax_m2": _minimax_checkpoint,
+    "gemma4": _gemma4_checkpoint,
+}
