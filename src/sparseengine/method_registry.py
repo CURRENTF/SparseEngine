@@ -38,6 +38,7 @@ SPARSE_AUXILIARY_PREFILL_PROMPTS = {
     "kvzip": "\nReconstruct the following context span exactly:\n",
 }
 SPARSE_METHOD_MODEL_TYPES = {
+    "deepseek_v4": frozenset({"deepseek_v4"}),
     "palu": frozenset({"llama", "qwen3"}),
     "kvzip": frozenset({"qwen2", "qwen3", "llama"}),
 }
@@ -45,6 +46,7 @@ SPARSE_METHOD_MODEL_TYPES = {
 QUANTIZED_KV_METHODS = frozenset({"kivi", "turboquant", "fp8_kv"})
 
 CANONICAL_SPARSE_METHODS = {
+    "deepseek_v4",
     "palu",
     "",
     "streamingllm",
@@ -173,6 +175,7 @@ def prefill_sparse_method_fingerprint(config) -> dict[str, object]:
     return payload
 
 PREFIX_CACHE_SUPPORTED_METHODS = {
+    "deepseek_v4",
     "",
     "streamingllm",
     "omnikv",
@@ -226,6 +229,7 @@ _PREFILL_POSTHOC_SCORE_METHODS = frozenset(
 # shared table, and QuEST does not apply its query-aware page selection until
 # decode. SnapKV-family managers and DeltaKV own per-layer physical tables.
 _PREFILL_LAYER_VARYING_PAGE_TABLE = {
+    "deepseek_v4": True,
     "palu": False,
     **dict.fromkeys(QUANTIZED_KV_METHODS, False),
     "": False,
@@ -449,6 +453,10 @@ GEMMA4_COMPATIBILITY = ModelRuntimeCompatibility(
 )
 
 MODEL_RUNTIME_COMPATIBILITY = {
+    "deepseek_v4": ModelRuntimeCompatibility(
+        sparse_methods=frozenset({"deepseek_v4"}), prefix_cache_methods=frozenset({"deepseek_v4"}),
+        decode_graph_methods=frozenset({"deepseek_v4"}),
+    ),
     **{
         model_type: DENSE_MODEL_COMPATIBILITY
         for model_type in ("qwen2", "qwen3", "qwen3_5", "llama")
@@ -482,6 +490,7 @@ def decode_graph_path_id(method: str) -> str:
 
 
 _DEFAULT_PREFILL_POLICY_BY_METHOD = {
+    "deepseek_v4": PREFILL_POLICY_ALL_CHUNKED,
     "palu": PREFILL_POLICY_ALL_CHUNKED,
     **dict.fromkeys(QUANTIZED_KV_METHODS, PREFILL_POLICY_ALL_CHUNKED),
     "": PREFILL_POLICY_ALL_CHUNKED,

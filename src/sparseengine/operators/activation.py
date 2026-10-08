@@ -149,3 +149,9 @@ __all__ = [
     "TritonSiluAndMulProvider",
     "resolve_silu_and_mul_provider",
 ]
+
+
+@torch.compile(fullgraph=True, dynamic=True)
+def clipped_swiglu(gate, up, limit: float):
+    # V4 clips the gate only above and the up branch on both sides.
+    return torch.nn.functional.silu(gate.clamp(max=limit))*up.clamp(-limit, limit)

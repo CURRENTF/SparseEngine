@@ -71,14 +71,21 @@ def profile_prefill_history(runner):
     context_len = int(config.max_model_len) - 1
     chunk_lengths = profiling_prefill_chunk_lengths(config)
     prompt_lengths = (context_len, *chunk_lengths[1:])
-    config.sparse_method = ""
-    config.prefill_sparse_method = None
     config.enable_prefix_caching = False
     config.enable_prefix_cache_offload = False
     config.resolved_prefix_cache_mode = "disabled"
     config.startup_cache_phase = "profiling"
     config.num_kvcache_slots = sum(prompt_lengths)
-    manager = PrefillHistoryCacheManager(config, runner.parallel_context)
+    history_factory = getattr(runner.cache_manager, "create_prefill_history_manager", None)
+    if callable(history_factory):
+        manager = history_factory(config, runner.parallel_context)
+    else:
+        config.sparse_method = ""
+        config.prefill_sparse_method = None
+        manager = PrefillHistoryCacheManager(config, runner.parallel_context)
+    bind_layers = getattr(manager, "set_model_layers", None)
+    if callable(bind_layers):
+        bind_layers(runner.model.model.layers)
     controller = SparseController(config, manager)
     runtime = RuntimeState(config, manager, runner.recurrent_state_manager)
     seqs = []

@@ -1,15 +1,74 @@
 from __future__ import annotations
 
+import sys
+from types import ModuleType
+
 import pytest
 import torch
 
 from sparseengine.operators.moe_router import (
+    FlashInferHashSqrtSoftplusRouterProvider,
     GlmBiasedSigmoidRouterProvider,
     MiniMaxBiasedSigmoidRouterProvider,
     MoeRouterOpSpec,
     TritonMoeRouterProvider,
 )
 from sparseengine.platforms import DeviceCaps, PlatformEnum
+from sparseengine.operators.registry import SupportStatus
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_hash_router_reports_dependency_failure_on_a_compatible_cuda_device(monkeypatch, installed):
+    # A compatible non-SM90 target used to bypass dependency validation and
+    # return an architecture rejection, hiding absent or broken FlashInfer.
+    caps = DeviceCaps(platform=PlatformEnum.CUDA, device_type="cuda", device_index=0,
+                      device_name="test", compute_capability=(10, 0),
+                      supports_graph_capture=True, supports_bfloat16=True)
+    spec = MoeRouterOpSpec(256, 6, torch.float32, True, True, "hash_sqrtsoftplus")
+    monkeypatch.setattr(
+        "sparseengine.operators.moe_router.importlib.util.find_spec",
+        lambda name: object() if installed else None,
+    )
+    flashinfer = ModuleType("flashinfer")
+    flashinfer.fused_moe = ModuleType("flashinfer.fused_moe")
+    monkeypatch.setitem(sys.modules, "flashinfer", flashinfer)
+    monkeypatch.setitem(sys.modules, "flashinfer.fused_moe", flashinfer.fused_moe)
+    result = FlashInferHashSqrtSoftplusRouterProvider.supports(spec, caps)
+    assert result.status is (
+        SupportStatus.DEPENDENCY_BROKEN if installed else SupportStatus.DEPENDENCY_ABSENT
+    )
+    assert "FlashInfer" in result.reason
+
+
+@pytest.mark.parametrize("upstream_support", [False, True])
+def test_hash_router_delegates_architecture_eligibility_to_upstream(monkeypatch, upstream_support):
+    # Installed providers must honor upstream eligibility rather than a second
+    # local architecture list; the mock establishes delegation, not GPU correctness.
+    caps = DeviceCaps(platform=PlatformEnum.CUDA, device_type="cuda", device_index=0,
+                      device_name="test", compute_capability=(10, 0),
+                      supports_graph_capture=True, supports_bfloat16=True)
+    spec = MoeRouterOpSpec(256, 6, torch.float32, True, True, "hash_sqrtsoftplus")
+    queried = []
+
+    def hash_topk(*args, **kwargs):
+        pytest.fail("Eligibility checks must not execute the kernel")
+
+    def supports_capability(capability):
+        queried.append(capability)
+        return upstream_support
+
+    hash_topk.is_compute_capability_supported = supports_capability
+    flashinfer = ModuleType("flashinfer")
+    flashinfer.fused_moe = ModuleType("flashinfer.fused_moe")
+    flashinfer.fused_moe.hash_topk = hash_topk
+    monkeypatch.setitem(sys.modules, "flashinfer", flashinfer)
+    monkeypatch.setitem(sys.modules, "flashinfer.fused_moe", flashinfer.fused_moe)
+    monkeypatch.setattr(
+        "sparseengine.operators.moe_router.importlib.util.find_spec", lambda name: object(),
+    )
+    result = FlashInferHashSqrtSoftplusRouterProvider.supports(spec, caps)
+    assert queried == [caps.compute_capability[0] * 10 + caps.compute_capability[1]]
+    assert result.supported is upstream_support
 
 
 def _caps() -> DeviceCaps:

@@ -8,6 +8,7 @@ from sparseengine.method_registry import (
 )
 
 from .base import SparseMethodRuntime
+from .deepseek_v4 import DeepSeekV4Runtime
 from .dynamic import DeltaKVRuntime, OmniKVRuntime
 from .h2o import H2ORuntime
 from .kvzip import KVzipRuntime
@@ -20,6 +21,7 @@ from .streamingllm import StreamingLLMRuntime
 
 
 RUNTIME_BINDINGS: dict[str, type[SparseMethodRuntime]] = {
+    "deepseek_v4": DeepSeekV4Runtime,
     "palu": PassThroughRuntime,
     "kivi": PassThroughRuntime,
     "turboquant": PassThroughRuntime,

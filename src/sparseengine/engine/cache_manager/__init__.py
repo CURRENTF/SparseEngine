@@ -15,10 +15,12 @@ from .base import (
     MlaLatentPayload,
     MlaLatentSelectionQuery,
     MlaLatentWrite,
+    PackedSharedKVPayload,
     PagedDecodeViewMeta,
     PageSelectionPlan,
     PrefillComputeView,
     SparseSelection,
+    SharedKVPayload,
 )
 
 __all__ = [
@@ -36,10 +38,12 @@ __all__ = [
     "MlaLatentPayload",
     "MlaLatentSelectionQuery",
     "MlaLatentWrite",
+    "PackedSharedKVPayload",
     "PagedDecodeViewMeta",
     "PageSelectionPlan",
     "PrefillComputeView",
     "SparseSelection",
+    "SharedKVPayload",
     "StandardCacheManager",
     "QuantizedCacheManager",
     "StreamingLLMCacheManager",

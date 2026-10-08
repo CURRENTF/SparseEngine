@@ -55,6 +55,8 @@ class MemoryOracle(Protocol):
     def decode_step_free_slots(self) -> int: ...
     def decode_step_free_slots_for(self, seq: Sequence) -> int: ...
     def decode_step_reservation_cost(self, seq: Sequence) -> int: ...
+    def step_allocation_budgets(self, *, is_prefill: bool) -> dict[str, int] | None: ...
+    def step_allocation_costs(self, seq: Sequence, tokens: int) -> dict[str, int]: ...
     def prompt_admission_free_slots(self) -> int: ...
     def prompt_admission_budgets(self, waiting_seqs: deque[Sequence], engine_prefill_chunk_size: int) -> dict[str, int]: ...
     def prompt_admission_costs(self, seq: Sequence) -> dict[str, int]: ...
@@ -617,10 +619,17 @@ class RuntimeState:
             raise ValueError("Startup decode capacity check requires a non-empty batch.")
         with self.scheduler_capacity_snapshot():
             remaining = self.decode_step_free_slots()
+            budgets = self.step_allocation_budgets(is_prefill=False)
             for seq in seqs:
                 cost = self.decode_step_reservation_cost(seq)
                 if min(remaining, self.decode_step_free_slots_for(seq)) < cost:
                     return False
+                if budgets is not None:
+                    costs = self.step_allocation_costs(seq, 1)
+                    if any(need > budgets.get(name, 0) for name, need in costs.items()):
+                        return False
+                    for name, need in costs.items():
+                        budgets[name] -= need
                 remaining -= cost
         return True
 
@@ -698,6 +707,21 @@ class RuntimeState:
 
     def decode_step_reservation_cost(self, seq: Sequence) -> int:
         return int(self.cache_manager.decode_step_reservation_cost(seq))
+
+    def step_allocation_budgets(self, *, is_prefill: bool) -> dict[str, int] | None:
+        get_budgets = getattr(self.cache_manager, "step_allocation_budgets", None)
+        budgets = get_budgets() if callable(get_budgets) else None
+        if budgets is None:
+            return None
+        budgets = dict(budgets)
+        if is_prefill:
+            reserved = self.decode_reservations.outstanding()
+            budgets = {name: max(0, free - reserved.get(name, 0))
+                       for name, free in budgets.items()}
+        return budgets
+
+    def step_allocation_costs(self, seq: Sequence, tokens: int) -> dict[str, int]:
+        return self.cache_manager.step_allocation_costs(seq, tokens)
 
     def prompt_admission_free_slots(self) -> int:
         free_slots = int(self.cache_manager.prompt_admission_free_slots())

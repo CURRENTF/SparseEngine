@@ -20,6 +20,7 @@ parallel size must use that value.
 | GLM-4.7-Flash | `glm4_moe_lite` | BF16 / experimental per-tensor FP8 | ✅ | ✅⁵ | ✅ |
 | Gemma 4 Dense / MoE | `gemma4` | BF16 / FP16 | ✅ | 1 only | ✅ (MoE only) |
 | Llama 3 / 3.1 | `llama` | BF16 / FP16 / block FP8 | ✅ | 1 only | 1 only |
+| [DeepSeek V4 Flash-0731](deepseek-v4.md) (experimental) | `deepseek_v4` | block FP8 / MXFP4 / BF16 / FP32 | 1 only | DP=EP | EP=DP |
 | MiniMax M2.7 | `minimax_m2` | block FP8 with BF16 non-quantized weights | ✅ | ✅ | ✅ |
 
 TP is limited to sizes 1 through 8 and requires the checkpoint dimensions,
@@ -54,6 +55,8 @@ GLM per-tensor FP8 loading accepts E4M3 weights with a BF16 scalar
 and a device with a compatible native FP8 provider. Weight precision does not
 change the MLA KV-cache dtype. This experimental path does not imply a
 performance improvement over BF16; compare matched workloads before deployment.
+
+DeepSeek V4 uses only its native `deepseek_v4` method; the generic method matrix below does not apply. See its [runtime requirements](deepseek-v4.md).
 
 ## Sparse Method Support
 

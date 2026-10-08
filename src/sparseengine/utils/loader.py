@@ -41,6 +41,29 @@ class SafetensorsShard:
     tensors: dict[str, torch.Tensor]
 
 
+def _canonical_block_scale_name(model: nn.Module | None, name: str) -> str:
+    """Normalize declared checkpoint block-scale aliases at the I/O boundary."""
+    for suffix in tuple(getattr(model, "checkpoint_block_scale_suffixes", ())):
+        if not suffix.startswith(".") or suffix in {".weight", ".weight_scale"}:
+            raise ValueError(f"Invalid checkpoint block-scale suffix {suffix!r}.")
+        if name.endswith(suffix):
+            return name[:-len(suffix)] + ".weight_scale_inv"
+    return name
+
+
+def _normalize_block_scale_names(shard: SafetensorsShard, model: nn.Module) -> None:
+    # Rank-local checkpoints are read without slicing/model filtering.
+    for name in list(shard.metadata):
+        canonical = _canonical_block_scale_name(model, name)
+        if canonical == name:
+            continue
+        if canonical in shard.metadata:
+            raise ValueError(f"Checkpoint contains duplicate block scales for {canonical!r}.")
+        shard.metadata[canonical] = shard.metadata.pop(name)
+        if name in shard.tensors:
+            shard.tensors[canonical] = shard.tensors.pop(name)
+
+
 def _resolve_weight_target(
     model: nn.Module,
     target_parameter_name: str,
@@ -115,15 +138,18 @@ def _read_safetensors_shard(
     with safe_open(path, "pt", "cpu") as handle:
         metadata: dict[str, TensorMetadata] = {}
         tensors: dict[str, torch.Tensor] = {}
-        for key in handle.keys():
-            tensor_slice = handle.get_slice(key)
+        for source_key in handle.keys():
+            key = _canonical_block_scale_name(model, source_key)
+            if key in metadata:
+                raise ValueError(f"Checkpoint contains duplicate tensor or block scale {key!r}.")
+            tensor_slice = handle.get_slice(source_key)
             source_shape = tuple(int(dim) for dim in tensor_slice.get_shape())
             metadata[key] = TensorMetadata(
                 shape=source_shape,
                 dtype=str(tensor_slice.get_dtype()),
             )
             if model is None:
-                tensors[key] = handle.get_tensor(key)
+                tensors[key] = handle.get_tensor(source_key)
                 continue
 
             scale_suffix = (
@@ -145,7 +171,7 @@ def _read_safetensors_shard(
             tensors[key] = (
                 tensor_slice[rank_slice]
                 if rank_slice is not None
-                else handle.get_tensor(key)
+                else handle.get_tensor(source_key)
             )
         for key in list(metadata):
             if not key.endswith(".weight_scale"):
@@ -714,6 +740,7 @@ def load_model(
             num_threads=num_threads,
             model=None if checkpoint_is_rank_local else model,
         ):
+            _normalize_block_scale_names(shard, model)
             tensors = shard.tensors
             loaded_tensor_bytes += sum(
                 tensor.numel() * tensor.element_size()

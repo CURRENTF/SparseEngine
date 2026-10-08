@@ -422,21 +422,57 @@ class Scheduler:
         logger.warning(f'驱逐请求 id = {victim.seq_id} | slots={self.memory_oracle.free_slot_stats()}')
         return [], False, preempted_seqs
 
+    def _step_allocation_budgets(self, *, is_prefill: bool) -> dict[str, int] | None:
+        get_budgets = getattr(self.memory_oracle, "step_allocation_budgets", None)
+        return get_budgets(is_prefill=is_prefill) if callable(get_budgets) else None
+
+    def _max_step_allocation_tokens(
+        self, seq: Sequence, limit: int, budgets: dict[str, int] | None,
+    ) -> int:
+        if budgets is None or limit <= 0:
+            return limit
+
+        def fits(tokens):
+            return all(need <= budgets.get(name, 0) for name, need in
+                       self.memory_oracle.step_allocation_costs(seq, tokens).items())
+
+        if fits(limit):
+            return limit
+        # Append costs are monotone, including page rounding and tail COW.
+        low, high = 0, limit
+        while low < high:
+            middle = (low + high + 1) // 2
+            if fits(middle):
+                low = middle
+            else:
+                high = middle - 1
+        return low
+
+    def _charge_step_allocations(
+        self, seq: Sequence, tokens: int, budgets: dict[str, int] | None,
+    ) -> None:
+        if budgets is not None:
+            for name, need in self.memory_oracle.step_allocation_costs(seq, tokens).items():
+                budgets[name] -= need
+
     def _eligible_decode_batch(self) -> list[Sequence]:
         """Mirror decode selection without popping or preempting."""
         if not self.decoding:
             return []
         free = max(0, int(self.memory_oracle.decode_step_free_slots()))
+        budgets = self._step_allocation_budgets(is_prefill=False)
         batch = []
         for seq in self.decoding:
             if seq.num_completion_tokens + seq.num_pending_outputs >= seq.max_tokens:
                 continue
             cost = int(self.memory_oracle.decode_step_reservation_cost(seq))
-            if min(free, int(self.memory_oracle.decode_step_free_slots_for(seq))) < cost:
+            if (min(free, int(self.memory_oracle.decode_step_free_slots_for(seq))) < cost
+                    or self._max_step_allocation_tokens(seq, 1, budgets) == 0):
                 if free <= 0:
                     break
                 continue
             free -= cost
+            self._charge_step_allocations(seq, 1, budgets)
             batch.append(seq)
             if len(batch) == self.max_decoding_seqs:
                 break
@@ -554,6 +590,9 @@ class Scheduler:
             admission_budgets = {}
             margin_batched_tokens = 0
         decode_logical_free_count = max(0, int(self.memory_oracle.decode_step_free_slots()))
+        prefill_allocation_budgets = (
+            self._step_allocation_budgets(is_prefill=True) if self.waiting else None
+        )
         deferred_prompt_failure: tuple[Sequence, str, int, int] | None = None
         blocked_prefill_step_failure: tuple[Sequence, int, int] | None = None
         blocked_prefill_capacity_failure: tuple[Sequence, int, int, int] | None = None
@@ -633,6 +672,15 @@ class Scheduler:
                         num_batched_tokens=num_batched_tokens,
                         step_free_count=candidate_step_free_count,
                     )
+                    allocation_tokens = self._max_step_allocation_tokens(
+                        seq, can_prefill_tokens, prefill_allocation_budgets,
+                    )
+                    if can_prefill_tokens > 0 and allocation_tokens < can_prefill_tokens:
+                        candidate_step_free_count = min(candidate_step_free_count, allocation_tokens)
+                    if target_mode == PREFILL_EXECUTION_CHUNKED:
+                        can_prefill_tokens = allocation_tokens
+                    elif allocation_tokens < can_prefill_tokens:
+                        can_prefill_tokens = 0
                     proposed_prefill_tokens = int(can_prefill_tokens)
                     can_prefill_tokens = self._respect_min_final_prefill_chunk(
                         seq,
@@ -808,6 +856,7 @@ class Scheduler:
                         can_prefill_tokens,
                     )
                     step_free_count = max(0, step_free_count - int(prefill_reservation_cost))
+                    self._charge_step_allocations(seq, can_prefill_tokens, prefill_allocation_budgets)
                     seq.status = SequenceStatus.RUNNING
                     scheduled_seqs.append(seq)
                     if target_mode == PREFILL_EXECUTION_RAW_OFFLOAD:
@@ -834,6 +883,7 @@ class Scheduler:
         # --- 阶段 2: Decode 调度 ---
         # 只有在没有 Prefill 任务时才处理增量生成任务。
         decode_scan_budget = len(self.decoding)
+        decode_allocation_budgets = self._step_allocation_budgets(is_prefill=False)
         blocked_decode_victim: Sequence | None = None
         while (
             self.decoding
@@ -852,7 +902,8 @@ class Scheduler:
                 int(self.memory_oracle.decode_step_free_slots_for(seq)),
             )
             decode_reservation_cost = int(self.memory_oracle.decode_step_reservation_cost(seq))
-            if candidate_decode_free < decode_reservation_cost:
+            if (candidate_decode_free < decode_reservation_cost
+                    or self._max_step_allocation_tokens(seq, 1, decode_allocation_budgets) == 0):
                 if decode_logical_free_count > 0:
                     if blocked_decode_victim is None:
                         blocked_decode_victim = seq
@@ -881,6 +932,7 @@ class Scheduler:
             else:
                 # Reserve the cache-manager-specific decode capacity for this step.
                 decode_logical_free_count -= decode_reservation_cost
+                self._charge_step_allocations(seq, 1, decode_allocation_budgets)
                 num_batched_seqs += 1
                 scheduled_seqs.append(seq)
                 # logger.debug('Add a decode req.')

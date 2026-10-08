@@ -94,7 +94,7 @@ def test_passthrough_runtime_preserves_cache_manager_batch_tensor_identity():
             req_indices=req_indices,
         ),
     )
-    runtime = create_sparse_method_runtime(_config("retroinfer"), manager)
+    runtime = create_sparse_method_runtime(_config(""), manager)
     forward_context = SimpleNamespace(is_prefill=True)
 
     runtime.prepare_step(
@@ -114,3 +114,19 @@ def test_passthrough_runtime_preserves_cache_manager_batch_tensor_identity():
     assert selection.kind == "full"
     assert selection.context_lens is context_lens
     assert selection.req_indices is req_indices
+
+
+def test_controller_forwards_prefill_selection_query_without_interpreting_it(monkeypatch):
+    from sparseengine.engine import sparse_controller as facade
+    controller = object.__new__(facade.SparseController)
+    context, query, selection = object(), object(), object()
+    received = []
+    def build(request):
+        received.append(request)
+        return selection
+    controller.runtime = SimpleNamespace(build_prefill_selection=build)
+    monkeypatch.setattr(facade, "get_context", lambda: context)
+    assert controller.get_prefill_selection(3, selection_query=query) is selection
+    assert received[0].layer_idx == 3
+    assert received[0].forward_context is context
+    assert received[0].selection_query is query
