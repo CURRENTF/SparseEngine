@@ -201,18 +201,11 @@ This project is inspired by and/or references ideas and implementation technique
 
 ## Citation
 ```text
-@article{hao2026deltakv,
-  title={DeltaKV: Residual-Based KV Cache Compression via Long-Range Similarity},
-  author={Hao, Jitai and Huang, Qiang and Wang, Yaowei and Zhang, Min and Yu, Jun},
-  journal={arXiv preprint arXiv:2602.08005},
+@article{hao2026sparseengine,
+  title={SparseEngine: Sparse-First Inference Engine},
+  author={Hao, Jitai and Gu, Quansheng and Huang, Qiang and Yu, Jun},
+  journal={arXiv preprint arXiv:2609.39068},
   year={2026}
-}
-
-@inproceedings{hao2025omnikv,
-  title={Omnikv: Dynamic context selection for efficient long-context llms},
-  author={Hao, Jitai and Zhu, Yuke and Wang, Tian and Yu, Jun and Xin, Xin and Zheng, Bo and Ren, Zhaochun and Guo, Sheng},
-  booktitle={The Thirteenth International Conference on Learning Representations},
-  year={2025}
 }
 ```
 
