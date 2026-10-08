@@ -3,8 +3,8 @@
 
   <p>
     <a href="https://deepwiki.com/CURRENTF/SparseEngine"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-    <a href="https://arxiv.org/abs/2602.08005"><img src="https://img.shields.io/badge/arXiv-2602.08005-b31b1b.svg" alt="arXiv"></a>
-    <a href="https://arxiv.org/pdf/2602.08005.pdf"><img src="https://img.shields.io/badge/PDF-download-brightgreen.svg" alt="PDF"></a>
+    <a href="https://arxiv.org/abs/2609.39068"><img src="https://img.shields.io/badge/arXiv-2609.39068-b31b1b.svg" alt="arXiv"></a>
+    <a href="https://arxiv.org/pdf/2609.39068.pdf"><img src="https://img.shields.io/badge/PDF-download-brightgreen.svg" alt="PDF"></a>
   </p>
 </div>
 
