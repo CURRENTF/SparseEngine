@@ -1,0 +1,68 @@
+{
+  "entrypoint": "benchmark/efficiency/bench_probe.py",
+  "common_args": {
+    "engine": "sparseengine",
+    "model_path": "${MODEL_PATH}",
+    "sparse_method": "vanilla",
+    "tensor_parallel_size": 1,
+    "expert_parallel_size": 2,
+    "batch_sizes": [
+      16
+    ],
+    "prompt_lens": [
+      8192
+    ],
+    "output_lens": [
+      128
+    ],
+    "max_num_batched_tokens": 8192,
+    "gpu_memory_utilization": 0.8,
+    "num_warmups": 1,
+    "num_iters": 2,
+    "seed": 42
+  },
+  "hyper_params": {
+    "data_parallel_size": 2,
+    "moe_backend": "agrs",
+    "max_num_seqs_in_gpu": 32,
+    "engine_prefill_chunk_size": 1024,
+    "decode_reservation_tokens": 256,
+    "decode_graph": true,
+    "decode_graph_capture_sizes": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "enable_profiler": true
+  },
+  "fixed": {
+    "scenario": "fixed",
+    "prompt_length_jitter": 0,
+    "output_length_jitter": 0
+  },
+  "churn": {
+    "scenario": "churn",
+    "churn_request_multiplier": 4,
+    "prompt_length_jitter": 0.5,
+    "output_length_jitter": 0.75
+  },
+  "eager_override": {
+    "decode_graph": false
+  },
+  "decoding": {
+    "temperature": 0,
+    "top_p": 1,
+    "top_k": 1,
+    "ignore_eos": true
+  },
+  "nsight_args": [
+    "--trace=cuda,nvtx,osrt",
+    "--sample=none",
+    "--cpuctxsw=none",
+    "--cuda-graph-trace=node"
+  ],
+  "annotation": "diagnostic NVTX wrappers and host timings without added CUDA synchronization; measured epochs only",
+  "unprofiled_churn_annotation": "coordinator step RPC wall time only; no CUDA synchronization; row-write outside timed RPC",
+  "correctness_command": "python -m pytest -q -p no:cacheprovider tests/test_moe_communication.py -k \"two-rank-bf16 and default\""
+}

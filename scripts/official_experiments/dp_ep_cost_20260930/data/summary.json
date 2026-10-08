@@ -1,0 +1,1419 @@
+{
+  "status": "completed",
+  "git_commit": "6feb77078ed25beae07cc977b52b9a9fe2d47b20",
+  "model": "GLM-4.7-Flash BF16",
+  "hardware": "2x NVIDIA H100 80GB HBM3",
+  "physical_gpus": [
+    6,
+    7
+  ],
+  "topology": {
+    "attention_tp": 1,
+    "attention_dp": 2,
+    "expert_ep": 2
+  },
+  "versions": {
+    "torch": "2.11.0",
+    "triton": "3.6.0",
+    "transformers": "5.13.1",
+    "flashinfer-python": "0.6.17",
+    "nvidia-nvshmem-cu13": "3.4.5",
+    "torch_cuda": "13.0"
+  },
+  "request_metrics": {
+    "balanced": {
+      "measured_request_count": 32,
+      "ttft_ms_mean": 2116.661194100743,
+      "tpot_ms_mean": 16.689761891946432,
+      "output_token_throughput_tps": 481.78800013825173
+    },
+    "churn": {
+      "measured_request_count": 128,
+      "ttft_ms_mean": 6309.339271556382,
+      "tpot_ms_mean": 54.748527560162046,
+      "output_token_throughput_tps": 306.0488984832753
+    },
+    "balanced_plain": {
+      "measured_request_count": 32,
+      "ttft_ms_mean": 2084.4601028657053,
+      "tpot_ms_mean": 12.851346645313573,
+      "output_token_throughput_tps": 549.088936623366
+    },
+    "balanced_eager": {
+      "measured_request_count": 32,
+      "ttft_ms_mean": 2101.611553473049,
+      "tpot_ms_mean": 83.43404410296948,
+      "output_token_throughput_tps": 161.12680941900888
+    },
+    "balanced_eager_plain": {
+      "measured_request_count": 32,
+      "ttft_ms_mean": 2071.8504592659883,
+      "tpot_ms_mean": 60.344809669942606,
+      "output_token_throughput_tps": 210.11417028019957
+    },
+    "churn_plain": {
+      "measured_request_count": 128,
+      "ttft_ms_mean": 5768.8765540588065,
+      "tpot_ms_mean": 47.03569983878532,
+      "output_token_throughput_tps": 349.9293979083574
+    }
+  },
+  "unprofiled_churn_step_rpc": {
+    "status": "success",
+    "scope": "measured epochs; original coordinator step RPC, no Nsight and no added CUDA synchronization",
+    "measured_steps": 839,
+    "total_step_s": 29.028987177,
+    "phase_groups": {
+      "prefill/prefill": {
+        "steps": 27,
+        "step_fraction": 0.03218116805721097,
+        "mean_ms": 204.93257662962964,
+        "total_s": 5.533179569,
+        "time_fraction": 0.19060877099370527
+      },
+      "decode/prefill": {
+        "steps": 94,
+        "step_fraction": 0.11203814064362336,
+        "mean_ms": 159.30030038297875,
+        "total_s": 14.974228236,
+        "time_fraction": 0.5158370887932409
+      },
+      "decode/decode": {
+        "steps": 662,
+        "step_fraction": 0.7890345649582837,
+        "mean_ms": 12.17274732326284,
+        "total_s": 8.058358728,
+        "time_fraction": 0.27759696467759404
+      },
+      "decode/idle": {
+        "steps": 56,
+        "step_fraction": 0.066746126340882,
+        "mean_ms": 8.271797214285714,
+        "total_s": 0.463220644,
+        "time_fraction": 0.015957175535459778
+      }
+    }
+  },
+  "nsight_gpu": {
+    "balanced": {
+      "status": "success",
+      "scope": "measured epochs; per-rank kernel duration, including communication waits; summed categories are not serving latency; GPU gap is complement of kernel interval union in coordinator step ranges",
+      "attribution": "eager CUDA API NVTX containment; captured nodes mapped by process and originalGraphNodeId to capture-time NVTX ranges",
+      "unmatched_runtime_kernel_count_all_epochs": 0,
+      "phase_pair_counts": {
+        "prefill/prefill": 16,
+        "decode/decode": 254
+      },
+      "rank_phase_summary": [
+        {
+          "rank": 0,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "steps": 254,
+          "coordinator_mean_ms": 16.633717350393702,
+          "gpu_kernel_active_mean_ms": 11.71697231889764,
+          "gpu_kernel_active_fraction": 0.7044109306462581,
+          "gpu_kernel_gap_mean_ms": 4.916745031496063,
+          "category_kernel_mean_ms": {
+            "experts": 4.8503660196850396,
+            "attention": 3.893210181102362,
+            "combine": 0.7458668464566929,
+            "shared": 0.6488294842519684,
+            "other_model": 0.6095068188976378,
+            "router": 0.5861926377952755,
+            "dispatch": 0.5159307283464567,
+            "sampling": 0.010160649606299211
+          },
+          "category_fraction_of_kernel_sum": {
+            "experts": 0.40896628204634466,
+            "attention": 0.3282621737263859,
+            "combine": 0.06288894278474123,
+            "shared": 0.05470708412100526,
+            "other_model": 0.05139153140089167,
+            "router": 0.04942575934870181,
+            "dispatch": 0.04350151533079854,
+            "sampling": 0.0008567112411309683
+          },
+          "top_kernels_mean_ms": {
+            "_routed_gemm_kernel": 4.350606102362204,
+            "device_kernel": 2.1409469842519684,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_TNT": 1.028674688976378,
+            "reducescatter_kernel": 0.7458668464566929,
+            "allgather_kernel": 0.5159307283464567,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_splitK_TNT": 0.4770002598425197,
+            "_glm_mla_decode_q_projection_rope_kernel": 0.3051683110236221,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 0.26531760236220475,
+            "Kernel2": 0.26274514960629924,
+            "_silu_and_mul_kernel": 0.23243101181102363,
+            "moe_align_block_size_small_batch_expert_kernel": 0.22536211023622046,
+            "nvjet_sm90_tst_256x8_64x6_2x1_v_bz_TNT": 0.22225621653543307
+          }
+        },
+        {
+          "rank": 0,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "steps": 16,
+          "coordinator_mean_ms": 262.82626325,
+          "gpu_kernel_active_mean_ms": 247.81003,
+          "gpu_kernel_active_fraction": 0.9428663137986458,
+          "gpu_kernel_gap_mean_ms": 15.01623325,
+          "category_kernel_mean_ms": {
+            "attention": 137.482624,
+            "experts": 61.649477625,
+            "combine": 15.64902075,
+            "shared": 10.7738619375,
+            "router": 10.2949299375,
+            "other_model": 7.39988675,
+            "dispatch": 5.5354774375,
+            "cache_metadata": 0.0510873125,
+            "sampling": 0.0104678125
+          },
+          "category_fraction_of_kernel_sum": {
+            "attention": 0.5524788964834068,
+            "experts": 0.24774065533574977,
+            "combine": 0.06288615581708663,
+            "shared": 0.04329515382318117,
+            "router": 0.04137054826102234,
+            "other_model": 0.02973671251533709,
+            "dispatch": 0.02224451626831618,
+            "cache_metadata": 0.00020529621280943077,
+            "sampling": 4.2065283090575956e-05
+          },
+          "top_kernels_mean_ms": {
+            "device_kernel": 68.5554110625,
+            "_routed_gemm_kernel": 46.8106819375,
+            "nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_TNT": 33.4249995625,
+            "reducescatter_kernel": 15.64902075,
+            "nvjet_sm90_tst_320x128_64x3_1x2_h_bz_coopB_TNT": 13.704934,
+            "_silu_and_mul_kernel": 11.1971713125,
+            "_pack_keys": 10.274072125,
+            "allgather_kernel": 5.5354774375,
+            "unrolled_elementwise_kernel": 5.03258875,
+            "_glm_mla_decode_rope_kernel": 4.78187325,
+            "sm80_xmma_gemm_f32f32_f32f32_f32_tn_n_tilesize256x64x8_stage3_warpsize2x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas": 4.5208508125,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 4.0840731875
+          }
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "steps": 254,
+          "coordinator_mean_ms": 16.633717350393702,
+          "gpu_kernel_active_mean_ms": 11.298321173228345,
+          "gpu_kernel_active_fraction": 0.6792421041686709,
+          "gpu_kernel_gap_mean_ms": 5.335396177165355,
+          "category_kernel_mean_ms": {
+            "experts": 4.923145913385827,
+            "attention": 3.8183226023622048,
+            "shared": 0.6496434212598424,
+            "other_model": 0.5886132086614173,
+            "router": 0.5829837047244095,
+            "combine": 0.497970874015748,
+            "dispatch": 0.2743714527559055,
+            "sampling": 0.010116586614173228
+          },
+          "category_fraction_of_kernel_sum": {
+            "experts": 0.4339420990409163,
+            "attention": 0.3365593776896402,
+            "shared": 0.0572616848676216,
+            "other_model": 0.0518822833577321,
+            "router": 0.05138608056424142,
+            "combine": 0.04389277306286867,
+            "dispatch": 0.024183992556889387,
+            "sampling": 0.0008917088600903148
+          },
+          "top_kernels_mean_ms": {
+            "_routed_gemm_kernel": 4.438184956692914,
+            "device_kernel": 2.082477440944882,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_TNT": 1.0286943582677164,
+            "reducescatter_kernel": 0.497970874015748,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_splitK_TNT": 0.47439177952755907,
+            "_glm_mla_decode_q_projection_rope_kernel": 0.30513744881889765,
+            "allgather_kernel": 0.2743714527559055,
+            "Kernel2": 0.260765562992126,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 0.24699385433070864,
+            "moe_align_block_size_small_batch_expert_kernel": 0.22463271653543307,
+            "_silu_and_mul_kernel": 0.22461779921259842,
+            "nvjet_sm90_tst_256x8_64x6_2x1_v_bz_TNT": 0.22224562598425196
+          }
+        },
+        {
+          "rank": 1,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "steps": 16,
+          "coordinator_mean_ms": 262.82626325,
+          "gpu_kernel_active_mean_ms": 248.3730364375,
+          "gpu_kernel_active_fraction": 0.9450084377650185,
+          "gpu_kernel_gap_mean_ms": 14.4532268125,
+          "category_kernel_mean_ms": {
+            "attention": 136.2915643125,
+            "experts": 62.02747075,
+            "combine": 15.38747125,
+            "shared": 10.702208125,
+            "router": 10.2229758125,
+            "other_model": 7.3932039375,
+            "dispatch": 7.1682183125,
+            "cache_metadata": 0.0514871875,
+            "sampling": 0.01043575
+          },
+          "category_fraction_of_kernel_sum": {
+            "attention": 0.5467956307212687,
+            "experts": 0.24885142497172624,
+            "combine": 0.06173384310167072,
+            "shared": 0.04293677801218804,
+            "router": 0.041014119512395496,
+            "other_model": 0.029661201927267886,
+            "dispatch": 0.028758569711212156,
+            "cache_metadata": 0.0002065642822807095,
+            "sampling": 4.186775999001527e-05
+          },
+          "top_kernels_mean_ms": {
+            "device_kernel": 67.6835229375,
+            "_routed_gemm_kernel": 47.1490741875,
+            "nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_TNT": 33.2604821875,
+            "reducescatter_kernel": 15.38747125,
+            "nvjet_sm90_tst_320x128_64x3_1x2_h_bz_coopB_TNT": 13.56066125,
+            "_silu_and_mul_kernel": 11.1950225625,
+            "_pack_keys": 10.24982,
+            "allgather_kernel": 7.1682183125,
+            "unrolled_elementwise_kernel": 4.9980990625,
+            "_glm_mla_decode_rope_kernel": 4.782886375,
+            "sm80_xmma_gemm_f32f32_f32f32_f32_tn_n_tilesize256x64x8_stage3_warpsize2x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas": 4.4848805,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 4.08455725
+          }
+        }
+      ]
+    },
+    "churn": {
+      "status": "success",
+      "scope": "measured epochs; per-rank kernel duration, including communication waits; summed categories are not serving latency; GPU gap is complement of kernel interval union in coordinator step ranges",
+      "attribution": "eager CUDA API NVTX containment; captured nodes mapped by process and originalGraphNodeId to capture-time NVTX ranges",
+      "unmatched_runtime_kernel_count_all_epochs": 0,
+      "phase_pair_counts": {
+        "prefill/prefill": 27,
+        "decode/prefill": 94,
+        "decode/decode": 662,
+        "decode/idle": 56
+      },
+      "rank_phase_summary": [
+        {
+          "rank": 0,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "steps": 662,
+          "coordinator_mean_ms": 15.168597155589124,
+          "gpu_kernel_active_mean_ms": 11.300575312688823,
+          "gpu_kernel_active_fraction": 0.7449980506948156,
+          "gpu_kernel_gap_mean_ms": 3.868021842900302,
+          "category_kernel_mean_ms": {
+            "experts": 4.702577682779457,
+            "attention": 3.52508631570997,
+            "combine": 0.7564212371601209,
+            "shared": 0.6480312900302114,
+            "dispatch": 0.6114613534743203,
+            "other_model": 0.6067320302114804,
+            "router": 0.5829345407854984,
+            "sampling": 0.0100447749244713,
+            "cache_metadata": 0.00128545166163142
+          },
+          "category_fraction_of_kernel_sum": {
+            "experts": 0.4109001702211058,
+            "attention": 0.30801374583847524,
+            "combine": 0.06609430743613934,
+            "shared": 0.05662344895589993,
+            "dispatch": 0.05342805396841951,
+            "other_model": 0.05301481683235949,
+            "router": 0.0509354482146376,
+            "sampling": 0.0008776887921303736,
+            "cache_metadata": 0.00011231974083268434
+          },
+          "top_kernels_mean_ms": {
+            "_routed_gemm_kernel": 4.176217135951662,
+            "device_kernel": 1.7747391450151058,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_TNT": 1.0276833580060423,
+            "reducescatter_kernel": 0.7564212371601209,
+            "allgather_kernel": 0.6114613534743203,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_splitK_TNT": 0.4773907824773414,
+            "_glm_mla_decode_q_projection_rope_kernel": 0.30456263746223566,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 0.26334301359516615,
+            "Kernel2": 0.2615676918429003,
+            "_silu_and_mul_kernel": 0.2277460090634441,
+            "moe_align_block_size_small_batch_expert_kernel": 0.22304207250755287,
+            "nvjet_sm90_tst_256x8_64x6_2x1_v_bz_TNT": 0.22218495921450152
+          }
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/idle",
+          "local_phase": "decode",
+          "steps": 56,
+          "coordinator_mean_ms": 10.809267375,
+          "gpu_kernel_active_mean_ms": 7.389716910714285,
+          "gpu_kernel_active_fraction": 0.6836464169445421,
+          "gpu_kernel_gap_mean_ms": 3.419550464285714,
+          "category_kernel_mean_ms": {
+            "attention": 3.030972,
+            "experts": 2.178146214285714,
+            "shared": 0.6400140714285715,
+            "other_model": 0.55004725,
+            "router": 0.5442963571428572,
+            "combine": 0.45500764285714285,
+            "dispatch": 0.1335355,
+            "sampling": 0.00935994642857143
+          },
+          "category_fraction_of_kernel_sum": {
+            "attention": 0.4019121711263952,
+            "experts": 0.28882598520022945,
+            "shared": 0.084866981614908,
+            "other_model": 0.07293722425334284,
+            "router": 0.07217464583489175,
+            "combine": 0.060334806662621004,
+            "dispatch": 0.01770704009388696,
+            "sampling": 0.0012411452137248023
+          },
+          "top_kernels_mean_ms": {
+            "device_kernel": 1.3010144107142856,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_TNT": 1.0225600714285714,
+            "_routed_gemm_kernel": 1.019613875,
+            "_routed_gate_up_swiglu_kernel": 0.8025206607142856,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_splitK_TNT": 0.488406375,
+            "reducescatter_kernel": 0.45500764285714285,
+            "_glm_mla_decode_q_projection_rope_kernel": 0.28955166071428573,
+            "Kernel2": 0.2509910714285714,
+            "nvjet_sm90_tst_256x8_64x6_2x1_v_bz_TNT": 0.2196140892857143,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 0.21678398214285713,
+            "moe_align_block_size_small_batch_expert_kernel": 0.201195,
+            "splitKreduce_kernel": 0.19298044642857143
+          }
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/prefill",
+          "local_phase": "decode",
+          "steps": 47,
+          "coordinator_mean_ms": 177.0674486382979,
+          "gpu_kernel_active_mean_ms": 167.21009865957447,
+          "gpu_kernel_active_fraction": 0.9443299711238322,
+          "gpu_kernel_gap_mean_ms": 9.857349978723406,
+          "category_kernel_mean_ms": {
+            "dispatch": 99.28253642553192,
+            "experts": 40.64440012765957,
+            "combine": 15.724504170212766,
+            "router": 6.136673425531915,
+            "attention": 4.180150936170213,
+            "shared": 0.748878574468085,
+            "other_model": 0.6496367021276596,
+            "sampling": 0.010201021276595744,
+            "cache_metadata": 0.00023693617021276596
+          },
+          "category_fraction_of_kernel_sum": {
+            "dispatch": 0.5931663665017034,
+            "experts": 0.2428311363746067,
+            "combine": 0.09394650196796699,
+            "router": 0.03666373170230804,
+            "attention": 0.024974431873994042,
+            "shared": 0.004474196560252005,
+            "other_model": 0.0038812731424951474,
+            "sampling": 6.094629471703132e-05,
+            "cache_metadata": 1.4155819566853147e-06
+          },
+          "top_kernels_mean_ms": {
+            "allgather_kernel": 98.97437212765958,
+            "_routed_gemm_kernel": 31.76682704255319,
+            "reducescatter_kernel": 15.724504170212766,
+            "_silu_and_mul_kernel": 5.6792963191489365,
+            "unrolled_elementwise_kernel": 2.7614182978723405,
+            "sm80_xmma_gemm_f32f32_f32f32_f32_tn_n_tilesize256x64x8_stage3_warpsize2x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas": 2.3422662340425533,
+            "device_kernel": 1.9652182765957447,
+            "_moe_sum_kernel": 1.8991899574468085,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_TNT": 1.1771698510638298,
+            "_fill_local_assignments_kernel": 0.5741901489361703,
+            "_count_local_assignments_kernel": 0.5646435531914893,
+            "vectorized_elementwise_kernel": 0.5409018510638297
+          }
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/prefill",
+          "local_phase": "prefill",
+          "steps": 47,
+          "coordinator_mean_ms": 184.3429583617021,
+          "gpu_kernel_active_mean_ms": 143.2247105319149,
+          "gpu_kernel_active_fraction": 0.7769470111838582,
+          "gpu_kernel_gap_mean_ms": 41.11824782978723,
+          "category_kernel_mean_ms": {
+            "attention": 74.72621770212767,
+            "experts": 42.45917389361702,
+            "shared": 6.602395468085106,
+            "router": 6.4709003404255325,
+            "combine": 6.281340936170213,
+            "other_model": 4.462369787234043,
+            "dispatch": 2.862819319148936,
+            "cache_metadata": 0.0448221914893617,
+            "sampling": 0.009895404255319148
+          },
+          "category_fraction_of_kernel_sum": {
+            "attention": 0.5192207575693608,
+            "experts": 0.2950194070130938,
+            "shared": 0.045875475597824296,
+            "router": 0.044961806983252625,
+            "combine": 0.043644689905626984,
+            "other_model": 0.031005918574898202,
+            "dispatch": 0.019891749661382758,
+            "cache_metadata": 0.0003114383804864073,
+            "sampling": 6.875631407416456e-05
+          },
+          "top_kernels_mean_ms": {
+            "device_kernel": 34.75481763829787,
+            "_routed_gemm_kernel": 33.09395168085106,
+            "nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_TNT": 13.590992872340426,
+            "_silu_and_mul_kernel": 6.810751234042553,
+            "reducescatter_kernel": 6.281340936170213,
+            "nvjet_sm90_tst_320x128_64x3_1x2_h_bz_coopB_TNT": 6.193016425531915,
+            "_pack_keys": 5.704406425531914,
+            "unrolled_elementwise_kernel": 3.0200924468085106,
+            "_glm_mla_decode_rope_kernel": 2.9069767872340426,
+            "allgather_kernel": 2.862819319148936,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 2.38443629787234,
+            "sm80_xmma_gemm_f32f32_f32f32_f32_tn_n_tilesize256x64x8_stage3_warpsize2x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas": 2.34714314893617
+          }
+        },
+        {
+          "rank": 0,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "steps": 27,
+          "coordinator_mean_ms": 211.167888,
+          "gpu_kernel_active_mean_ms": 194.9558728148148,
+          "gpu_kernel_active_fraction": 0.9232268914619007,
+          "gpu_kernel_gap_mean_ms": 16.212015185185184,
+          "category_kernel_mean_ms": {
+            "attention": 93.44031325925926,
+            "experts": 52.03829422222223,
+            "dispatch": 15.02703774074074,
+            "combine": 12.829132259259259,
+            "router": 8.687732666666665,
+            "shared": 8.29125274074074,
+            "other_model": 5.584181740740741,
+            "cache_metadata": 0.049553,
+            "sampling": 0.010129703703703705
+          },
+          "category_fraction_of_kernel_sum": {
+            "attention": 0.4768393786495118,
+            "experts": 0.26555891153806727,
+            "dispatch": 0.07668513823745696,
+            "combine": 0.06546890995692803,
+            "router": 0.04433475126685636,
+            "shared": 0.04231145709187896,
+            "other_model": 0.028496883825000492,
+            "cache_metadata": 0.00025287609711515833,
+            "sampling": 5.169333718494454e-05
+          },
+          "top_kernels_mean_ms": {
+            "device_kernel": 43.064661962962965,
+            "_routed_gemm_kernel": 39.72956825925926,
+            "allgather_kernel": 14.888986333333333,
+            "nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_TNT": 14.239255962962963,
+            "reducescatter_kernel": 12.829132259259259,
+            "_silu_and_mul_kernel": 9.160663444444443,
+            "nvjet_sm90_tst_320x128_64x3_1x2_h_bz_coopB_TNT": 8.568858666666666,
+            "_pack_keys": 7.154442925925927,
+            "nvjet_sm90_tst_192x192_64x4_1x2_h_bz_coopB_TNN": 4.272496962962963,
+            "unrolled_elementwise_kernel": 4.13144037037037,
+            "sm80_xmma_gemm_f32f32_f32f32_f32_tn_n_tilesize256x64x8_stage3_warpsize2x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas": 3.717542,
+            "_glm_mla_decode_rope_kernel": 3.6782043333333334
+          }
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "steps": 662,
+          "coordinator_mean_ms": 15.168597155589124,
+          "gpu_kernel_active_mean_ms": 10.798317578549849,
+          "gpu_kernel_active_fraction": 0.7118863707558499,
+          "gpu_kernel_gap_mean_ms": 4.370279577039275,
+          "category_kernel_mean_ms": {
+            "experts": 4.8073262386706945,
+            "attention": 3.418373160120846,
+            "shared": 0.6489656510574018,
+            "other_model": 0.5865198141993958,
+            "router": 0.5806715287009063,
+            "combine": 0.46832919637462234,
+            "dispatch": 0.323736164652568,
+            "sampling": 0.009985876132930515,
+            "cache_metadata": 0.0018462552870090634
+          },
+          "category_fraction_of_kernel_sum": {
+            "experts": 0.4432450053317481,
+            "attention": 0.3151807791606505,
+            "shared": 0.05983591900819272,
+            "other_model": 0.054078289108141255,
+            "router": 0.0535390655963048,
+            "combine": 0.043180879939923394,
+            "dispatch": 0.029849115891744795,
+            "sampling": 0.0009207175673200986,
+            "cache_metadata": 0.00017022839597430483
+          },
+          "top_kernels_mean_ms": {
+            "_routed_gemm_kernel": 4.293655469788519,
+            "device_kernel": 1.6836175528700905,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_TNT": 1.0278599350453173,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_splitK_TNT": 0.4752250755287009,
+            "reducescatter_kernel": 0.46832919637462234,
+            "allgather_kernel": 0.323736164652568,
+            "_glm_mla_decode_q_projection_rope_kernel": 0.3045234425981873,
+            "Kernel2": 0.25999384592145014,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 0.24545968882175226,
+            "moe_align_block_size_small_batch_expert_kernel": 0.22264926435045315,
+            "nvjet_sm90_tst_256x8_64x6_2x1_v_bz_TNT": 0.22215971903323262,
+            "_silu_and_mul_kernel": 0.22026522960725076
+          }
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/idle",
+          "local_phase": "idle",
+          "steps": 56,
+          "coordinator_mean_ms": 10.809267375,
+          "gpu_kernel_active_mean_ms": 8.210134285714286,
+          "gpu_kernel_active_fraction": 0.7595458601295155,
+          "gpu_kernel_gap_mean_ms": 2.599133089285714,
+          "category_kernel_mean_ms": {
+            "dispatch": 5.206342160714286,
+            "experts": 2.0533634285714286,
+            "router": 0.5376106071428571,
+            "combine": 0.4128180892857143
+          },
+          "category_fraction_of_kernel_sum": {
+            "dispatch": 0.6341360542388901,
+            "experts": 0.2501010771704795,
+            "router": 0.06548134152669158,
+            "combine": 0.05028152706393875
+          },
+          "top_kernels_mean_ms": {
+            "allgather_kernel": 5.166414714285715,
+            "_routed_gemm_kernel": 0.9725203571428571,
+            "_routed_gate_up_swiglu_kernel": 0.7274855,
+            "reducescatter_kernel": 0.4128180892857143,
+            "Kernel2": 0.24478523214285713,
+            "moe_align_block_size_small_batch_expert_kernel": 0.2039173392857143,
+            "unrolled_elementwise_kernel": 0.11480751785714285,
+            "splitKreduce_kernel": 0.09964333928571428,
+            "_fused_topk_biased_sigmoid_kernel": 0.07837451785714286,
+            "_moe_sum_kernel": 0.06653676785714285,
+            "_localize_expert_ids_kernel": 0.04533419642857143,
+            "vectorized_elementwise_kernel": 0.03992744642857143
+          }
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/prefill",
+          "local_phase": "decode",
+          "steps": 47,
+          "coordinator_mean_ms": 184.3429583617021,
+          "gpu_kernel_active_mean_ms": 171.25650659574467,
+          "gpu_kernel_active_fraction": 0.929010297533143,
+          "gpu_kernel_gap_mean_ms": 13.086451765957447,
+          "category_kernel_mean_ms": {
+            "dispatch": 103.13459927659574,
+            "experts": 38.52144336170213,
+            "combine": 17.852181170212763,
+            "router": 6.370738638297873,
+            "attention": 4.06345244680851,
+            "shared": 0.7476156808510638,
+            "other_model": 0.6548316382978724,
+            "sampling": 0.010010404255319148,
+            "cache_metadata": 0.0015434893617021276
+          },
+          "category_fraction_of_kernel_sum": {
+            "dispatch": 0.6018718272712171,
+            "experts": 0.22480304056888603,
+            "combine": 0.10418157414735857,
+            "router": 0.03717829062404489,
+            "attention": 0.023713453742437066,
+            "shared": 0.004362927854343794,
+            "other_model": 0.0038214596988964456,
+            "sampling": 5.841861357035153e-05,
+            "cache_metadata": 9.007479245737056e-06
+          },
+          "top_kernels_mean_ms": {
+            "allgather_kernel": 102.81209165957446,
+            "_routed_gemm_kernel": 29.469906531914894,
+            "reducescatter_kernel": 17.852181170212763,
+            "_silu_and_mul_kernel": 5.980640255319149,
+            "unrolled_elementwise_kernel": 2.897055425531915,
+            "sm80_xmma_gemm_f32f32_f32f32_f32_tn_n_tilesize256x64x8_stage3_warpsize2x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas": 2.315819170212766,
+            "_moe_sum_kernel": 1.8449082340425533,
+            "device_kernel": 1.8390296382978724,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_TNT": 1.1784015319148935,
+            "vectorized_elementwise_kernel": 0.5565077234042554,
+            "_fill_local_assignments_kernel": 0.5385726382978724,
+            "_count_local_assignments_kernel": 0.5278188085106383
+          }
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/prefill",
+          "local_phase": "prefill",
+          "steps": 47,
+          "coordinator_mean_ms": 177.0674486382979,
+          "gpu_kernel_active_mean_ms": 133.90932791489362,
+          "gpu_kernel_active_fraction": 0.7562616897950288,
+          "gpu_kernel_gap_mean_ms": 43.15812072340426,
+          "category_kernel_mean_ms": {
+            "attention": 69.05668308510639,
+            "experts": 37.12388893617021,
+            "combine": 8.795065212765959,
+            "shared": 6.310148340425532,
+            "router": 6.184035829787234,
+            "other_model": 4.230774234042554,
+            "dispatch": 2.6461562127659572,
+            "cache_metadata": 0.044780255319148934,
+            "sampling": 0.009841553191489362
+          },
+          "category_fraction_of_kernel_sum": {
+            "attention": 0.5138093548062999,
+            "experts": 0.2762165886057191,
+            "combine": 0.0654388044801015,
+            "shared": 0.04695002862402672,
+            "router": 0.04601170108164811,
+            "other_model": 0.0314786532223896,
+            "dispatch": 0.01968846106787876,
+            "cache_metadata": 0.00033318301814811016,
+            "sampling": 7.322509378823056e-05
+          },
+          "top_kernels_mean_ms": {
+            "device_kernel": 32.195526,
+            "_routed_gemm_kernel": 28.50864278723404,
+            "nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_TNT": 10.014376255319148,
+            "reducescatter_kernel": 8.795065212765959,
+            "nvjet_sm90_tst_320x128_64x3_1x2_h_bz_coopB_TNT": 7.074903617021277,
+            "_silu_and_mul_kernel": 6.454571723404256,
+            "_pack_keys": 5.13245359574468,
+            "unrolled_elementwise_kernel": 2.8470684468085103,
+            "_glm_mla_decode_rope_kernel": 2.7569309574468086,
+            "allgather_kernel": 2.6461562127659572,
+            "nvjet_sm90_tst_192x192_64x4_1x2_h_bz_coopB_TNN": 2.5368782978723403,
+            "sm80_xmma_gemm_f32f32_f32f32_f32_tn_n_tilesize256x64x8_stage3_warpsize2x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas": 2.3625414680851065
+          }
+        },
+        {
+          "rank": 1,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "steps": 27,
+          "coordinator_mean_ms": 211.167888,
+          "gpu_kernel_active_mean_ms": 193.6607668148148,
+          "gpu_kernel_active_fraction": 0.9170938282757026,
+          "gpu_kernel_gap_mean_ms": 17.507121185185188,
+          "category_kernel_mean_ms": {
+            "attention": 95.02193162962962,
+            "experts": 51.81020081481481,
+            "combine": 12.857633777777778,
+            "dispatch": 11.760821222222223,
+            "router": 8.62681148148148,
+            "shared": 8.524396037037038,
+            "other_model": 5.829949444444444,
+            "cache_metadata": 0.049796074074074076,
+            "sampling": 0.010148592592592593
+          },
+          "category_fraction_of_kernel_sum": {
+            "attention": 0.48856551188385017,
+            "experts": 0.26638773647074654,
+            "combine": 0.0661089110747597,
+            "dispatch": 0.06046953100264864,
+            "router": 0.04435568184199313,
+            "shared": 0.043829101786403,
+            "other_model": 0.02997531396945219,
+            "cache_metadata": 0.0002560318865610178,
+            "sampling": 5.2180083585614814e-05
+          },
+          "top_kernels_mean_ms": {
+            "device_kernel": 43.83643440740741,
+            "_routed_gemm_kernel": 39.52383614814815,
+            "nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_TNT": 14.543265555555555,
+            "reducescatter_kernel": 12.857633777777778,
+            "allgather_kernel": 11.64115362962963,
+            "_silu_and_mul_kernel": 9.173413037037037,
+            "nvjet_sm90_tst_320x128_64x3_1x2_h_bz_coopB_TNT": 8.240742185185185,
+            "_pack_keys": 7.241613,
+            "unrolled_elementwise_kernel": 4.095941925925926,
+            "_glm_mla_decode_rope_kernel": 3.8148983703703703,
+            "sm80_xmma_gemm_f32f32_f32f32_f32_tn_n_tilesize256x64x8_stage3_warpsize2x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas": 3.6928936666666665,
+            "nvjet_sm90_tst_192x192_64x4_1x2_h_bz_coopB_TNN": 3.3348023333333336
+          }
+        }
+      ]
+    },
+    "balanced_eager": {
+      "status": "success",
+      "scope": "measured epochs; per-rank kernel duration, including communication waits; summed categories are not serving latency; GPU gap is complement of kernel interval union in coordinator step ranges",
+      "attribution": "eager CUDA API NVTX containment; captured nodes mapped by process and originalGraphNodeId to capture-time NVTX ranges",
+      "unmatched_runtime_kernel_count_all_epochs": 0,
+      "phase_pair_counts": {
+        "prefill/prefill": 16,
+        "decode/decode": 254
+      },
+      "rank_phase_summary": [
+        {
+          "rank": 0,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "steps": 254,
+          "coordinator_mean_ms": 83.3605931535433,
+          "gpu_kernel_active_mean_ms": 45.979117027559056,
+          "gpu_kernel_active_fraction": 0.551568976277188,
+          "gpu_kernel_gap_mean_ms": 37.38147612598425,
+          "category_kernel_mean_ms": {
+            "dispatch": 21.474595913385826,
+            "combine": 13.551751051181101,
+            "experts": 4.90562437007874,
+            "attention": 4.297380586614173,
+            "shared": 0.6588671496062992,
+            "other_model": 0.6073057401574804,
+            "router": 0.5995853582677165,
+            "sampling": 0.010140488188976378
+          },
+          "category_fraction_of_kernel_sum": {
+            "dispatch": 0.4657733253186792,
+            "combine": 0.29393075317729367,
+            "experts": 0.10640055742290667,
+            "attention": 0.09320805169328253,
+            "shared": 0.014290501411673852,
+            "other_model": 0.01317216003594047,
+            "router": 0.013004708785168208,
+            "sampling": 0.00021994215505541647
+          },
+          "top_kernels_mean_ms": {
+            "allgather_kernel": 21.474595913385826,
+            "reducescatter_kernel": 13.551751051181101,
+            "_routed_gemm_kernel": 4.40609131496063,
+            "device_kernel": 2.2094722283464567,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_TNT": 1.0375831732283465,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_splitK_TNT": 0.47624879527559055,
+            "_glm_mla_decode_q_projection_rope_kernel": 0.30734793307086616,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 0.2616473346456693,
+            "Kernel2": 0.2582586102362205,
+            "_silu_and_mul_kernel": 0.23409465748031497,
+            "moe_align_block_size_small_batch_expert_kernel": 0.22675867716535433,
+            "nvjet_sm90_tst_256x8_64x6_2x1_v_bz_TNT": 0.22221372047244095
+          }
+        },
+        {
+          "rank": 0,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "steps": 16,
+          "coordinator_mean_ms": 261.0921746875,
+          "gpu_kernel_active_mean_ms": 248.32254325,
+          "gpu_kernel_active_fraction": 0.951091481570507,
+          "gpu_kernel_gap_mean_ms": 12.7696314375,
+          "category_kernel_mean_ms": {
+            "attention": 137.061717,
+            "experts": 61.5937961875,
+            "combine": 15.7855975,
+            "shared": 10.739783,
+            "router": 10.2508759375,
+            "other_model": 7.3868673125,
+            "dispatch": 6.4874968125,
+            "cache_metadata": 0.050433625,
+            "sampling": 0.010433875
+          },
+          "category_fraction_of_kernel_sum": {
+            "attention": 0.5496385500605606,
+            "experts": 0.24700058900636115,
+            "combine": 0.063302672049115,
+            "shared": 0.04306818041747615,
+            "router": 0.041107587957169615,
+            "other_model": 0.029622473204040264,
+            "dispatch": 0.02601585927560654,
+            "cache_metadata": 0.00020224658734793204,
+            "sampling": 4.1841442322754e-05
+          },
+          "top_kernels_mean_ms": {
+            "device_kernel": 68.3343646875,
+            "_routed_gemm_kernel": 46.73801675,
+            "nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_TNT": 33.312583625,
+            "reducescatter_kernel": 15.7855975,
+            "nvjet_sm90_tst_320x128_64x3_1x2_h_bz_coopB_TNT": 13.6423299375,
+            "_silu_and_mul_kernel": 11.202693625,
+            "_pack_keys": 10.2366110625,
+            "allgather_kernel": 6.4874968125,
+            "unrolled_elementwise_kernel": 5.020072625,
+            "_glm_mla_decode_rope_kernel": 4.7808541875,
+            "sm80_xmma_gemm_f32f32_f32f32_f32_tn_n_tilesize256x64x8_stage3_warpsize2x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas": 4.4916413125,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 4.0856101875
+          }
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "steps": 254,
+          "coordinator_mean_ms": 83.3605931535433,
+          "gpu_kernel_active_mean_ms": 19.324603712598424,
+          "gpu_kernel_active_fraction": 0.2318194122851802,
+          "gpu_kernel_gap_mean_ms": 64.03598944094487,
+          "category_kernel_mean_ms": {
+            "dispatch": 5.262935913385827,
+            "experts": 5.01591759055118,
+            "attention": 4.285079877952756,
+            "combine": 2.997725409448819,
+            "shared": 0.6582715590551181,
+            "other_model": 0.6079768188976378,
+            "router": 0.5961108385826772,
+            "sampling": 0.010018598425196852
+          },
+          "category_fraction_of_kernel_sum": {
+            "dispatch": 0.270810229496014,
+            "experts": 0.2580996265554711,
+            "attention": 0.22049355801685688,
+            "combine": 0.15425129993205616,
+            "shared": 0.03387209628090083,
+            "other_model": 0.031284124405764085,
+            "router": 0.03067354717184478,
+            "sampling": 0.0005155181410921852
+          },
+          "top_kernels_mean_ms": {
+            "allgather_kernel": 5.262935913385827,
+            "_routed_gemm_kernel": 4.51308029527559,
+            "reducescatter_kernel": 2.997725409448819,
+            "device_kernel": 2.203291779527559,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_TNT": 1.03581918503937,
+            "nvjet_sm90_tst_64x8_64x16_4x1_v_bz_splitK_TNT": 0.4763757401574803,
+            "_glm_mla_decode_q_projection_rope_kernel": 0.307172,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 0.26284412992125983,
+            "Kernel2": 0.25683924015748033,
+            "_silu_and_mul_kernel": 0.2344080039370079,
+            "moe_align_block_size_small_batch_expert_kernel": 0.22957312992125986,
+            "nvjet_sm90_tst_256x8_64x6_2x1_v_bz_TNT": 0.2223651377952756
+          }
+        },
+        {
+          "rank": 1,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "steps": 16,
+          "coordinator_mean_ms": 261.0921746875,
+          "gpu_kernel_active_mean_ms": 246.8742609375,
+          "gpu_kernel_active_fraction": 0.9455444661755285,
+          "gpu_kernel_gap_mean_ms": 14.21791375,
+          "category_kernel_mean_ms": {
+            "attention": 136.557508625,
+            "experts": 62.0741151875,
+            "combine": 15.1644673125,
+            "shared": 10.702777625,
+            "router": 10.223088875,
+            "other_model": 7.38185825,
+            "dispatch": 5.7441625,
+            "cache_metadata": 0.05101925,
+            "sampling": 0.010419875
+          },
+          "category_fraction_of_kernel_sum": {
+            "attention": 0.5508363094959876,
+            "experts": 0.2503903071269973,
+            "combine": 0.061169387857159564,
+            "shared": 0.043172130098688165,
+            "router": 0.04123719452892507,
+            "other_model": 0.02977643336199602,
+            "dispatch": 0.023170408602972897,
+            "cache_metadata": 0.00020579795037435397,
+            "sampling": 4.2030976899052255e-05
+          },
+          "top_kernels_mean_ms": {
+            "device_kernel": 67.9119228125,
+            "_routed_gemm_kernel": 47.178975625,
+            "nvjet_sm90_tst_256x128_64x4_1x2_h_bz_coopA_TNT": 33.2690039375,
+            "reducescatter_kernel": 15.1644673125,
+            "nvjet_sm90_tst_320x128_64x3_1x2_h_bz_coopB_TNT": 13.563712125,
+            "_silu_and_mul_kernel": 11.1986624375,
+            "_pack_keys": 10.2363861875,
+            "allgather_kernel": 5.7441625,
+            "unrolled_elementwise_kernel": 5.0010799375,
+            "_glm_mla_decode_rope_kernel": 4.7816636875,
+            "sm80_xmma_gemm_f32f32_f32f32_f32_tn_n_tilesize256x64x8_stage3_warpsize2x2x1_ffma_aligna4_alignc4_execute_kernel__5x_cublas": 4.483612,
+            "kernel_cutlass_kernel_flashinfernormkernelsfused_add_rmsnormFusedAddRMSNormKernel_object_at__tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gmemalign128oi64204820481_tensorptrbf16gme_0": 4.08133925
+          }
+        }
+      ]
+    }
+  },
+  "collective_arrival": {
+    "balanced": {
+      "status": "success",
+      "scope": "paired same-layer GPU collective kernel start skew; timing diagnostic, not isolated transport bandwidth",
+      "end_before_peer_start_10us_tolerance_count": 0,
+      "rows": [
+        {
+          "rank": 0,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "allgather_kernel",
+          "collective_count": 736,
+          "mean_kernel_us": 120.33646603260868,
+          "mean_early_arrival_us": 22.572081521739133,
+          "skew_over_kernel_time": 0.1875747416051138,
+          "mean_kernel_ms_per_step": 5.5354774375,
+          "mean_early_arrival_ms_per_step": 1.03831575
+        },
+        {
+          "rank": 1,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "allgather_kernel",
+          "collective_count": 736,
+          "mean_kernel_us": 155.8308328804348,
+          "mean_early_arrival_us": 58.122728260869565,
+          "skew_over_kernel_time": 0.37298605921888206,
+          "mean_kernel_ms_per_step": 7.1682183125,
+          "mean_early_arrival_ms_per_step": 2.6736455
+        },
+        {
+          "rank": 0,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 736,
+          "mean_kernel_us": 340.19610326086956,
+          "mean_early_arrival_us": 241.70649456521738,
+          "skew_over_kernel_time": 0.7104916612753549,
+          "mean_kernel_ms_per_step": 15.64902075,
+          "mean_early_arrival_ms_per_step": 11.11849875
+        },
+        {
+          "rank": 1,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 736,
+          "mean_kernel_us": 334.5102445652174,
+          "mean_early_arrival_us": 236.16489538043479,
+          "skew_over_kernel_time": 0.7060019811572353,
+          "mean_kernel_ms_per_step": 15.38747125,
+          "mean_early_arrival_ms_per_step": 10.8635851875
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "allgather_kernel",
+          "collective_count": 11684,
+          "mean_kernel_us": 11.215885398836015,
+          "mean_early_arrival_us": 8.195242810681274,
+          "skew_over_kernel_time": 0.7306817535360852,
+          "mean_kernel_ms_per_step": 0.5159307283464567,
+          "mean_early_arrival_ms_per_step": 0.37698116929133857
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "allgather_kernel",
+          "collective_count": 11684,
+          "mean_kernel_us": 5.9645967990414235,
+          "mean_early_arrival_us": 3.14523031496063,
+          "skew_over_kernel_time": 0.5273165011700544,
+          "mean_kernel_ms_per_step": 0.2743714527559055,
+          "mean_early_arrival_ms_per_step": 0.14468059448818898
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 11684,
+          "mean_kernel_us": 16.214496662102018,
+          "mean_early_arrival_us": 13.187860236220473,
+          "skew_over_kernel_time": 0.8133376268807854,
+          "mean_kernel_ms_per_step": 0.7458668464566929,
+          "mean_early_arrival_ms_per_step": 0.6066415708661417
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 11684,
+          "mean_kernel_us": 10.825453782951044,
+          "mean_early_arrival_us": 7.8066835843889075,
+          "skew_over_kernel_time": 0.7211414635277107,
+          "mean_kernel_ms_per_step": 0.497970874015748,
+          "mean_early_arrival_ms_per_step": 0.3591074448818897
+        }
+      ]
+    },
+    "churn": {
+      "status": "success",
+      "scope": "paired same-layer GPU collective kernel start skew; timing diagnostic, not isolated transport bandwidth",
+      "end_before_peer_start_10us_tolerance_count": 0,
+      "rows": [
+        {
+          "rank": 0,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "allgather_kernel",
+          "collective_count": 1242,
+          "mean_kernel_us": 323.673615942029,
+          "mean_early_arrival_us": 242.91350322061191,
+          "skew_over_kernel_time": 0.7504890459286572,
+          "mean_kernel_ms_per_step": 14.888986333333333,
+          "mean_early_arrival_ms_per_step": 11.174021148148148
+        },
+        {
+          "rank": 1,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "allgather_kernel",
+          "collective_count": 1242,
+          "mean_kernel_us": 253.0685571658615,
+          "mean_early_arrival_us": 172.26574074074074,
+          "skew_over_kernel_time": 0.6807077997755269,
+          "mean_kernel_ms_per_step": 11.64115362962963,
+          "mean_early_arrival_ms_per_step": 7.924224074074074
+        },
+        {
+          "rank": 0,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 1242,
+          "mean_kernel_us": 278.8941795491143,
+          "mean_early_arrival_us": 197.27616425120772,
+          "skew_over_kernel_time": 0.7073513135704097,
+          "mean_kernel_ms_per_step": 12.829132259259259,
+          "mean_early_arrival_ms_per_step": 9.074703555555557
+        },
+        {
+          "rank": 1,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 1242,
+          "mean_kernel_us": 279.51377777777776,
+          "mean_early_arrival_us": 198.02138647342994,
+          "skew_over_kernel_time": 0.7084494655246053,
+          "mean_kernel_ms_per_step": 12.857633777777778,
+          "mean_early_arrival_ms_per_step": 9.108983777777778
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/prefill",
+          "local_phase": "decode",
+          "kernel": "allgather_kernel",
+          "collective_count": 2162,
+          "mean_kernel_us": 2151.616785383904,
+          "mean_early_arrival_us": 2094.9270083256247,
+          "skew_over_kernel_time": 0.9736524749930483,
+          "mean_kernel_ms_per_step": 98.97437212765958,
+          "mean_early_arrival_ms_per_step": 96.36664238297872
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/prefill",
+          "local_phase": "prefill",
+          "kernel": "allgather_kernel",
+          "collective_count": 2162,
+          "mean_kernel_us": 57.525135060129514,
+          "mean_early_arrival_us": 0.5999898242368178,
+          "skew_over_kernel_time": 0.010430046337303931,
+          "mean_kernel_ms_per_step": 2.6461562127659572,
+          "mean_early_arrival_ms_per_step": 0.02759953191489362
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/prefill",
+          "local_phase": "decode",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 2162,
+          "mean_kernel_us": 341.8370471785384,
+          "mean_early_arrival_us": 284.24948288621647,
+          "skew_over_kernel_time": 0.8315350405474207,
+          "mean_kernel_ms_per_step": 15.724504170212766,
+          "mean_early_arrival_ms_per_step": 13.075476212765958
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/prefill",
+          "local_phase": "prefill",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 2162,
+          "mean_kernel_us": 191.19706984273822,
+          "mean_early_arrival_us": 133.48155827937094,
+          "skew_over_kernel_time": 0.6981360038057125,
+          "mean_kernel_ms_per_step": 8.795065212765959,
+          "mean_early_arrival_ms_per_step": 6.140151680851064
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "allgather_kernel",
+          "collective_count": 30452,
+          "mean_kernel_us": 13.292638119006963,
+          "mean_early_arrival_us": 10.291523643767242,
+          "skew_over_kernel_time": 0.7742273243000222,
+          "mean_kernel_ms_per_step": 0.6114613534743203,
+          "mean_early_arrival_ms_per_step": 0.473410087613293
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "allgather_kernel",
+          "collective_count": 30452,
+          "mean_kernel_us": 7.037742709838434,
+          "mean_early_arrival_us": 4.215918724550112,
+          "skew_over_kernel_time": 0.5990441677636857,
+          "mean_kernel_ms_per_step": 0.323736164652568,
+          "mean_early_arrival_ms_per_step": 0.19393226132930513
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 30452,
+          "mean_kernel_us": 16.443939938263497,
+          "mean_early_arrival_us": 13.433245928017865,
+          "skew_over_kernel_time": 0.8169116390871732,
+          "mean_kernel_ms_per_step": 0.7564212371601209,
+          "mean_early_arrival_ms_per_step": 0.6179293126888218
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 30452,
+          "mean_kernel_us": 10.181069486404835,
+          "mean_early_arrival_us": 7.161963253645081,
+          "skew_over_kernel_time": 0.7034588324152704,
+          "mean_kernel_ms_per_step": 0.46832919637462234,
+          "mean_early_arrival_ms_per_step": 0.32945030966767375
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/prefill",
+          "local_phase": "prefill",
+          "kernel": "allgather_kernel",
+          "collective_count": 2162,
+          "mean_kernel_us": 62.23520259019426,
+          "mean_early_arrival_us": 2.280223866790009,
+          "skew_over_kernel_time": 0.03663881166748672,
+          "mean_kernel_ms_per_step": 2.862819319148936,
+          "mean_early_arrival_ms_per_step": 0.10489029787234043
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/prefill",
+          "local_phase": "decode",
+          "kernel": "allgather_kernel",
+          "collective_count": 2162,
+          "mean_kernel_us": 2235.0454708603147,
+          "mean_early_arrival_us": 2175.361429694727,
+          "skew_over_kernel_time": 0.9732962743068427,
+          "mean_kernel_ms_per_step": 102.81209165957446,
+          "mean_early_arrival_ms_per_step": 100.06662576595744
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/prefill",
+          "local_phase": "prefill",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 2162,
+          "mean_kernel_us": 136.55088991674376,
+          "mean_early_arrival_us": 75.76756336725255,
+          "skew_over_kernel_time": 0.5548668588937697,
+          "mean_kernel_ms_per_step": 6.281340936170213,
+          "mean_early_arrival_ms_per_step": 3.485307914893617
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/prefill",
+          "local_phase": "decode",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 2162,
+          "mean_kernel_us": 388.0908950046254,
+          "mean_early_arrival_us": 327.6965092506938,
+          "skew_over_kernel_time": 0.8443808228141715,
+          "mean_kernel_ms_per_step": 17.852181170212763,
+          "mean_early_arrival_ms_per_step": 15.074039425531915
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/idle",
+          "local_phase": "decode",
+          "kernel": "allgather_kernel",
+          "collective_count": 2576,
+          "mean_kernel_us": 2.902945652173913,
+          "mean_early_arrival_us": 0.0,
+          "skew_over_kernel_time": 0.0,
+          "mean_kernel_ms_per_step": 0.1335355,
+          "mean_early_arrival_ms_per_step": 0.0
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/idle",
+          "local_phase": "idle",
+          "kernel": "allgather_kernel",
+          "collective_count": 2576,
+          "mean_kernel_us": 112.31336335403726,
+          "mean_early_arrival_us": 109.38085326086957,
+          "skew_over_kernel_time": 0.9738899272037312,
+          "mean_kernel_ms_per_step": 5.166414714285715,
+          "mean_early_arrival_ms_per_step": 5.03151925
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/idle",
+          "local_phase": "decode",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 2576,
+          "mean_kernel_us": 9.89147049689441,
+          "mean_early_arrival_us": 6.944719332298137,
+          "skew_over_kernel_time": 0.7020916995585789,
+          "mean_kernel_ms_per_step": 0.45500764285714285,
+          "mean_early_arrival_ms_per_step": 0.31945708928571426
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/idle",
+          "local_phase": "idle",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 2576,
+          "mean_kernel_us": 8.974306288819877,
+          "mean_early_arrival_us": 5.9844638975155275,
+          "skew_over_kernel_time": 0.6668441776910299,
+          "mean_kernel_ms_per_step": 0.4128180892857143,
+          "mean_early_arrival_ms_per_step": 0.27528533928571425
+        }
+      ]
+    },
+    "balanced_eager": {
+      "status": "success",
+      "scope": "paired same-layer GPU collective kernel start skew; timing diagnostic, not isolated transport bandwidth",
+      "end_before_peer_start_10us_tolerance_count": 0,
+      "rows": [
+        {
+          "rank": 0,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "allgather_kernel",
+          "collective_count": 736,
+          "mean_kernel_us": 141.0325394021739,
+          "mean_early_arrival_us": 43.390411684782606,
+          "skew_over_kernel_time": 0.30766241513278586,
+          "mean_kernel_ms_per_step": 6.4874968125,
+          "mean_early_arrival_ms_per_step": 1.9959589375
+        },
+        {
+          "rank": 1,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "allgather_kernel",
+          "collective_count": 736,
+          "mean_kernel_us": 124.87309782608696,
+          "mean_early_arrival_us": 27.276289402173912,
+          "skew_over_kernel_time": 0.21843207125494796,
+          "mean_kernel_ms_per_step": 5.7441625,
+          "mean_early_arrival_ms_per_step": 1.2547093125
+        },
+        {
+          "rank": 0,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 736,
+          "mean_kernel_us": 343.1651630434783,
+          "mean_early_arrival_us": 244.73601630434783,
+          "skew_over_kernel_time": 0.7131726721145651,
+          "mean_kernel_ms_per_step": 15.7855975,
+          "mean_early_arrival_ms_per_step": 11.25785675
+        },
+        {
+          "rank": 1,
+          "pair_phase": "prefill/prefill",
+          "local_phase": "prefill",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 736,
+          "mean_kernel_us": 329.66233288043475,
+          "mean_early_arrival_us": 231.3893722826087,
+          "skew_over_kernel_time": 0.7018981218170633,
+          "mean_kernel_ms_per_step": 15.1644673125,
+          "mean_early_arrival_ms_per_step": 10.643911125
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "allgather_kernel",
+          "collective_count": 11684,
+          "mean_kernel_us": 466.8390415953441,
+          "mean_early_arrival_us": 463.48127935638485,
+          "skew_over_kernel_time": 0.9928074519485673,
+          "mean_kernel_ms_per_step": 21.474595913385826,
+          "mean_early_arrival_ms_per_step": 21.3201388503937
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "allgather_kernel",
+          "collective_count": 11684,
+          "mean_kernel_us": 114.41165029099623,
+          "mean_early_arrival_us": 111.1281473810339,
+          "skew_over_kernel_time": 0.971300974143708,
+          "mean_kernel_ms_per_step": 5.262935913385827,
+          "mean_early_arrival_ms_per_step": 5.111894779527559
+        },
+        {
+          "rank": 0,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 11684,
+          "mean_kernel_us": 294.6032837213283,
+          "mean_early_arrival_us": 291.1162043820609,
+          "skew_over_kernel_time": 0.9881634742993365,
+          "mean_kernel_ms_per_step": 13.551751051181101,
+          "mean_early_arrival_ms_per_step": 13.391345401574803
+        },
+        {
+          "rank": 1,
+          "pair_phase": "decode/decode",
+          "local_phase": "decode",
+          "kernel": "reducescatter_kernel",
+          "collective_count": 11684,
+          "mean_kernel_us": 65.16794368366998,
+          "mean_early_arrival_us": 61.653044077370765,
+          "skew_over_kernel_time": 0.9460639785818501,
+          "mean_kernel_ms_per_step": 2.997725409448819,
+          "mean_early_arrival_ms_per_step": 2.836040027559055
+        }
+      ]
+    }
+  },
+  "derived": {
+    "unprofiled_eager_over_graph_request_tpot": 4.695602051318739,
+    "mixed_phase_padding_row_factor_mean": 1.986909308222958,
+    "decode_side_mixed_allgather_kernel_mean_ms_per_step": 100.89323189361701,
+    "decode_side_mixed_allgather_early_arrival_mean_ms_per_step": 98.21663407446809,
+    "nsight_balanced_tpot_over_unprofiled": 1.298678057060471,
+    "nsight_eager_tpot_over_unprofiled": 1.3826217127755311
+  },
+  "validation": {
+    "matched_trace_identity": "all four balanced cases identical; both churn cases identical, including per-iteration token digests and lengths",
+    "correctness": "1 passed: two-rank BF16 default AG/RS; independent additive/squared oracle, unequal rows, idle participation, Graph replay and replacement"
+  },
+  "limits": [
+    "Nsight node tracing and NVTX instrumentation perturb execution; use unprofiled request metrics for Graph/eager comparisons.",
+    "GPU category durations are per-rank kernel time, including communication waiting; they are not additive serving latency.",
+    "Early collective arrival uses matched GPU kernel starts; it is not a bandwidth microbenchmark.",
+    "GPU kernel gap is the complement of kernel interval union; it can include copies, driver work and host waits.",
+    "This H100 synthetic diagnostic does not establish RTX PRO6000 or MiniSWE end-to-end attribution."
+  ]
+}
