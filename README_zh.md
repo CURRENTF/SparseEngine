@@ -2,7 +2,7 @@
   <img src="docs/assets/logo.png" alt="SparseEngine" style="width:42%; height:auto;">
 
   <p>
-    <a href="https://deepwiki.com/CURRENTF/SparseEngine"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+    <a href="https://deepwiki.com/CURRENTF/SparseEngine"><img src="https://img.shields.io/badge/Ask-DeepWiki-20b2aa.svg" alt="Ask DeepWiki"></a>
     <a href="https://arxiv.org/abs/2609.39068"><img src="https://img.shields.io/badge/arXiv-2609.39068-b31b1b.svg" alt="arXiv"></a>
     <a href="https://arxiv.org/pdf/2609.39068.pdf"><img src="https://img.shields.io/badge/PDF-download-brightgreen.svg" alt="PDF"></a>
   </p>
