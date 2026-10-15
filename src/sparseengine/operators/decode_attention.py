@@ -21,6 +21,7 @@ from sparseengine.operators.attention_capabilities import (
     match_attention_capabilities,
 )
 from sparseengine.operators.flashinfer_decode_state import (
+    FlashInferHeadSlotDecodeGraphState,
     FlashInferPagedDecodeGraphState as _FlashInferPagedDecodeGraphState,
     FlashInferPagedDecodeState as _FlashInferPagedDecodeState,
 )
@@ -100,8 +101,13 @@ class DecodeAttentionOpSpec:
     full_layer_kivi_decode_num_warps: int = 2
     full_layer_kivi_decode_num_stages: int = 3
     kv_storage_format: str = "dense"
+    kv_cache_layout: str = "token"
 
     def __post_init__(self) -> None:
+        if self.kv_cache_layout not in {"token", "head_slots"}:
+            raise ValueError("Unknown attention KV cache layout.")
+        if self.kv_cache_layout == "head_slots" and self.page_size != 1:
+            raise ValueError("Head slots require page-size-one addressing.")
         if self.kv_storage_format not in {"dense", "kivi", "turboquant", "fp8_kv", "retroinfer"}:
             raise ValueError(f"Unknown decode KV storage format {self.kv_storage_format!r}.")
         if self.num_query_heads <= 0 or self.num_kv_heads <= 0:
@@ -188,6 +194,7 @@ class DecodeAttentionOpSpec:
             layer_varying_page_table=self.layer_varying_page_table,
             varlen=True,
             cuda_graph=self.cuda_graph,
+            head_slots=self.kv_cache_layout == "head_slots",
         )
 
 
@@ -334,6 +341,7 @@ DECODE_ATTENTION_REGISTRY: OpRegistry[
         upstream_standard=(
             "sgl_fa3_paged_decode_sm90",
             "flashinfer_paged_decode",
+            "flashinfer_head_slot_decode",
         ),
         repo_portable=(
             "triton_paged_decode",
@@ -364,6 +372,7 @@ class SglFa3PagedDecodeAttentionProvider(DecodeAttentionProvider):
         varlen=True,
         cuda_graph=True,
         minimum_runtime_version=(12, 3),
+        head_slots=True,
     )
 
     def __init__(self) -> None:
@@ -409,7 +418,7 @@ class SglFa3PagedDecodeAttentionProvider(DecodeAttentionProvider):
             )
         self._kernel = SglFa3DecodeKernel(
             device=torch.device("cuda", int(device_index)),
-            max_batch_size=spec.max_batch_size,
+            max_batch_size=spec.max_batch_size * (spec.num_kv_heads if spec.kv_cache_layout == "head_slots" else 1),
             softmax_scale=spec.softmax_scale,
         )
 
@@ -431,6 +440,10 @@ class SglFa3PagedDecodeAttentionProvider(DecodeAttentionProvider):
         view: Any,
         **kwargs,
     ) -> torch.Tensor:
+        if spec.kv_cache_layout == "head_slots":
+            from .head_slot_attention import run_head_slot_decode
+
+            return run_head_slot_decode(self, spec, q, view, **kwargs)
         return_softmax_lse = spec.kernel_request.requires_softmax_lse
         if view.meta.attn_score is not None and not return_softmax_lse:
             raise RuntimeError("SGL FA3 decode does not produce attention scores.")
@@ -515,6 +528,7 @@ class FlashInferPagedDecodeAttentionProvider(DecodeAttentionProvider):
     name = "flashinfer_paged_decode"
     decode_graph_lifecycle = True
     supports_decode_graph = True
+    _use_tensor_cores = False
     capabilities = AttentionKernelCapabilities(
         platforms=frozenset({PlatformEnum.CUDA}),
         activation_dtypes=frozenset({torch.bfloat16, torch.float16}),
@@ -571,7 +585,7 @@ class FlashInferPagedDecodeAttentionProvider(DecodeAttentionProvider):
             )
         if not spec.cuda_graph:
             self._state = _FlashInferPagedDecodeState(
-                torch.device("cuda", int(device_index))
+                torch.device("cuda", int(device_index)), use_tensor_cores=self._use_tensor_cores,
             )
 
     def close(self) -> None:
@@ -585,8 +599,10 @@ class FlashInferPagedDecodeAttentionProvider(DecodeAttentionProvider):
             "kernel_path": "flashinfer.BatchDecodeWithPagedKVCacheWrapper",
             "kv_layout": "NHD",
             "page_sizes": "any positive native page size",
-            "cuda_graph": True,
-            "graph_metadata": "fixed buffers + graph-out plan + graph-in page packing",
+            "use_tensor_cores": self._use_tensor_cores,
+            "cuda_graph": self.supports_decode_graph,
+            "graph_metadata": ("fixed buffers + graph-out plan + graph-in page packing"
+                               if self.supports_decode_graph else "eager per-view plan"),
         }
 
     def init_decode_graph_state(
@@ -757,6 +773,53 @@ class FlashInferPagedDecodeAttentionProvider(DecodeAttentionProvider):
             )
         softmax_lse = softmax_lse_log2.mul(math.log(2.0)).transpose(0, 1)
         return DecodeAttentionRunResult(output=output, softmax_lse=softmax_lse)
+
+
+@DECODE_ATTENTION_REGISTRY.register_atomic(ProviderRole.UPSTREAM_STANDARD)
+class FlashInferHeadSlotDecodeAttentionProvider(FlashInferPagedDecodeAttentionProvider):
+    """Virtual MQA with a fixed-plan, device-metadata CUDA Graph lifecycle."""
+
+    name = "flashinfer_head_slot_decode"
+    # The CUDA-core wrapper rejects non-power-of-two GQA groups. The public
+    # tensor-core path reuses paged prefill and supports the virtual MQA shape.
+    _use_tensor_cores = True
+    capabilities = replace(FlashInferPagedDecodeAttentionProvider.capabilities,
+                           head_slots=True)
+
+    @classmethod
+    def supports(cls, spec, caps):
+        if spec.kv_cache_layout != "head_slots":
+            return SupportResult.unsupported("requires independent head slots")
+        if spec.cuda_graph and spec.context_capacity is None:
+            return SupportResult.unsupported("head-slot graphs require a static context capacity")
+        if spec.sparse_context_budget is not None:
+            return SupportResult.unsupported("head slots consume native per-head lengths")
+        common = super().supports(spec, caps)
+        if not common.supported:
+            return common
+        supported, reason = flashinfer_paged_decode_support(
+            use_tensor_cores=True,
+        )
+        return SupportResult.yes(reason) if supported else SupportResult.unsupported(reason)
+
+    def init_decode_graph_state(self, spec, contract, inputs):
+        if not spec.cuda_graph or contract.batch_capacity > spec.max_batch_size:
+            raise ValueError("Head-slot graph requires a graph spec within its batch capacity.")
+        if contract.context_capacity != spec.context_capacity:
+            raise ValueError("Head-slot graph context capacity differs from its fixed operator plan.")
+        return FlashInferHeadSlotDecodeGraphState(spec, contract=contract, inputs=inputs)
+
+    def binding_metadata(self):
+        metadata = super().binding_metadata()
+        metadata["graph_metadata"] = "fixed FA2 capacity split plan + graph-in per-layer head page packing"
+        return metadata
+
+    def run(self, spec, q, view, **kwargs):
+        if spec.kv_cache_layout == "head_slots":
+            from .head_slot_attention import run_head_slot_decode
+
+            return run_head_slot_decode(self, spec, q, view, **kwargs)
+        return super().run(spec, q, view, **kwargs)
 
 
 @DECODE_ATTENTION_REGISTRY.register_atomic(ProviderRole.REPO_PORTABLE)

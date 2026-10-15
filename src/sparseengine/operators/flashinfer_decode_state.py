@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -22,13 +23,13 @@ if TYPE_CHECKING:
 class FlashInferPagedDecodeState:
     """Provider-owned eager plan state for FlashInfer paged decode."""
 
-    def __init__(self, device: torch.device) -> None:
-        self.workspace = torch.empty(
+    def __init__(self, device: torch.device, *, use_tensor_cores: bool = False) -> None:
+        self.workspace = torch.zeros(
             128 * 1024 * 1024,
             dtype=torch.uint8,
             device=device,
         )
-        self.wrapper = make_flashinfer_paged_decode_wrapper(self.workspace)
+        self.wrapper = make_flashinfer_paged_decode_wrapper(self.workspace, use_tensor_cores=use_tensor_cores)
         self.plan_key: tuple[object, ...] | None = None
         self.indices = torch.empty(0, dtype=torch.int32, device=device)
 
@@ -110,6 +111,8 @@ class FlashInferPagedDecodeGraphState:
         *,
         contract: DecodeGraphContract,
         inputs: DecodeGraphInputs,
+        use_tensor_cores: bool = False,
+        backend: str = "auto",
     ) -> None:
         self.spec = spec
         self.contract = contract
@@ -117,7 +120,7 @@ class FlashInferPagedDecodeGraphState:
         device = inputs.context_lens.device
         batch_size = int(contract.batch_capacity)
         context_capacity = int(contract.context_capacity)
-        self.workspace = torch.empty(
+        self.workspace = torch.zeros(
             128 * 1024 * 1024,
             dtype=torch.uint8,
             device=device,
@@ -153,6 +156,8 @@ class FlashInferPagedDecodeGraphState:
         self.wrapper = make_flashinfer_paged_decode_wrapper(
             self.workspace,
             use_cuda_graph=True,
+            use_tensor_cores=use_tensor_cores,
+            backend=backend,
             paged_kv_indptr_buffer=self.indptr,
             paged_kv_indices_buffer=self.indices,
             paged_kv_last_page_len_buffer=self.last_page_len,
@@ -393,7 +398,61 @@ class FlashInferPagedDecodeGraphState:
         return tensors
 
 
+class FlashInferHeadSlotDecodeGraphState(FlashInferPagedDecodeGraphState):
+    """One fixed FA2 MQA plan; each layer packs its ragged metadata on device."""
+
+    def __init__(self, spec, *, contract, inputs) -> None:
+        heads = spec.num_kv_heads
+        virtual_spec = replace(
+            spec, kv_cache_layout="token", num_query_heads=spec.num_query_heads // heads,
+            num_kv_heads=1, max_batch_size=spec.max_batch_size * heads,
+        )
+        super().__init__(
+            virtual_spec, contract=replace(contract, batch_capacity=contract.batch_capacity * heads),
+            inputs=inputs, use_tensor_cores=True, backend="fa2",
+        )
+        if spec.page_size != 1 or spec.sparse_context_budget is not None:
+            raise ValueError("Head-slot graphs require page size one and native head lengths.")
+
+    def prepare_out_graph(self) -> None:
+        if self.planned:
+            return
+        # Plan the capacity envelope once. Shorter per-head lengths mask empty
+        # splits on device; neither the split schedule nor merge layout changes.
+        # Keep upstream graph splitting enabled: it also supplies the valid-CTA
+        # mask for the padded grid, which the FA2 no-split path omits.
+        batch, capacity = self.contract.batch_capacity, self.contract.context_capacity
+        torch.arange(batch + 1, out=self.host_indptr)
+        self.host_indptr.mul_(capacity)
+        self.indices.zero_()
+        self.wrapper.plan(
+            self.host_indptr, self.indices, self.host_last_page_len,
+            num_qo_heads=self.spec.num_query_heads, num_kv_heads=1,
+            head_dim=self.spec.head_dim, page_size=1, sm_scale=self.spec.softmax_scale,
+            q_data_type=self.spec.activation_dtype, kv_data_type=self.spec.activation_dtype,
+            non_blocking=True,
+        )
+        self.planned = True
+
+    def pack_page_indices_once(self, *, active_slots, req_indices, context_lens,
+                               is_sparse=False, force=False) -> bool:
+        del force
+        if not self.planned:
+            raise RuntimeError("Head-slot graph decode was not planned before forward.")
+        if is_sparse:
+            raise ValueError("Head-slot graphs consume the native per-head view.")
+        if context_lens.numel() != self.contract.batch_capacity:
+            raise ValueError("Head-slot graph virtual batch differs from its fixed plan.")
+        pack_flashinfer_page_indices(
+            active_slots, req_indices, context_lens, self.indices,
+            context_capacity=self.contract.context_capacity, page_size=1,
+            indptr=self.indptr, last_page_len=self.last_page_len,
+        )
+        return True
+
+
 __all__ = [
+    "FlashInferHeadSlotDecodeGraphState",
     "FlashInferPagedDecodeGraphState",
     "FlashInferPagedDecodeState",
 ]

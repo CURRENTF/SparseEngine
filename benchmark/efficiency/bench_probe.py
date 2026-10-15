@@ -43,6 +43,8 @@ from benchmark.efficiency.metrics import (
 from benchmark.efficiency.workload import (
     TRACE_GENERATOR_VERSION,
     build_request_trace,
+    context_boundary_kwargs,
+    context_compaction_evidence,
     derive_trace_seed,
     trace_metadata,
 )
@@ -273,6 +275,8 @@ def _trace_for_iteration(
         prompt_jitter_fraction=args.prompt_length_jitter,
         output_jitter_fraction=args.output_length_jitter,
         vary_output_lengths=vary_output_lengths,
+        question_suffix_tokens=getattr(args, "question_suffix_tokens", None),
+        context_prefix_length=getattr(args, "context_prefix_length", 0),
     )
     if getattr(args, "shared_prompt", False):
         first = trace[0]
@@ -294,7 +298,8 @@ def _prime_shared_prompt(args, llm, trace):
     if args.engine == "sparseengine":
         from sparseengine import SamplingParams
         seq_id = llm.add_request(prompt, SamplingParams(
-            temperature=0.0, top_p=1.0, top_k=1, ignore_eos=True, max_tokens=1))
+            temperature=0.0, top_p=1.0, top_k=1, ignore_eos=True, max_tokens=1),
+            **trace[0].request_kwargs())
         finished = []
         hits = 0
         while not llm.is_finished():
@@ -518,6 +523,11 @@ def _record_batch_first_tokens(
 
 def _sparse_probe_max_model_len(args, hyper_params):
     required = max(args.prompt_lens) + max(args.output_lens) + 128
+    if getattr(args, "sparse_method", None) == "kvzip":
+        # Replay is validated by the engine to fit one prefill chunk. Reserve
+        # that upper bound rather than silently truncating reconstruction.
+        context_len = max(args.prompt_lens) - args.question_suffix_tokens
+        required = max(required, context_len + int(hyper_params["engine_prefill_chunk_size"]))
     capacity = int(hyper_params.get("max_model_len", required))
     if capacity < required:
         raise ValueError(
@@ -535,10 +545,25 @@ def _resolve_sparse_probe_protocol(
     hyper_params.setdefault("gpu_memory_utilization", args.gpu_memory_utilization)
     hyper_params.setdefault("decode_graph", True)
     from sparseengine.config import Config
+    if args.sparse_method == "kvzip":
+        if (getattr(args, "question_suffix_tokens", None) is None
+                or getattr(args, "context_prefix_length", 0) <= 0):
+            raise ValueError("KVzip probes require explicit --question-suffix-tokens and positive "
+                             "--context-prefix-length.")
+    if getattr(args, "question_suffix_tokens", None) is not None:
+        if int(hyper_params.get("data_parallel_size", 1)) != 1:
+            raise ValueError("Native context-boundary probes currently require DP1.")
+    if (getattr(args, "question_suffix_tokens", None) is not None
+            or getattr(args, "context_prefix_length", 0)):
+        for prompt_len in args.prompt_lens:
+            shortest = (max(1, prompt_len - max(1, round(prompt_len * args.prompt_length_jitter)))
+                        if args.prompt_length_jitter and max(args.batch_sizes) > 1 else prompt_len)
+            context_boundary_kwargs(shortest, getattr(args, "question_suffix_tokens", None),
+                                    getattr(args, "context_prefix_length", 0))
     hyper_params.setdefault("decode_reservation_tokens", Config.decode_reservation_tokens)
     hyper_params.setdefault("max_num_batched_tokens", args.max_num_batched_tokens)
     hyper_params.setdefault("engine_prefill_chunk_size", 8192)
-    if args.sparse_method == "snapkv":
+    if args.sparse_method in {"snapkv", "adakv"}:
         hyper_params.setdefault("observation_window_size", 64)
         hyper_params.setdefault("sink_keep_tokens", 64)
         hyper_params.setdefault("decode_keep_tokens", 2048)
@@ -555,7 +580,7 @@ def _resolve_sparse_probe_protocol(
             allow_single_full_layer=args.allow_single_omnikv_full_layer,
         )
 
-    if args.sparse_method in {"snapkv", "h2o"}:
+    if args.sparse_method in {"snapkv", "adakv", "h2o"}:
         configured_mode = hyper_params.get("sparse_prefill_score_mode")
         if args.sparse_prefill_score_mode is None and configured_mode is None:
             raise ValueError(
@@ -582,7 +607,7 @@ def _resolve_sparse_probe_protocol(
         int(hyper_params.get("sink_keep_tokens", 64))
         + int(hyper_params.get("decode_keep_tokens", 2048))
         + int(hyper_params.get("recent_keep_tokens", 64))
-        if args.sparse_method == "snapkv"
+        if args.sparse_method in {"snapkv", "adakv"}
         else None
     )
     protocol = {
@@ -591,6 +616,9 @@ def _resolve_sparse_probe_protocol(
         "sparse_budget": sparse_budget,
         "max_num_batched_tokens": int(hyper_params["max_num_batched_tokens"]),
     }
+    if getattr(args, "question_suffix_tokens", None) is not None:
+        protocol.update(question_suffix_tokens=args.question_suffix_tokens,
+                        context_prefix_length=args.context_prefix_length)
     protocol_label = f"sparseengine-{args.sparse_method}"
     if args.sparse_method == "snapkv":
         protocol_label += (
@@ -601,6 +629,18 @@ def _resolve_sparse_probe_protocol(
             interval = int(hyper_params.get("decode_eviction_interval", 1024))
             protocol.update(decode_eviction=True, decode_eviction_interval=interval)
             protocol_label += f"-decode-evict-interval{interval}"
+    elif args.sparse_method == "kvzip":
+        protocol.update(kvzip_token_budget=int(hyper_params.get("kvzip_token_budget", Config.kvzip_token_budget)),
+                        kvzip_score_chunk_size=int(hyper_params.get("kvzip_score_chunk_size", Config.kvzip_score_chunk_size)),
+                        kvzip_prev_postfix_size=int(hyper_params.get("kvzip_prev_postfix_size", Config.kvzip_prev_postfix_size)),
+                        kv_cache_layout=hyper_params.get("kv_cache_layout", "token"))
+        protocol_label += f"-reconstruction-budget{protocol['kvzip_token_budget']}"
+    elif args.sparse_method == "adakv":
+        protocol.update(kv_cache_layout="head_slots", adakv_alpha=hyper_params.get("adakv_alpha", 0.2))
+        protocol_label += (
+            f"-{protocol['score_mode']}-budget{protocol['sparse_budget']}"
+            f"-window{protocol['score_window']}-prefill-and-chain-compaction"
+        )
     elif args.sparse_method == "pyramidkv":
         interval = int(hyper_params.get("decode_eviction_interval", 1024))
         protocol.update(decode_eviction=True, decode_eviction_interval=interval)
@@ -756,6 +796,7 @@ def run_sparseengine_probe(
                                 request.prompt_token_ids,
                                 SamplingParams(temperature=0.0, top_p=1.0, top_k=1,
                                                ignore_eos=True, max_tokens=request.output_len),
+                                **request.request_kwargs(),
                             )))
                         if wave_size:
                             while waiting_for_first:
@@ -791,7 +832,8 @@ def run_sparseengine_probe(
                             vary_output_lengths=False,
                         )
                         prefix_prime = _prime_shared_prompt(args, llm, trace)
-                        graph_before = llm.debug_sparse_state_summaries()[0]["decode_graph"]
+                        state_before = llm.debug_sparse_state_summaries()[0]
+                        graph_before = state_before["decode_graph"]
                         t_start = time.perf_counter()
 
                         seq_to_request: dict[int, Any] = {}
@@ -816,6 +858,7 @@ def run_sparseengine_probe(
                                     request.prompt_token_ids,
                                     SamplingParams(temperature=0.0, top_p=1.0, top_k=1,
                                                    ignore_eos=True, max_tokens=request.output_len),
+                                    **request.request_kwargs(),
                                 ))
                                 if seq_id in seq_to_request:
                                     raise RuntimeError(f"Duplicate request sequence ID: {seq_id}")
@@ -864,7 +907,11 @@ def run_sparseengine_probe(
                             raise RuntimeError("Wave workload ended before all requests were admitted")
 
                         elapsed_s = time.perf_counter() - t_start
-                        graph_after = llm.debug_sparse_state_summaries()[0]["decode_graph"]
+                        state_after = llm.debug_sparse_state_summaries()[0]
+                        graph_after = state_after["decode_graph"]
+                        compression = (context_compaction_evidence(state_before, state_after,
+                            sum(r.context_length - r.context_prefix_length > protocol["kvzip_token_budget"]
+                                for r in trace)) if args.sparse_method == "kvzip" else None)
                         if getattr(args, "enable_prefix_caching", False):
                             if set(cached_tokens) != set(seq_to_request):
                                 raise RuntimeError("Missing native prefix-cache hit observations")
@@ -922,6 +969,7 @@ def run_sparseengine_probe(
                             "status": "success",
                             "elapsed_s": elapsed_s,
                             "prefix_prime": prefix_prime,
+                            "context_compaction": compression,
                             "ttft_ms": ttft_ms,
                             "batch_max_ttft_ms": max(row["ttft_ms"] for row in request_results),
                             **request_summary(request_results),
@@ -1104,6 +1152,7 @@ def run_sparseengine_churn(
                                     ignore_eos=True,
                                     max_tokens=request.output_len,
                                 ),
+                                **request.request_kwargs(),
                             )
                         while not llm.is_finished():
                             llm.step()
@@ -1115,9 +1164,8 @@ def run_sparseengine_churn(
                     try:
                         for iteration in range(args.num_iters):
                             profiler.reset()
-                            graph_before = llm.debug_sparse_state_summaries()[0][
-                                "decode_graph"
-                            ]
+                            state_before = llm.debug_sparse_state_summaries()[0]
+                            graph_before = state_before["decode_graph"]
                             trace = _trace_for_iteration(
                                 args,
                                 model_specs,
@@ -1147,6 +1195,7 @@ def run_sparseengine_churn(
                                             ignore_eos=True,
                                             max_tokens=request.output_len,
                                         ),
+                                        **request.request_kwargs(),
                                     )
                                 )
                                 if seq_id in seq_to_request:
@@ -1187,9 +1236,11 @@ def run_sparseengine_churn(
                                     finished_times[seq_id] = now
                                     generated_counts[seq_id] = len(token_ids)
                             elapsed_s = time.perf_counter() - started
-                            graph_after = llm.debug_sparse_state_summaries()[0][
-                                "decode_graph"
-                            ]
+                            state_after = llm.debug_sparse_state_summaries()[0]
+                            graph_after = state_after["decode_graph"]
+                            compression = (context_compaction_evidence(state_before, state_after,
+                                sum(r.context_length - r.context_prefix_length > protocol["kvzip_token_budget"]
+                                    for r in trace)) if args.sparse_method == "kvzip" else None)
 
                             expected_seq_ids = set(seq_to_request)
                             for name, observed in (
@@ -1253,6 +1304,7 @@ def run_sparseengine_churn(
                                 "scheduler_steps": scheduler_steps,
                                 "scheduler_metrics": scheduler_phase_metrics(scheduler_steps),
                                 "engine_init_s": engine_init_s,
+                                "context_compaction": compression,
                                 "startup_decode_cuda_graph": startup_graph_summary,
                                 "decode_cuda_graph_before": graph_before,
                                 "decode_cuda_graph_after": graph_after,
@@ -1912,6 +1964,10 @@ def parse_args():
         help="fixed measures one variable-length batch; churn oversubscribes the scheduler.",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--question-suffix-tokens", type=int, default=None,
+                        help="Declare the final N prompt tokens as the question; required for KVzip.")
+    parser.add_argument("--context-prefix-length", type=int, default=0,
+                        help="Protected tokens at the start of the declared context; positive for KVzip.")
     parser.add_argument("--enable-prefix-caching", action="store_true",
                         help="Enable prefix caching in fixed request-mode probes.")
     parser.add_argument("--shared-prompt", action="store_true",
@@ -1998,6 +2054,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.decode_only_steps and args.question_suffix_tokens is not None:
+        raise ValueError("Context-boundary traces currently require request-mode probes.")
     if args.prime_shared_prompt and not (args.shared_prompt and args.enable_prefix_caching):
         raise ValueError("--prime-shared-prompt requires shared prompts and prefix caching")
     if args.enable_prefix_caching or args.shared_prompt:

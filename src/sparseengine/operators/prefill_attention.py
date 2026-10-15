@@ -92,8 +92,13 @@ class PrefillAttentionOpSpec:
     allow_softmax_lse_fallback: bool = False
     prefill_sparse_method: str = ""
     flashprefill_v2: FlashPrefillV2Semantics | None = None
+    kv_cache_layout: str = "token"
 
     def __post_init__(self) -> None:
+        if self.kv_cache_layout not in {"token", "head_slots"}:
+            raise ValueError("Unknown attention KV cache layout.")
+        if self.kv_cache_layout == "head_slots" and self.page_size != 1:
+            raise ValueError("Head slots require page-size-one addressing.")
         if self.num_query_heads <= 0 or self.num_kv_heads <= 0:
             raise ValueError("Prefill attention head counts must be positive.")
         if self.num_query_heads % self.num_kv_heads:
@@ -130,6 +135,7 @@ class PrefillAttentionOpSpec:
             layer_varying_page_table=self.layer_varying_page_table,
             varlen=self.varlen,
             cuda_graph=self.cuda_graph,
+            head_slots=self.kv_cache_layout == "head_slots",
         )
 
 
@@ -201,6 +207,7 @@ PREFILL_ATTENTION_REGISTRY: OpRegistry[
             "sgl_fa3_paged_prefill_sm90",
             "flashinfer_paged_prefill_fa3_sm90",
             "flashinfer_paged_prefill_fa2_sm120",
+            "flashinfer_head_slot_prefill_fa2_sm120",
         ),
         repo_portable=("triton_paged_prefill",),
         repo_nonstandard=(
@@ -539,6 +546,43 @@ class FlashInferFa2Sm120PagedPrefillAttentionProvider(
 
 
 @PREFILL_ATTENTION_REGISTRY.register_atomic(ProviderRole.UPSTREAM_STANDARD)
+class FlashInferHeadSlotPrefillAttentionProvider(FlashInferFa2Sm120PagedPrefillAttentionProvider):
+    """SM120 virtual MQA prefill, with a plan for each independent layer view."""
+
+    name = "flashinfer_head_slot_prefill_fa2_sm120"
+    capabilities = replace(FlashInferFa2Sm120PagedPrefillAttentionProvider.capabilities,
+                           head_slots=True, layer_varying_page_table=True)
+
+    @classmethod
+    def supports(cls, spec, caps):
+        if spec.kv_cache_layout != "head_slots":
+            return SupportResult.unsupported("requires independent head slots")
+        return super().supports(spec, caps)
+
+    def __init__(self):
+        super().__init__()
+        self._query_plan_scope = None
+        self._max_query_len = 0
+
+    def close(self):
+        super().close()
+        self._query_plan_scope = None
+        self._max_query_len = 0
+
+    def run(self, spec, q, view, **kwargs):
+        if spec.kv_cache_layout == "head_slots":
+            from .head_slot_attention import run_head_slot_prefill
+
+            if self._state is None:
+                raise RuntimeError("FlashInfer head-slot prefill was not prepared.")
+            # Head lengths/addresses differ between layers, even in the same
+            # forward. A plan for an earlier layer is never reusable here.
+            self._state.plan_scope = None
+            return run_head_slot_prefill(self, spec, q, view, **kwargs)
+        return super().run(spec, q, view, **kwargs)
+
+
+@PREFILL_ATTENTION_REGISTRY.register_atomic(ProviderRole.UPSTREAM_STANDARD)
 class SglFa3PagedPrefillAttentionProvider(PrefillAttentionProvider):
     """SGL FA3 over SparseEngine's page-size-one physical KV table."""
 
@@ -554,6 +598,7 @@ class SglFa3PagedPrefillAttentionProvider(PrefillAttentionProvider):
         layer_varying_page_table=True,
         varlen=True,
         minimum_runtime_version=(12, 3),
+        head_slots=True,
     )
 
     @classmethod
@@ -618,6 +663,11 @@ class SglFa3PagedPrefillAttentionProvider(PrefillAttentionProvider):
         max_context_len,
         layer_idx,
     ):
+        if spec.kv_cache_layout == "head_slots":
+            from .head_slot_attention import run_head_slot_prefill
+
+            return run_head_slot_prefill(self, spec, q, view, qo_indptr=qo_indptr,
+                chunk_lens=chunk_lens, max_context_len=max_context_len, layer_idx=layer_idx)
         del max_context_len, layer_idx
         payload, meta = _view_parts(view)
         _validate_token_page_table(meta)

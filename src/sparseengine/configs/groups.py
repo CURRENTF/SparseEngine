@@ -36,6 +36,9 @@ class SparseMethodConfig:
     """Shared and method-specific sparse-attention settings."""
 
     sparse_method: str = ""
+    kv_cache_layout: str = "auto"
+    head_slot_budgets: list[list[int]] | None = None
+    adakv_alpha: float = 0.2
     palu_checkpoint_path: str | None = None
     palu_manifest: dict | None = field(default=None, init=False)
     enable_omnikv_offload: bool = False
@@ -70,8 +73,8 @@ class SparseMethodConfig:
     sparse_prefill_score_mode: str | None = None
 
     kvzip_token_budget: int = 4096
-    kvzip_score_chunk_size: int = 2048
-    kvzip_prev_postfix_size: int = 64
+    kvzip_score_chunk_size: int = 2000
+    kvzip_prev_postfix_size: int = 8
 
     h2o_decode_budget: int = 4096
     h2o_decode_eviction: bool = False

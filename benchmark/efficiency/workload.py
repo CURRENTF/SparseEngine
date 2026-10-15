@@ -12,6 +12,37 @@ from typing import Any
 TRACE_GENERATOR_VERSION = "random-varlen-v2"
 
 
+def context_compaction_evidence(before: dict, after: dict, expected: int) -> dict[str, int]:
+    """Check executed compression, allowing additional compactions after replay."""
+    initial = int(before["state"]["cache"]["kvzip_context_compactions"])
+    final = int(after["state"]["cache"]["kvzip_context_compactions"])
+    executed = final - initial
+    if executed < expected:
+        raise RuntimeError(f"KVzip compressed fewer contexts than the trace requires: "
+                           f"executed={executed}, expected={expected}.")
+    return dict(expected_contexts=expected, executed_compactions=executed)
+
+
+def context_boundary_kwargs(prompt_len: int, question_suffix_tokens: int | None,
+                            context_prefix_length: int = 0) -> dict[str, int]:
+    """Split an existing synthetic prompt without changing its token trace."""
+    if (isinstance(context_prefix_length, bool) or not isinstance(context_prefix_length, int)
+            or context_prefix_length < 0):
+        raise ValueError("context_prefix_length must be a non-negative integer.")
+    if question_suffix_tokens is None:
+        if context_prefix_length:
+            raise ValueError("context_prefix_length requires question_suffix_tokens.")
+        return {}
+    if (isinstance(question_suffix_tokens, bool) or not isinstance(question_suffix_tokens, int)
+            or question_suffix_tokens <= 0):
+        raise ValueError("question_suffix_tokens must be a positive integer.")
+    context_length = prompt_len - question_suffix_tokens
+    if context_length <= context_prefix_length:
+        raise ValueError("Prompt must leave a nonempty context after its protected prefix and question suffix: "
+                         f"prompt={prompt_len}, prefix={context_prefix_length}, question={question_suffix_tokens}.")
+    return dict(context_length=context_length, context_prefix_length=context_prefix_length)
+
+
 @dataclass(frozen=True)
 class RequestTrace:
     request_index: int
@@ -19,6 +50,8 @@ class RequestTrace:
     output_len: int
     trace_seed: int
     prompt_digest: str
+    context_length: int | None = None
+    context_prefix_length: int = 0
 
     @property
     def prompt_len(self) -> int:
@@ -32,7 +65,12 @@ class RequestTrace:
             "trace_seed": self.trace_seed,
             "prompt_digest": self.prompt_digest,
             "status": "success",
+            **self.request_kwargs(),
         }
+
+    def request_kwargs(self) -> dict[str, int]:
+        suffix = None if self.context_length is None else self.prompt_len - self.context_length
+        return context_boundary_kwargs(self.prompt_len, suffix, self.context_prefix_length)
 
 
 def derive_trace_seed(
@@ -111,6 +149,8 @@ def build_request_trace(
     prompt_jitter_fraction: float,
     output_jitter_fraction: float,
     vary_output_lengths: bool,
+    question_suffix_tokens: int | None = None,
+    context_prefix_length: int = 0,
 ) -> list[RequestTrace]:
     """Build a reproducible, non-prefix-sharing random request trace.
 
@@ -172,6 +212,7 @@ def build_request_trace(
                 output_len=output_len,
                 trace_seed=request_seed,
                 prompt_digest=digest,
+                **context_boundary_kwargs(prompt_len, question_suffix_tokens, context_prefix_length),
             )
         )
     return traces

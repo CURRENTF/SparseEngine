@@ -23,6 +23,10 @@ def create_attention_cache_storage(
         else CacheLayout(str(configured_layout))
     )
     dtype = config.hf_config.dtype
+    if getattr(config, "kv_cache_layout", "token") == "head_slots":
+        from .head_slots import HeadSlotStorage
+
+        return HeadSlotStorage(num_kv_heads=num_kv_heads, head_dim=head_dim, dtype=dtype)
     if layout is CacheLayout.LOW_RANK_KV:
         from .low_rank_kv import LowRankKVStorage
 

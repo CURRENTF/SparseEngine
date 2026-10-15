@@ -694,6 +694,53 @@ def test_standard_manager_accounts_storage_tensors_explicitly(
     }
 
 
+def test_head_storage_accounting_tracks_ragged_live_bytes_without_counting_aliases():
+    # Regression: head_slots in the storage path was classified as a slot map,
+    # and physical head slots inflated the dense baseline by the head count.
+    from sparseengine.engine.cache_manager.head_slot_allocator import HeadSlotAllocator
+    from sparseengine.engine.cache_manager.head_slots import HeadSlotCacheManager
+    from sparseengine.engine.cache_manager.storage.head_slots import HeadSlotStorage
+
+    layers, heads, capacity, dim = 2, 3, 23, 4
+    storage = HeadSlotStorage(num_kv_heads=heads, head_dim=dim, dtype=torch.bfloat16)
+    storage.allocate(num_layers=layers, num_slots=capacity, device=torch.device("cpu"))
+    manager = object.__new__(HeadSlotCacheManager)
+    manager.attention_cache_storage = storage
+    manager.kv_cache = storage.cache
+    manager.cache_alias = storage.cache[0]
+    manager.config = SimpleNamespace(num_kvcache_slots=capacity, memory_expected_savings=None)
+    manager.hf_config = SimpleNamespace(dtype=torch.bfloat16)
+    manager.num_layers = manager.num_kv_layers = layers
+    manager.num_kv_heads, manager.head_dim = heads, dim
+    manager.allocator = HeadSlotAllocator((capacity,) * layers, heads, 6, 2)
+    manager.slot_table = torch.zeros((layers, 3, heads, 6), dtype=torch.int32)
+    per_head_bytes = 2 * dim * 2
+    expected_pool_bytes = layers * capacity * per_head_bytes
+    expected_map_bytes = layers * 3 * heads * 6 * 4
+
+    def check_live(expected_heads):
+        accounting = manager.memory_accounting()
+        assert accounting["kv_or_latent_tensor_bytes"] == expected_pool_bytes
+        assert accounting["slot_map_bytes"] == expected_map_bytes
+        assert accounting["allocated_tensor_bytes"] == expected_pool_bytes + expected_map_bytes
+        assert accounting["dense_baseline"]["slots"] == capacity // heads
+        assert accounting["dense_baseline_bytes"] == layers * (capacity // heads) * heads * per_head_bytes
+        assert accounting["logical_live_kv_bytes"] == expected_heads * per_head_bytes
+        assert accounting["tensor_count"] == 2
+
+    check_live(0)
+    manager.allocator.apply_append(manager.allocator.plan_append([(10, [0, 1, 2]), (20, [0, 1])]))
+    check_live(layers * heads * 5)
+    selections = [[np.asarray(indices, dtype=np.int32) for indices in row]
+                  for row in [[[0], [0, 2], [0, 1, 2]], [[0, 1], [2], [0, 2]]]]
+    manager.allocator.compact(10, selections)
+    check_live(6 + 5 + layers * heads * 2)
+    manager.allocator.free_seq(10)
+    check_live(layers * heads * 2)
+    manager.allocator.free_seq(20)
+    check_live(0)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_mla_storage_store_skips_padding_and_overwrites_reused_slot():
     device = torch.device("cuda")

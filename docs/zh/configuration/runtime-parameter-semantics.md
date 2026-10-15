@@ -102,13 +102,24 @@ Token 数预算须为非负整数，不接受比例。QuEST 的总选择预算�
 | `snapkv_decode_eviction` | bool | `False` | 开启 SnapKV 的周期性 decode 驱逐；PyramidKV 始终开启。 |
 | `decode_eviction_interval` | int | `1024` | 正整数。SnapKV/PyramidKV 每层物理 KV 长度达到该层预算加此值时驱逐；仅在边界步的 decode Graph replay 后评分。 |
 
+## 逐 KV head 独立存储
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `kv_cache_layout` | str | `"auto"` | AdaKV 解析为 `head_slots`，其他方法为 `token`；显式 head 布局支持 KVzip、AdaKV 及 chain 轮末 SnapKV。 |
+| `head_slot_budgets` | list[list[int]] 或 None | `None` | SnapKV 按 KV layer/head 的总保留量，包含 sink/recent；要求 chain cache，`None` 禁用压缩。 |
+| `adakv_alpha` | float | `0.2` | AdaKV 逐 head 保护比例，范围 `(0, 1]`；其余名额在同层竞争。 |
+
+Head 布局要求 BF16 显式 KV、TP1 和兼容 attention provider；SM90 和 SM120
+支持 batch-only decode CUDA Graph。详见 [head 布局约束](../features/sparse-methods.md#逐-kv-head-独立缓存)。
+
 ## KVzip
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `kvzip_token_budget` | int | `4096` | 重建后保留的 prompt token 总数，必须为正。生成 token 继续追加，不再次淘汰。 |
-| `kvzip_score_chunk_size` | int | `2048` | 每次前向重建的原文 token 数，必须为正。 |
-| `kvzip_prev_postfix_size` | int | `64` | 重建输入中附带的前文 token 上限，必须非负。 |
+| `kvzip_token_budget` | int | `4096` | 跨 layer、KV head 的平均 context token 预算，必须为正；不含系统前缀与问题，使用原版全局严格阈值。并列分数可减少 KV pair；token 布局并集的实际保留量可超过预算。 |
+| `kvzip_score_chunk_size` | int | `2000` | 每次前向重建的原文 token 数，必须为正。 |
+| `kvzip_prev_postfix_size` | int | `8` | 重建输入中附带的前文 token 上限，必须非负。 |
 
 重建临时容量和与原论文逐 head KVzip 的差异见 [KVzip 说明](../features/sparse-methods.md#kvzip)。
 

@@ -133,6 +133,9 @@ class RuntimeState:
         self.recurrent_state_manager = recurrent_state_manager
         self.prefix_cache_coordinator = prefix_cache_coordinator
         self.chain_cache_coordinator = chain_cache_coordinator
+        bind_chain = getattr(cache_manager, "bind_chain_cache", None)
+        if callable(bind_chain):
+            bind_chain(chain_cache_coordinator)
         self.decode_graph_participants = tuple(decode_graph_participants)
         self._resident_seq_ids: set[int] = set()
         self.decode_reservations = DecodeReservations(
@@ -161,10 +164,11 @@ class RuntimeState:
         }
         coordinator = self.chain_cache_coordinator
         if coordinator is not None:
-            # Partial prefills are already covered above. New chain requests
-            # also own capacity before their first prefill chunk is scheduled.
+            # Exclude only promises already charged by the prefill budgets.
+            # Some layouts leave even partial-prefill promises with the chain.
             partial_ids = {int(seq.seq_id) for seq in waiting
-                           if 0 < seq.num_prefilled_tokens < seq.num_prompt_tokens}
+                           if 0 < seq.num_prefilled_tokens < seq.num_prompt_tokens
+                           and not self.cache_manager.prefill_reservation_owned_by_chain(seq)}
             chain_slots, _ = coordinator._outstanding_active_reservations(
                 exclude_seq_ids=partial_ids,
             )

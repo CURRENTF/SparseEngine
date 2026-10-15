@@ -27,6 +27,9 @@ Content-Type: application/json
 跨 TP rank 汇总分数，得到一个确定性的统一 mask。QuEST 会先完成 rank 间归并，
 再聚合 page 分数并选择 page。
 
+`kvzip_global` 是旧的 token 共享 prefix 维护策略，使用 query 平均分并跨层汇总；
+它与原生 `kvzip` 的 query-agnostic、layer 独立重建语义不同。
+
 只有 `[L, R)` 内所有块均无引用且不存在传输时才会提交修剪。提交后会在
 `[L, L + block_size)` 对应的子树根写入可继承的 `quality_degraded` 记录。
 设备分配、容量和删除回收均按实际保留 token 槽或 page 计量。offload 仍由逻辑块

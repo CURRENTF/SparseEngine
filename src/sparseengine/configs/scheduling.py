@@ -171,7 +171,7 @@ def resolve_prefill_token_budget(config) -> None:
     method = normalize_sparse_method(config.sparse_method)
     effective_step_budget = min(int(chunk), int(budget))
     if (
-        method in {"snapkv", "pyramidkv"}
+        method in {"snapkv", "pyramidkv", "adakv"}
         and effective_step_budget < int(config.observation_window_size)
     ):
         raise ValueError(

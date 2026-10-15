@@ -87,7 +87,19 @@ class SequenceStatus(Enum):
 class Sequence:
     counter = count()
 
-    def __init__(self, token_ids: list[int], sampling_params = SamplingParams()):
+    def __init__(self, token_ids: list[int], sampling_params = SamplingParams(), *,
+                 context_length: int | None = None, context_prefix_length: int = 0):
+        if context_length is not None:
+            if (isinstance(context_length, bool) or not isinstance(context_length, int)
+                    or not 0 < context_length < len(token_ids)):
+                raise ValueError("context_length must leave a nonempty question suffix.")
+        if (isinstance(context_prefix_length, bool) or not isinstance(context_prefix_length, int)
+                or context_prefix_length < 0
+                or (context_length is None and context_prefix_length != 0)
+                or (context_length is not None and context_prefix_length >= context_length)):
+            raise ValueError("context_prefix_length must lie inside the declared context.")
+        self.context_length = context_length
+        self.context_prefix_length = context_prefix_length
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
@@ -346,6 +358,19 @@ class Sequence:
     def is_last_chunk_prefill(self):
         return (self.num_prefilled_tokens + self.current_chunk_size) >= self.num_prompt_tokens
 
+    @property
+    def prefill_stage_remaining(self) -> int:
+        end = self.num_prompt_tokens
+        if self.context_length is not None and self.num_prefilled_tokens < self.context_length:
+            end = self.context_length
+        return int(end - self.num_prefilled_tokens)
+
+    @property
+    def is_context_boundary_prefill(self) -> bool:
+        return (self.context_length is not None
+                and self.num_prefilled_tokens < self.context_length
+                and self.num_prefilled_tokens + int(self.current_chunk_size or 0) == self.context_length)
+
     def append_token(
         self,
         token_id: int,
@@ -411,6 +436,8 @@ class Sequence:
             self.multimodal_digest,
             self.multimodal_position_delta,
             self.multimodal_full_prefill,
+            self.context_length,
+            self.context_prefix_length,
         )
 
     def __setstate__(self, state):
@@ -425,7 +452,8 @@ class Sequence:
          self.chain_id, self.chain_status, self.chain_reused_tokens,
          self.recompute_replay_cursor, self.decode_progress_checkpoint,
          self.multimodal_digest, self.multimodal_position_delta,
-         self.multimodal_full_prefill) = state
+         self.multimodal_full_prefill,
+         self.context_length, self.context_prefix_length) = state
         # TP workers run forward only; rank 0 retains the forced replay tokens for sampling.
         self.benchmark_forced_token_ids = None
         self.completion_token_logprobs = []

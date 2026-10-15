@@ -1344,9 +1344,9 @@ class ModelRunner:
         self,
         delimiter_token_ids: list[int],
         non_execution_token_ids: list[int] | None = None,
-        auxiliary_prefill_token_ids: list[int] | None = None,
+        auxiliary_prefill_token_ids: dict[str, list[int]] | None = None,
     ):
-        self._auxiliary_prefill_token_ids = list(auxiliary_prefill_token_ids or [])
+        self._auxiliary_prefill_token_ids = dict(auxiliary_prefill_token_ids or {})
         self._tokenizer_metadata = (
             tuple(int(x) for x in delimiter_token_ids),
             (
@@ -1365,7 +1365,7 @@ class ModelRunner:
         if setter is not None:
             delimiter_token_ids, non_execution_token_ids = metadata
             setter(
-                auxiliary_prefill_token_ids=getattr(self, "_auxiliary_prefill_token_ids", []),
+                auxiliary_prefill_token_ids=getattr(self, "_auxiliary_prefill_token_ids", {}),
                 delimiter_token_ids=list(delimiter_token_ids),
                 non_execution_token_ids=(
                     None

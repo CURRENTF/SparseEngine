@@ -165,7 +165,7 @@ class SparseMethodRuntime(ABC):
     ) -> None:
         self.auxiliary_prefill = executor
 
-    def set_auxiliary_prefill_prompt(self, token_ids: list[int]) -> None:
+    def set_auxiliary_prefill_prompt(self, token_ids: dict[str, list[int]]) -> None:
         if token_ids:
             raise ValueError("This sparse runtime does not accept an auxiliary prefill prompt.")
 

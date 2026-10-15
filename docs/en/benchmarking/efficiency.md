@@ -45,6 +45,22 @@ seed, lengths, jitter, warmups, and repetitions across systems. Report
 sink/recent/selected/full-layer budgets separately: equal names do not establish
 equal work or quality.
 
+Native KVzip request probes require explicit `--question-suffix-tokens N` and
+positive `--context-prefix-length P`. The last `N` tokens form the question;
+the preceding tokens form the context, whose first `P` tokens are protected.
+These declarations preserve the generated token trace and are recorded per
+request. They apply to warmup, fixed and churn requests; native boundary probes
+currently require DP1. Set KVzip budgets and replay chunk sizes in
+`--hyper-params`. Automatic model capacity covers both generation and the
+context plus one `engine_prefill_chunk_size` replay chunk; explicit capacity
+must cover that envelope too. Results record expected and executed context
+compactions, rejecting runs with missing compression. Contexts within the
+retention budget have zero expected compactions.
+
+The native stage runner uses the corresponding `--question_suffix_tokens` and
+`--context_prefix_length` options. Probe `--decode-only-steps` currently does
+not accept context-boundary traces; use request mode for KVzip probes.
+
 Continuous windows require explicit `--scenario fixed --prompt-length-jitter 0
 --output-length-jitter 0 --decode-only-steps 256 --decode-only-warmup-steps 32`.
 These are not ordinary request-mode defaults. For a capacity sweep and its smoke,

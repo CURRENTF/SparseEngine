@@ -172,6 +172,14 @@ def profiling_kv_budget_bytes(config, num_slots: int) -> int:
     num_slots = int(num_slots)
     if num_slots <= 0:
         raise ValueError(f"Profiling KV slots must be positive, got {num_slots}.")
+    if getattr(config, "kv_cache_layout", "token") == "head_slots":
+        from sparseengine.engine.cache_manager.head_slots import head_slot_auxiliary_bytes
+
+        bytes_per_token = (2 * config.hf_config.num_key_value_heads
+                           * resolve_attention_qk_head_dim(config.hf_config)
+                           * torch.empty((), dtype=config.hf_config.dtype).element_size())
+        return (num_slots * config.runtime_layout.num_kv_layers * bytes_per_token
+                + head_slot_auxiliary_bytes(config))
     from sparseengine.method_registry import QUANTIZED_KV_METHODS
     if config.sparse_method == "deepseek_v4":
         from sparseengine.engine.cache_manager.methods.deepseek_v4 import DeepSeekV4CacheManager

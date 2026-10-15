@@ -26,6 +26,7 @@ class AttentionKernelRequest:
     layer_varying_page_table: bool = False
     varlen: bool = True
     cuda_graph: bool = False
+    head_slots: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,7 @@ class AttentionKernelCapabilities:
     cuda_graph: bool = False
     requires_triton: bool = False
     minimum_runtime_version: tuple[int, int] | None = None
+    head_slots: bool = False
 
 
 def match_attention_capabilities(
@@ -51,6 +53,10 @@ def match_attention_capabilities(
     caps: DeviceCaps,
     capabilities: AttentionKernelCapabilities,
 ) -> SupportResult:
+    if request.head_slots and not capabilities.head_slots:
+        return SupportResult.unsupported("does not support independent head slots")
+    if request.head_slots and request.requires_softmax_lse:
+        return SupportResult.unsupported("head-slot query adapter does not return softmax LSE")
     if caps.platform not in capabilities.platforms:
         allowed = ", ".join(
             sorted(item.name for item in capabilities.platforms)

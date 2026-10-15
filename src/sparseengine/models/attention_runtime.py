@@ -124,6 +124,7 @@ def build_mha_prefill_attention_spec(
             ),
         )
     return PrefillAttentionOpSpec(
+        kv_cache_layout=getattr(score_config, "kv_cache_layout", "token"),
         num_query_heads=query_heads,
         num_kv_heads=kv_heads,
         head_dim=head_dim,
@@ -195,6 +196,7 @@ def build_mha_decode_attention_spec(
         h2o_decode_eviction=getattr(runtime_config, "h2o_decode_eviction", False),
     )
     return DecodeAttentionOpSpec(
+        kv_cache_layout=getattr(runtime_config, "kv_cache_layout", "token"),
         kv_storage_format=cache_method if cache_method in QUANTIZED_KV_METHODS | {"retroinfer"} else "dense",
         num_query_heads=query_heads,
         num_kv_heads=kv_heads,

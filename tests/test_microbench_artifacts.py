@@ -97,6 +97,40 @@ def test_native_loop_distinguishes_unadmitted_requests_from_short_window(monkeyp
     assert len(raw) == (0 if preempt else admitted) and all(len(r["token_ids"]) == 3 for r in raw)
 
 
+def test_native_microbench_passes_context_boundary_to_real_admission_site(monkeypatch):
+    """The stage runner previously omitted the boundary accepted by request probes."""
+    import sparseengine
+    from benchmark import microbench
+    from sparseengine.engine.sequence import Sequence
+
+    seen = []
+    class Engine:
+        def __init__(self, *args, **kwargs):
+            self.config = SimpleNamespace(**kwargs)
+
+        def debug_sparse_state_summaries(self):
+            return [{"state": {"cache": {"kvzip_context_compactions": 0}}}]
+
+        def add_request(self, tokens, sampling, **kwargs):
+            seen.append(Sequence(tokens, sampling, **kwargs))
+            raise RuntimeError("stop after observing admission")
+
+        def exit(self):
+            pass
+
+    monkeypatch.setattr(sparseengine, "LLM", Engine)
+    monkeypatch.setattr(microbench, "_cache_stats", lambda engine: {})
+    for name in ("reset_peak_memory_stats", "empty_cache", "synchronize"):
+        monkeypatch.setattr(microbench.torch.cuda, name, lambda: None)
+    args = SimpleNamespace(hyper_params_dict={"decode_graph": False, "engine_prefill_chunk_size": 64},
+        output_len=8, max_model_len_override=None, model_path="fixture", temperature=0.0,
+        top_p=1.0, question_suffix_tokens=8, context_prefix_length=2)
+    results = {}
+    microbench.benchmark_task("kvzip", 100, 2, args, results)
+    assert len(seen) == 1 and seen[0].context_length == 92 and seen[0].context_prefix_length == 2
+    assert "stop after observing admission" in results[("kvzip", 100, 2)]["error"]
+
+
 def test_decode_cuda_graph_status_records_execution_counters():
     graph = object()
     runner = SimpleNamespace(

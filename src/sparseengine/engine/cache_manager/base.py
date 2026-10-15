@@ -213,6 +213,29 @@ class PagedDecodeViewMeta:
 
 
 @dataclass(frozen=True)
+class HeadSlotViewMeta:
+    """Independent head addresses and retained lengths; positions keep original RoPE indices."""
+
+    active_slots: torch.Tensor  # [resident rows, KV heads, capacity]
+    req_indices: torch.Tensor  # [batch], -1 for padding
+    context_lens: torch.Tensor  # [batch, KV heads]
+    positions: torch.Tensor  # [resident rows, KV heads, capacity]
+    max_context_len: int
+    attn_score: torch.Tensor | None = None
+    temp_slots: torch.Tensor | None = None
+    is_sparse: bool = True
+
+    @property
+    def slot_table_token_capacity(self) -> int:
+        return int(self.active_slots.shape[2])
+
+
+@dataclass(frozen=True)
+class HeadSlotSelection:
+    indices: tuple[torch.Tensor, ...]
+
+
+@dataclass(frozen=True)
 class ExplicitKVPayload:
     """Materialized key/value tensors consumed by ordinary attention."""
 
@@ -335,7 +358,7 @@ AttentionCacheWrite = ExplicitKVWrite | MlaLatentWrite | LowRankKVWrite
 class DecodeComputeView:
     """Decode metadata paired with exactly one physical payload layout."""
 
-    meta: AttentionViewMeta | PagedDecodeViewMeta
+    meta: AttentionViewMeta | PagedDecodeViewMeta | HeadSlotViewMeta
     payload: AttentionPayload
 
 
@@ -368,7 +391,7 @@ class PrefillScoreRequest:
 class PrefillComputeView:
     """Prefill metadata paired with exactly one physical payload layout."""
 
-    meta: AttentionViewMeta
+    meta: AttentionViewMeta | HeadSlotViewMeta
     payload: AttentionPayload
     token_scores: torch.Tensor | None = None  # Temporary [batch, max_context] scores.
     # Optional current tokens in packed query order. Only a cache manager may
@@ -575,14 +598,21 @@ class CacheManager(ABC):
             from .methods.streamingllm import StreamingLLMCacheManager
 
             return create_manager(StreamingLLMCacheManager)
+        if (getattr(config, "kv_cache_layout", "token") == "head_slots"
+                and sparse_method in {"snapkv", "adakv"}):
+            from .head_slots import HeadSlotCacheManager
+
+            return create_manager(HeadSlotCacheManager)
         if sparse_method in ("snapkv", "pyramidkv"):
             from .methods.snapkv import SnapKVCacheManager
 
             return create_manager(SnapKVCacheManager)
         if sparse_method == "kvzip":
-            from .methods.kvzip import KVzipCacheManager
+            from .methods.kvzip import KVzipCacheManager, KVzipHeadSlotCacheManager
 
-            return create_manager(KVzipCacheManager)
+            manager = (KVzipHeadSlotCacheManager if getattr(config, "kv_cache_layout", "token") == "head_slots"
+                       else KVzipCacheManager)
+            return create_manager(manager)
         if sparse_method == "h2o":
             from .methods.h2o import H2OCacheManager
 
@@ -1685,6 +1715,10 @@ class CacheManager(ABC):
         del seq
         return None
 
+    def prefill_reservation_owned_by_chain(self, seq: Sequence) -> bool:
+        """Whether the coordinator, rather than prefill budgets, owns this promise."""
+        return False
+
     def reserved_prefill_slots(self, waiting_seqs: deque[Sequence], engine_prefill_chunk_size: int) -> int:
         """Persistent slots reserved by waiting/running prefills.
 
@@ -2085,6 +2119,9 @@ class CacheManager(ABC):
     @staticmethod
     def _memory_accounting_category(path: str) -> str:
         lower = path.lower()
+        # Storage ownership takes precedence over layout names such as head_slots.
+        if lower.startswith("attention_cache_storage."):
+            return "kv_or_latent"
         if any(token in lower for token in ("slot", "mapping", "req_to_token", "_map", "map_")):
             return "slot_map"
         if any(token in lower for token in ("scale", "scales", "min", "mins", "zero")):

@@ -275,6 +275,7 @@ class Scheduler:
         num_batched_tokens: int,
         step_free_count: int,
     ) -> int:
+        remaining_prefill_tokens = min(remaining_prefill_tokens, seq.prefill_stage_remaining)
         if mode == PREFILL_EXECUTION_FULL:
             available = min(
                 self.max_num_batched_tokens - num_batched_tokens,

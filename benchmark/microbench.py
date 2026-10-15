@@ -19,6 +19,7 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from benchmark.efficiency.metrics import PipelinedDecodeWindow, decode_window_fields, stage_throughput
+from benchmark.efficiency.workload import context_boundary_kwargs, context_compaction_evidence
 from sparseengine.method_registry import (
     CANONICAL_SPARSE_METHODS,
     PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
@@ -443,6 +444,10 @@ def _resolved_engine_config(llm) -> dict[str, Any]:
         "h2o_prefill_budget",
         "h2o_recent_ratio",
         "h2o_prefill_score_window",
+        "kv_cache_layout",
+        "kvzip_token_budget",
+        "kvzip_score_chunk_size",
+        "kvzip_prev_postfix_size",
     )
     return {
         key: _jsonable_config_value(getattr(config, key))
@@ -556,6 +561,14 @@ def benchmark_task(method, length, bs, args, results_dict):
     actual_decode_peak = 0
     window = None
     try:
+        request_context = context_boundary_kwargs(length, getattr(args, "question_suffix_tokens", None),
+                                                 getattr(args, "context_prefix_length", 0))
+        if normalized_method == "kvzip" and (
+                not request_context or request_context["context_prefix_length"] <= 0):
+            raise ValueError("KVzip microbench requires --question_suffix_tokens and positive "
+                             "--context_prefix_length.")
+        if request_context and int(base_hyper_params.get("data_parallel_size", 1)) != 1:
+            raise ValueError("Native context-boundary microbench currently requires DP1.")
         m_len = length + args.output_len + (0 if getattr(args, "require_full_decode_batch", False) else 100)
         if args.max_model_len_override is not None:
             if args.max_model_len_override < length + args.output_len:
@@ -568,6 +581,12 @@ def benchmark_task(method, length, bs, args, results_dict):
         # They can be passed in --hyper_params, but will be overwritten here to keep the benchmark consistent.
         hyper_params = dict(base_hyper_params)
         _apply_prefill_policy_defaults(hyper_params, method)
+        if normalized_method == "kvzip":
+            replay_capacity = request_context["context_length"] + int(hyper_params["engine_prefill_chunk_size"])
+            if args.max_model_len_override is not None and m_len < replay_capacity:
+                raise ValueError(f"KVzip max_model_len_override must cover the context plus one replay chunk "
+                                 f"({replay_capacity}), got {m_len}.")
+            m_len = max(m_len, replay_capacity)
         hyper_params.pop("max_model_len", None)
         hyper_params.setdefault("max_num_seqs_in_batch", int(bs))
         hyper_params.setdefault("max_decoding_seqs", int(bs))
@@ -579,6 +598,8 @@ def benchmark_task(method, length, bs, args, results_dict):
             **sparse_kwargs,
         }
         llm = LLM(args.model_path, **engine_kwargs)
+        compression_before = (llm.debug_sparse_state_summaries()[0]
+                              if normalized_method == "kvzip" else None)
         resolved_engine_config = _resolved_engine_config(llm)
         prefix_cache_stats_before = _cache_stats(llm)
 
@@ -639,7 +660,7 @@ def benchmark_task(method, length, bs, args, results_dict):
             nonlocal next_request_idx, decode_steps_since_last_wave
             end_idx = min(bs, next_request_idx + max_new_requests)
             for req_idx in range(next_request_idx, end_idx):
-                seq_id = llm.add_request(prompt_token_ids[req_idx], sampling_params[req_idx])
+                seq_id = llm.add_request(prompt_token_ids[req_idx], sampling_params[req_idx], **request_context)
                 request_seq_ids.append(int(seq_id))
             added = end_idx - next_request_idx
             next_request_idx = end_idx
@@ -783,6 +804,10 @@ def benchmark_task(method, length, bs, args, results_dict):
         peak_mem = get_peak_memory()
         graph_status = _decode_cuda_graph_status(llm)
         operator_runtime_stats = llm.operator_runtime_stats()
+        compression = (context_compaction_evidence(compression_before,
+            llm.debug_sparse_state_summaries()[0], bs * int(
+                request_context["context_length"] - request_context["context_prefix_length"]
+                > llm.config.kvzip_token_budget)) if normalized_method == "kvzip" else None)
         prefix_cache_stats_after = _cache_stats(llm)
         prefix_cache_stats_delta = _numeric_delta(prefix_cache_stats_before, prefix_cache_stats_after)
         observed_prefix_hit_tokens = int(sum(prefix_hits_by_seq_id.values()))
@@ -902,6 +927,8 @@ def benchmark_task(method, length, bs, args, results_dict):
             "memory_accounting": memory_accounting,
             "engine_hyper_params": engine_kwargs,
             "resolved_engine_config": resolved_engine_config,
+            "request_context": request_context,
+            "context_compaction": compression,
             "status": "SUCCESS"
         }
         if window is not None:
@@ -960,6 +987,10 @@ def main():
         ),
     )
     parser.add_argument("--output_len", type=int, default=512, help="Output tokens per request")
+    parser.add_argument("--question_suffix_tokens", type=int, default=None,
+                        help="Declare the final N prompt tokens as the question; required for KVzip.")
+    parser.add_argument("--context_prefix_length", type=int, default=0,
+                        help="Protected tokens at the start of the declared context; positive for KVzip.")
     parser.add_argument(
         "--max_model_len_override",
         type=int,
@@ -1040,6 +1071,8 @@ def main():
     )
     
     args = parser.parse_args()
+    if args.engine != "sparseengine" and (args.question_suffix_tokens is not None or args.context_prefix_length):
+        parser.error("Context-boundary microbench currently requires the native engine")
     args.engine_kwargs_dict = _load_json_arg(args.engine_kwargs)
     if args.engine == "sparseengine" and (args.engine_kwargs_dict or args.backend_label):
         parser.error("engine_kwargs/backend_label are for external stage adapters only")

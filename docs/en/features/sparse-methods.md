@@ -16,7 +16,8 @@ Set `sparse_method` to one of the following method names.
 | `streamingllm` | Physical eviction | StreamingLLM-style fixed sink plus recent-window cache. Tokens outside the retained prefix/tail policy are physically evicted from the active KV cache. | `sink_keep_tokens`, `recent_keep_tokens` |
 | `attention-sink` | Physical eviction | Alias-style attention-sink policy with the same sink-token and recent-window retention model. It is useful for comparing sink-window behavior against other physical eviction methods. | `sink_keep_tokens`, `recent_keep_tokens` |
 | `snapkv` | Physical eviction | SnapKV-style token selection uses an end-of-prompt observation window to keep important prompt KV. Decode eviction is optional (`snapkv_decode_eviction=false` by default). When enabled, each sparse layer scores its last `observation_window_size` decode queries and compacts after its physical row reaches the layer budget plus `decode_eviction_interval`. Scoring runs after the decode Graph replay, only at eviction boundaries. | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `snapkv_decode_eviction`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
-| `kvzip` | Physical eviction | Repository token-shared KVzip reconstruction scoring, followed by one global prompt-token compaction. | `kvzip_token_budget`, `kvzip_score_chunk_size`, `kvzip_prev_postfix_size` |
+| `adakv` | Physical eviction | Allocate a layer budget across independent KV heads with probability scores and per-head safeguards; compact after final prefill and at chain turn completion. | `adakv_alpha`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `pool_kernel_size` |
+| `kvzip` | Physical eviction | Query-agnostic reconstruction with layer-specific unions or independent head slots. | `kvzip_token_budget`, `kvzip_score_chunk_size`, `kvzip_prev_postfix_size`, `kv_cache_layout` |
 | `h2o` | Physical eviction | Intermediate prefill chunks can be compacted to `h2o_prefill_budget`; the final prompt is compacted to `h2o_decode_budget`. Decode is score-free by default and grows with generated tokens. Optional `h2o_decode_eviction` accumulates decode probabilities and periodically evicts physical KV. | `h2o_decode_eviction`, `h2o_decode_budget`, `h2o_decode_eviction_interval`, `h2o_prefill_budget`, `h2o_recent_ratio`, `h2o_prefill_score_window`, `sparse_prefill_score_mode` |
 | `pyramidkv` | Physical eviction | PyramidKV-style layer-dependent KV retention. Decode eviction is always enabled. Each sparse layer scores its last `observation_window_size` decode queries and compacts after its physical row reaches that layer's budget plus `decode_eviction_interval` (default 1024). Scoring runs after the decode Graph replay, only at eviction boundaries. | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
 | `omnikv` | Logical masking with optional offload | Cross-layer token selection; optionally keep sparse-layer history in pinned CPU memory and fetch the exact selected KV for decode. | `full_attention_layers`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `enable_omnikv_offload` |
@@ -38,30 +39,87 @@ contexts read their full KV exactly.
 
 
 
+## Independent KV heads
+
+`kv_cache_layout="auto"` selects `head_slots` for AdaKV and `token` for other
+methods. Explicit `head_slots` supports native KVzip, AdaKV, and a chain-boundary
+SnapKV variant. Ordinary SnapKV retains its existing token-layout behavior.
+
+For SnapKV head slots, set `head_slot_budgets` to a `[KV layers][KV heads]` list
+of total retained counts, including sink/recent. `None` disables compression.
+This variant scores the last observed query window and compresses at chain
+turn completion; it requires exclusive chain caching and does not perform
+ordinary SnapKV's prompt-end or decode-time eviction.
+
+AdaKV automatically uses head slots. Its average head budget is
+`sink_keep_tokens + decode_keep_tokens + recent_keep_tokens`; `adakv_alpha` in
+`(0, 1]` defines per-head safeguards, and remaining capacity competes within each
+layer. It requires probability scoring; do not set manual head budgets. It
+supports independent requests and exclusive chains. This safeguarded adaptation
+extends the KVPress objective to ragged candidates and protected sink/recent.
+
+All head-slot methods require homogeneous BF16 Llama/Qwen2/Qwen3 explicit KV
+and TP=EP=DP=1. Radix sharing/pruning, cache offload and decode eviction are
+unsupported. SM90 uses SGL FA3; SM120 uses FlashInfer. Both support
+batch-only decode CUDA Graphs and eager execution. See the
+[development contract](../../development/head-nonuniform-design.md) for
+algorithm distinctions and validation entrypoints.
+
 ## KVzip
 
-Use `LLM(model, sparse_method="kvzip", kvzip_token_budget=4096)` to retain
-at most 4096 prompt tokens after context reconstruction. Shorter prompts retain
-all KV. The first output token comes from the original dense prefill; subsequent
-decode attends to retained prompt KV and all generated KV.
+Use `LLM(model, sparse_method="kvzip", kvzip_token_budget=4096)` with
+an explicit context/question token boundary:
 
-This is the repository's `kvzip_global` token-shared variant, not the original
-paper's non-uniform per-head eviction. Scores and retained positions are shared
-across layers, heads and attention TP ranks. No additional checkpoint is needed.
-`kvzip_token_budget` is the complete prompt budget; `sink_keep_tokens`,
-`recent_keep_tokens` and `decode_keep_tokens` do not add protected regions.
+```python
+# prompt_ids = protected_prefix_ids + context_ids + question_and_assistant_ids
+outputs = llm.generate(
+    [prompt_ids], sampling_params,
+    context_lengths=[len(protected_prefix_ids) + len(context_ids)],
+    context_prefix_lengths=[len(protected_prefix_ids)],
+)
+```
 
-Supported models are Qwen2, Qwen3 and Llama with explicit KV storage. Chunked
-prefill, batched requests, tensor parallelism, eager decode and decode CUDA Graph
-use the same physical cache. Prefix caching (radix or chain), offload, sparse
-prefill overrides, recurrent/MLA/shared-KV models and MoE are rejected.
+`context_lengths` marks the exclusive end of context, including the protected
+system prefix; `context_prefix_lengths` marks the end of that prefix. Question
+and assistant-suffix tokens must follow the context. Counts refer to the actual
+input token IDs. The lower-level `add_request`/`admit_request` APIs accept singular
+`context_length` and `context_prefix_length`. Compressible requests require both
+boundaries and a nonempty protected prefix. Contexts within budget keep all KV.
 
-Reconstruction uses teacher-forced chunks of `kvzip_score_chunk_size` tokens
-(default 2048), with up to `kvzip_prev_postfix_size` preceding tokens (default 64).
-The replay instruction, preceding tokens and chunk must fit
-`engine_prefill_chunk_size`; the full prompt plus replay must fit
-`max_model_len`. Allow this extra capacity when selecting prompt lengths.
-Reconstruction adds prefill work; compression alone does not establish a speedup.
+Context reconstruction and eviction finish before question prefill, so the first
+output token uses compressed context KV. KVzip's original replay instructions,
+model assistant suffix, sink/chunk/causal-replay probability normalization and
+query maximum are used. Scores retain independent KV heads and layers. No extra
+checkpoint is needed.
+
+`kvzip_token_budget` is the average retained **context** allowance across layers
+and KV heads, excluding protected prefix, question and generated KV. The original
+global strict threshold allocates different head/layer budgets; ties can reduce
+actual KV-pair retention. The protected prefix and all question/generated KV
+remain. `sink_keep_tokens`, `recent_keep_tokens` and `decode_keep_tokens` do not
+add other protected regions. The legacy policy `kvzip_global` has separate semantics.
+
+The default token layout (`kv_cache_layout="auto"` or `"token"`) retains each layer's union of original
+head selections. Physical token retention can exceed the configured allowance,
+and every head sees that union. Use `kv_cache_layout="head_slots"` for independent
+head positions, lengths and physical KV-pair eviction. This layout currently
+requires an unquantized BF16 Qwen2/Qwen3/Llama model, homogeneous explicit KV,
+TP=EP=DP=1 and either H100/SM90 SGL FA3 (head dimension 128 or 256), or
+RTX Pro 6000/SM120 FlashInfer (head dimension 64, 128 or 256). Both support
+`decode_graph=True` with independent per-layer head lengths. Unsupported devices fail
+provider resolution rather than selecting a shared-head approximation.
+
+Token storage supports chunked prefill, batching and attention TP, and reuses
+the existing decode graph metadata. Prefix caching (radix or chain), offload,
+sparse prefill overrides, recurrent/MLA/shared-KV models and MoE are rejected.
+Head slots also reject sliding windows and position/logit biases.
+
+Reconstruction defaults to 2000 source tokens per chunk and eight preceding
+tokens on continuation chunks. Instruction, assistant suffix, preceding tokens
+and source chunk must fit `engine_prefill_chunk_size`; context plus replay must
+fit `max_model_len`. Reserve this extra capacity. Reconstruction adds prefill
+work; quality and speed require evaluation. See the
+[development contract](../../development/kvzip-runtime.md) for the pinned reference.
 
 
 ## OmniKV KV offload

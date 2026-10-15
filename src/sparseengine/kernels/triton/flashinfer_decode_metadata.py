@@ -11,6 +11,8 @@ def _pack_page_indices_kernel(
     request_indices,
     context_lens,
     packed_indices,
+    indptr,
+    last_page_len,
     active_slots_stride_0: tl.constexpr,
     active_slots_stride_1: tl.constexpr,
     BATCH_SIZE: tl.constexpr,
@@ -18,6 +20,7 @@ def _pack_page_indices_kernel(
     PAGE_CAPACITY: tl.constexpr,
     PAGE_SIZE: tl.constexpr,
     PAGE_BLOCK: tl.constexpr,
+    BUILD_PAGE_METADATA: tl.constexpr,
 ):
     batch_idx = tl.program_id(0)
     token_block_idx = tl.program_id(1)
@@ -33,6 +36,12 @@ def _pack_page_indices_kernel(
     context_len = tl.load(context_lens + batch_idx)
     page_count = (context_len + PAGE_SIZE - 1) // PAGE_SIZE
     request_idx = tl.load(request_indices + batch_idx)
+    if BUILD_PAGE_METADATA and token_block_idx == 0:
+        tl.store(indptr + batch_idx, packed_start)
+        if batch_idx == BATCH_SIZE - 1:
+            tl.store(indptr + BATCH_SIZE, packed_start + page_count)
+        tl.store(last_page_len + batch_idx,
+                 tl.where(context_len > 0, (context_len - 1) % PAGE_SIZE + 1, 0))
     valid = (page_offsets < page_count) & (page_offsets < PAGE_CAPACITY)
     slots = tl.load(
         active_slots
@@ -51,6 +60,8 @@ def pack_flashinfer_page_indices(
     *,
     context_capacity: int,
     page_size: int = 1,
+    indptr: torch.Tensor | None = None,
+    last_page_len: torch.Tensor | None = None,
 ) -> None:
     """Pack a layer's canonical page table into graph-stable storage."""
 
@@ -83,6 +94,12 @@ def pack_flashinfer_page_indices(
             "FlashInfer graph packed-index buffer is too small: "
             f"required={required} actual={int(packed_indices.numel())}."
         )
+    build_metadata = indptr is not None or last_page_len is not None
+    if build_metadata:
+        for tensor, size in ((indptr, batch_size + 1), (last_page_len, batch_size)):
+            if (tensor is None or tensor.dtype != torch.int32 or tensor.ndim != 1
+                    or tensor.numel() != size or tensor.device != context_lens.device):
+                raise ValueError("FlashInfer page metadata requires matched device int32 buffers.")
 
     page_block = 128
     _pack_page_indices_kernel[
@@ -92,6 +109,8 @@ def pack_flashinfer_page_indices(
         request_indices,
         context_lens,
         packed_indices,
+        indptr,
+        last_page_len,
         active_slots.stride(0),
         active_slots.stride(1),
         BATCH_SIZE=batch_size,
@@ -99,6 +118,7 @@ def pack_flashinfer_page_indices(
         PAGE_CAPACITY=page_capacity,
         PAGE_SIZE=page_size,
         PAGE_BLOCK=page_block,
+        BUILD_PAGE_METADATA=build_metadata,
     )
 
 

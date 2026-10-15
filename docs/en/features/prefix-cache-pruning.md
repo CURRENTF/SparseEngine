@@ -28,6 +28,10 @@ The endpoint returns HTTP 202 with a `prune_id`. Query
 layers, heads, and tensor-parallel ranks into one deterministic mask. For
 QuEST, rank reduction happens before page scores are summed and selected.
 
+`kvzip_global` is a legacy token-shared prefix-maintenance policy with
+query-averaged scores reduced across layers. It does not implement native
+`kvzip`'s query-agnostic, layer-specific reconstruction contract.
+
 Pruning is committed only when every affected block is unreferenced and has no
 in-flight transfer. A completed prune adds an inherited `quality_degraded`
 record at the `[L, L + block_size)` subtree root. Device allocation and

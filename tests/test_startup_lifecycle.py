@@ -120,14 +120,14 @@ def test_model_runner_restores_tokenizer_metadata_after_controller_rebuild():
     runner._tokenizer_metadata = None
     profiling_controller = Controller()
     runner.sparse_controller = profiling_controller
-    runner.set_tokenizer_metadata([3, 7], [11], [13, 17])
+    runner.set_tokenizer_metadata([3, 7], [11], {"first": [13, 17]})
 
     production_controller = Controller()
     runner.sparse_controller = production_controller
     runner._restore_tokenizer_metadata()
 
     expected = {
-        "auxiliary_prefill_token_ids": [13, 17],
+        "auxiliary_prefill_token_ids": {"first": [13, 17]},
         "delimiter_token_ids": [3, 7],
         "non_execution_token_ids": [11],
     }

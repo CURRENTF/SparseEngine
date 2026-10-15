@@ -112,13 +112,24 @@ Token-count budgets must be nonnegative integers, not ratios. QuEST derives its 
 | `snapkv_decode_eviction` | bool | `False` | Enable periodic decode eviction for SnapKV. PyramidKV always enables it. |
 | `decode_eviction_interval` | int | `1024` | Positive physical KV growth above the per-layer retention budget before SnapKV/PyramidKV evict. The score is computed after decode Graph replay, only when this boundary is reached. |
 
+## Independent KV-head storage
+
+| Parameter | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `kv_cache_layout` | str | `"auto"` | Resolves to `head_slots` for AdaKV, `token` otherwise. Explicit head slots support KVzip, AdaKV and chain-boundary SnapKV. |
+| `head_slot_budgets` | list[list[int]] or None | `None` | SnapKV head-slot total retained counts per KV layer/head, including sink/recent. Requires chain cache; `None` disables compression. |
+| `adakv_alpha` | float | `0.2` | AdaKV per-head safeguard ratio in `(0, 1]`; remaining capacity competes within each layer. |
+
+Head slots require BF16 explicit KV, TP1 and compatible attention providers;
+SM90 and SM120 support batch-only decode CUDA Graphs. See [head-slot constraints](../features/sparse-methods.md#independent-kv-heads).
+
 ## KVzip
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `kvzip_token_budget` | int | `4096` | Total prompt tokens retained after reconstruction; positive. Generated tokens append without further eviction. |
-| `kvzip_score_chunk_size` | int | `2048` | Original-context tokens reconstructed per forward; positive. |
-| `kvzip_prev_postfix_size` | int | `64` | Maximum preceding context tokens included in each replay; nonnegative. |
+| `kvzip_token_budget` | int | `4096` | Average context-token allowance across layers and KV heads, excluding protected prefix and question; original global strict threshold, positive. Ties reduce KV-pair retention; token-layout unions can exceed this allowance. |
+| `kvzip_score_chunk_size` | int | `2000` | Original-context tokens reconstructed per forward; positive. |
+| `kvzip_prev_postfix_size` | int | `8` | Maximum preceding context tokens included in each replay; nonnegative. |
 
 See [KVzip constraints](../features/sparse-methods.md#kvzip) for reconstruction
 headroom and the distinction from original per-head KVzip.

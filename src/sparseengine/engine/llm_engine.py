@@ -27,7 +27,7 @@ from sparseengine.kernels.external.required import (
 )
 from sparseengine.kernels.external.flashinfer.jit_cache import resolve_trtllm_cache_root
 from sparseengine.method_registry import (
-    SPARSE_AUXILIARY_PREFILL_PROMPTS,
+    SPARSE_AUXILIARY_PREFILL_TEMPLATES,
     decode_graph_path_id,
 )
 from sparseengine.platforms.interface import PlatformEnum
@@ -294,14 +294,18 @@ class LLMEngine:
             config.model, config.hf_config, self.tokenizer.eos_token_id
         )
         config.eos = config.eos_token_ids[0] if config.eos_token_ids else -1
-        auxiliary_prompt = SPARSE_AUXILIARY_PREFILL_PROMPTS.get(config.sparse_method)
+        auxiliary_template = SPARSE_AUXILIARY_PREFILL_TEMPLATES.get(config.sparse_method)
+        auxiliary_metadata = {}
+        if auxiliary_template:
+            auxiliary_metadata = {
+                name: self.tokenizer.encode(value, add_special_tokens=False)
+                for name, value in auxiliary_template[config.hf_config.model_type].items()
+            }
         self.model_runner.call(
             "set_tokenizer_metadata",
             self._build_delimiter_token_ids(self.tokenizer),
             self._build_non_execution_token_ids(self.tokenizer),
-            self.tokenizer.encode(
-                auxiliary_prompt, add_special_tokens=False,
-            ) if auxiliary_prompt else [],
+            auxiliary_metadata,
         )
         
         # 4. 初始化调度器
@@ -858,6 +862,9 @@ class LLMEngine:
         sampling_params: SamplingParams,
         chain_id: str | None = None,
         chain_append_only: bool = False,
+        *,
+        context_length: int | None = None,
+        context_prefix_length: int = 0,
     ) -> RequestAdmission:
         """Validate and synchronously admit one request.
 
@@ -939,7 +946,8 @@ class LLMEngine:
                 "Reduce prompt/decoding length or increase max_model_len if the model supports it."
             )
         logger.debug(f'add prompt with {len(prompt)} tokens.')
-        seq = Sequence(prompt, sampling_params)
+        seq = Sequence(prompt, sampling_params, context_length=context_length,
+                       context_prefix_length=context_prefix_length)
         if multimodal is not None:
             seq.multimodal_digest = multimodal.digest
             seq.multimodal_full_prefill = (
@@ -1093,9 +1101,17 @@ class LLMEngine:
         self,
         prompt: str | list[int] | MultiModalPrompt | dict,
         sampling_params: SamplingParams,
+        *,
+        context_length: int | None = None,
+        context_prefix_length: int = 0,
     ):
         """Backward-compatible request API returning only seq_id."""
-        return self.admit_request(prompt, sampling_params).seq_id
+        if context_length is None and context_prefix_length == 0:
+            return self.admit_request(prompt, sampling_params).seq_id
+        return self.admit_request(
+            prompt, sampling_params, context_length=context_length,
+            context_prefix_length=context_prefix_length,
+        ).seq_id
 
     def _refresh_prefix_cache_hit(self, seq: Sequence) -> None:
         self.model_runner.call("refresh_prefix_cache_hit", seq)
@@ -1924,6 +1940,9 @@ class LLMEngine:
         prompts: list[str] | list[list[int]] | list[MultiModalPrompt] | list[dict],
         sampling_params: SamplingParams | list[SamplingParams],
         use_tqdm: bool = True,
+        *,
+        context_lengths: list[int] | None = None,
+        context_prefix_lengths: list[int] | None = None,
     ) -> list[dict]:
         """
         高层 API：批量输入 Prompt，阻塞直至全部生成完成。
@@ -1935,6 +1954,12 @@ class LLMEngine:
                 f"sampling_params is a list: prompts={len(prompts)} "
                 f"sampling_params={len(sampling_params)}."
             )
+        for name, values in (("context_lengths", context_lengths),
+                             ("context_prefix_lengths", context_prefix_lengths)):
+            if values is not None and len(values) != len(prompts):
+                raise ValueError(f"{name} must have one entry per prompt.")
+        if context_prefix_lengths is not None and context_lengths is None:
+            raise ValueError("context_prefix_lengths requires context_lengths.")
         if use_tqdm:
             pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True)
         
@@ -1942,8 +1967,15 @@ class LLMEngine:
             sampling_params = [sampling_params] * len(prompts)
         
         # 提交所有请求
-        for prompt, sp in zip(prompts, sampling_params):
-            self.add_request(prompt, sp)
+        for i, (prompt, sp) in enumerate(zip(prompts, sampling_params)):
+            if context_lengths is None:
+                self.add_request(prompt, sp)
+                continue
+            self.add_request(
+                prompt, sp,
+                context_length=None if context_lengths is None else context_lengths[i],
+                context_prefix_length=0 if context_prefix_lengths is None else context_prefix_lengths[i],
+            )
             
         outputs = {}
         prefill_throughput = decode_throughput = 0.

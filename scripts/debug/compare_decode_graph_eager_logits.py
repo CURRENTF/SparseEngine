@@ -733,7 +733,13 @@ def _run_decode_logits(
                 for _ in range(batch_size)
             ]
             request_indices = {
-                int(llm.add_request(prompt, params)): request_idx
+                int(llm.add_request(
+                    prompt, params,
+                    # Synthetic oracle: one protected prefix token and one
+                    # question token exercise compression before question prefill.
+                    **({"context_length": len(prompt) - 1, "context_prefix_length": 1}
+                       if method == "kvzip" else {}),
+                )): request_idx
                 for request_idx, (prompt, params) in enumerate(
                     zip(prompt_token_ids, sampling_params)
                 )

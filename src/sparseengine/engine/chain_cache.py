@@ -20,7 +20,7 @@ from sparseengine.utils.log import logger
 
 
 CHAIN_PREFIX_METHODS = frozenset(
-    {"streamingllm", "snapkv", "h2o", "pyramidkv", "rkv", "skipkv"}
+    {"streamingllm", "snapkv", "adakv", "h2o", "pyramidkv", "rkv", "skipkv"}
 )
 RADIX_PREFIX_METHODS = frozenset({"", "omnikv", "quest", "deepseek_v4"})
 PREFIX_CACHE_MODES = frozenset({"auto", "radix", "chain"})
@@ -232,6 +232,11 @@ def build_chain_cache_fingerprint(config: Any) -> bytes:
             "decode_keep_tokens",
             "sparse_attn_score_dtype",
         ),
+        "adakv": (
+            "sink_keep_tokens", "recent_keep_tokens", "decode_keep_tokens",
+            "observation_window_size", "sparse_prefill_score_mode", "pool_kernel_size",
+            "adakv_alpha",
+        ),
         "streamingllm": (
             "sink_keep_tokens",
             "recent_keep_tokens",
@@ -321,6 +326,8 @@ def build_chain_cache_fingerprint(config: Any) -> bytes:
             getattr(config, "full_attention_layers", ())
         ),
         "method": method,
+        "kv_cache_layout": getattr(config, "kv_cache_layout", "token"),
+        "head_slot_budgets": _jsonable(getattr(config, "head_slot_budgets", None)),
         "salt": str(getattr(config, "prefix_cache_salt", "") or ""),
     }
     for field_name in method_fields.get(method, ()):

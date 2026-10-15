@@ -41,6 +41,19 @@ Probe 为 SparseEngine 显式设置 `engine_prefill_chunk_size=8192`，可通过
 seed、长度、jitter、warmup 和重复次数；不同方法的预算需分别说明
 sink/recent/selected/full layers，同名预算不保证相同工作量或质量。
 
+原生 KVzip 请求 probe 必须显式指定 `--question-suffix-tokens N` 和正数
+`--context-prefix-length P`：prompt 最后 `N` 个 token 是 question，其余是
+context，context 开头 `P` 个 token 受保护。边界声明不改变生成的 token trace，
+会逐请求保存，并贯穿 warmup、fixed 和 churn。原生边界 probe 当前要求 DP1。
+KVzip 预算及 replay chunk 参数通过 `--hyper-params` 指定。自动模型容量同时
+覆盖生成长度和 context 加一个 `engine_prefill_chunk_size` replay chunk；
+显式容量也必须覆盖该范围。结果记录预期和实际 context 压缩次数，缺少压缩
+会报错；context 未超过保留预算时，预期压缩次数为零。
+
+原生 stage runner 对应参数是 `--question_suffix_tokens` 和
+`--context_prefix_length`。Probe 的 `--decode-only-steps` 暂不接收这类边界
+trace，KVzip probe 请使用请求模式。
+
 连续窗口必须显式指定 `--scenario fixed --prompt-length-jitter 0
 --output-length-jitter 0 --decode-only-steps 256 --decode-only-warmup-steps 32`。
 这组窗口参数不是普通请求模式的默认值。正式容量扫描及其 smoke 请检出

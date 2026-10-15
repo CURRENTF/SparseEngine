@@ -21,6 +21,7 @@ from sparseengine.operators.decode_attention import (
     DecodeAttentionRunResult,
     DecodeAttentionOpSpec,
     FlashInferPagedDecodeAttentionProvider,
+    FlashInferHeadSlotDecodeAttentionProvider,
     FixedGridTritonPagedDecodeAttentionProvider,
     H100GqaDecodeLaunchProvider,
     PreparedDecodeAttentionOp,
@@ -317,6 +318,16 @@ def _spec(**overrides) -> DecodeAttentionOpSpec:
     }
     values.update(overrides)
     return DecodeAttentionOpSpec(**values)
+
+
+def test_head_slot_flashinfer_graph_rejects_missing_static_capacity():
+    """A fixed graph plan must have a capacity before allocating page buffers."""
+    spec = _spec(kv_cache_layout="head_slots", cuda_graph=True)
+    with patch("sparseengine.operators.decode_attention.flashinfer_paged_decode_support") as dependency:
+        result = FlashInferHeadSlotDecodeAttentionProvider.supports(spec, _cuda_caps(compute_capability=(12, 0)))
+    assert not result.supported
+    assert "static context capacity" in result.reason
+    dependency.assert_not_called()
 
 
 @pytest.mark.parametrize("context_capacity", [8192, 131072])
@@ -857,6 +868,10 @@ def test_sgl_decode_provider_uses_prepared_explicit_kv_adapter():
     [SglFa3PagedDecodeAttentionProvider, FlashInferPagedDecodeAttentionProvider],
 )
 def test_external_decode_page_size_16_matches_paged_torch_oracle(provider_type):
+    if provider_type is SglFa3PagedDecodeAttentionProvider:
+        supported, reason = sgl_fa3_device_support(torch.cuda.current_device())
+        if not supported:
+            pytest.skip(reason)
     torch.manual_seed(20260828)
     batch, page_size, logical_pages, physical_pages = 2, 16, 7, 19
     query_heads, kv_heads, head_dim = 32, 8, 128

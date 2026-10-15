@@ -1,89 +1,111 @@
 # KVzip runtime contract
 
-`sparse_method="kvzip"` applies the existing `kvzip_global` maintenance scoring
-policy to an ordinary completed prompt. This token-shared variant differs from
-[upstream KVzip](https://github.com/snu-mllab/KVzip)'s non-uniform per-head cache.
-It requires no external scoring checkpoint.
+Native `sparse_method="kvzip"` follows SNU KVzip revision
+`5d8472975d286e3da6b52178af39d18904330c0d` (`model/wrapper.py`,
+`model/template.py`, `attention/score.py`). Scores and thresholding retain the
+original `[layer, KV_head, context_token]` domain. Storage is explicit:
+`kv_cache_layout="token"` shares each layer's head-selection union;
+`kv_cache_layout="head_slots"` retains independent per-head KV pairs.
+The legacy prefix-maintenance policy `kvzip_global` has separate semantics.
 
-For each replay chunk, teacher-force the reconstruction instruction, preceding
-context and current source chunk after the full original prompt. Each layer's
-scorer normalizes probabilities over original prompt keys, averages over replay
-queries, and takes the maximum over query heads. Reduce by maximum across layers,
-chunks and attention TP ranks. Keep the highest-scoring prompt positions with
-earlier positions breaking ties, then restore their original order. There are no
-separate sink/recent reservations and no decode-time eviction.
+## Algorithm and request boundary
 
-## Ownership and compatibility
+Requests declare `context_length` (exclusive end of system prefix plus context)
+and `context_prefix_length` (exclusive end of protected system prefix).
+The prompt requires a nonempty question suffix. The scheduler stops at the
+context boundary; compression precedes question prefill and the first sampled
+token. Missing boundaries fail for compressible requests. Short contexts remain
+dense. Boundaries survive TP IPC and recomputation.
 
-- `KVzipRuntime` owns chunk orchestration, the global score accumulator and final
-  logical selection. The ordinary prefill output supplies the first token.
-- `KVzipCacheManager` reuses SnapKV's layer slot allocator, physical compaction,
-  decode views and batch-only graph state. It owns temporary replay slots and
-  tiled scorer workspace. A failed replay releases its temporary suffix before
-  propagating the error. Original prompt tokens accumulate on the host across
-  chunk-only TP messages and are released after compaction or sequence free.
-  No replay token enters request history or sampling.
-- `AuxiliaryPrefillRequest` is a narrow unsampled-forward hook. ModelRunner
-  copies the sequence, prepares its existing row and restores the caller's
-  forward context. Attention, scheduler and controller contain no KVzip branches.
-- Completed requests are processed serially after a possibly batched/chunked
-  prefill. Incomplete rows stay dense. Generated KV appends to retained rows.
-  Preemption reconstructs the original prompt and reapplies compression.
-- Qwen2/Qwen3/Llama explicit KV and attention TP use the same mechanism. Recurrent,
-  MLA, shared-KV, MoE, sparse-prefill overrides, prefix reuse and offload are
-  rejected until their auxiliary-forward lifecycles are implemented.
-- Decode reuses ordinary prepared providers and SnapKV's `unified` batch-only
-  graph inputs. Reconstruction and compaction finish outside graph replay;
-  changing retained lengths changes metadata, not graph identity.
+Teacher-force the original instructions and model assistant suffix. The first
+instruction is `\n\nRepeat the previous context exactly.`; later instructions
+are `\n\nRepeat the part of the previous context exactly, starting with `,
+followed by the preceding eight tokens. Default source chunks contain 2000
+tokens and exclude the protected prefix. Replay model attention sees the full
+original cache. The independent scorer normalizes over the protected prefix,
+the current original chunk and causally available replay KV. Only probabilities
+for the current original chunk contribute scores. Reduce by maximum over replay
+queries and the query heads belonging to each KV head. Keep KV heads separate.
+FP32 LSE and accumulation differ from SNU's model-dtype probability arithmetic;
+algorithmic masks and reductions align, without a bitwise-parity claim.
 
-## Cost and reuse
+`kvzip_token_budget` is the average unprotected context-token allowance across
+layers and KV heads. Sort the global score population and use rank
+`layers * global_KV_heads * budget - 1`, retaining scores strictly greater than
+the threshold. TP gathers head shards to the leader and broadcasts the scalar
+threshold. Ties can reduce retained KV pairs. Restore chronological order and
+protect the complete system prefix, question and generated KV. No additional
+sink/recent protection or decode eviction is applied.
 
-Let `L` be prompt length, `C` source chunk size, `R` maximum replay length,
-`A` layers, `H` local query heads, `D` head dimension and `K` retained tokens.
-Original prefill remains dense. Reconstruction takes `ceil(L/C)` extra forwards,
-each with attention/scoring cost `O(A H R L D)` plus ordinary model projections
-and feed-forward work. Final stable selection is `O(L log L)`; slot-table
-compaction is `O(A L)` and does not copy retained KV. Decode reads `K+t` positions
-after `t` generated tokens. There is no claim of an end-to-end speedup.
+For token storage, take the union of original head selections within each
+layer, then TP MAX the position mask. All heads see this union, so physical
+context-token retention can exceed the nominal budget and original per-head
+attention is not preserved. Collapsing scores before global thresholding would
+change the algorithm and is not used. For head-slot storage, keep each head's
+selected addresses and length; discarded KV pairs return to that layer's pool.
+The prefix is protected in every head, including heads with no selected context.
 
-The temporary KV peak adds at most `engine_prefill_chunk_size` slots per layer,
-shared across serial replays. That reserve is excluded from admission, prefill
-and decode-window capacity, independently of persistent prompt reservations.
-The temporary startup cache includes this reserve in addition to its profiling
-workload and accounts for the same payload and slot metadata as the allocator.
-Prompt plus replay must fit the logical row capacity. Model activation peaks
-remain within the ordinary prefill chunk and batch limits.
+## Owners, compatibility and cost/reuse review
 
-The score accumulator is float32 `[L]`; the reused layer output is float32
-`[1,L+R]`. Host source history costs `O(L)` integer entries per active prefill
-request on each rank. The scorer preallocates bounded partial/global LSE tiles, at most
-`4 * H_padded * R_padded * (ceil(max_model_len / block_n)+1)` bytes,
-plus a float32 `[H,max_model_len]` query-reduction workspace. Additional
-`64 * A * max_model_len` bytes conservatively cover score, index/sort and
-compaction intermediates. Cache sizing subtracts this workspace bound before
-allocating production KV. For `A=32,H=32,D=128,Lmax=32768,Rmax=2048`, the bound
-is approximately 205 MiB, excluding model activations and temporary KV slots.
+`KVzipRuntime` owns replay orchestration and global selection.
+`KVzipReconstructionMixin` shares source history, replay validation and cleanup.
+`KVzipCacheManager` uses SnapKV token pools and layer compaction.
+`KVzipHeadSlotCacheManager` uses independent per-layer head-slot pools and a CPU
+ownership ledger, with device-resident typed address/length views. Sequence owns
+generic context boundaries; Scheduler caps chunks generically; the auxiliary
+hook runs unsampled forwards. Attention and Scheduler remain method agnostic.
 
-Reused symbols are `prefill_score_fwd` / `PrefillScoreWorkspace` for the exact
-existing probability policy and `SnapKVCacheManager.free_part_slots` for physical
-eviction. Stable device `argsort` matches the maintenance API's host tie rule
-without copying scores to CPU. There are no new kernels or dependencies.
-The inspected vLLM 0.26 FlashAttention interface and SGLang attention/sgl-kernel
-interfaces expose attention output/LSE, not this query-averaged, head-max score
-over the original-key-only normalization domain. Ordinary attention therefore
-keeps its upstream provider; scoring uses the existing repository kernel.
+Token storage supports explicit independent Qwen2/Qwen3/Llama KV layers and
+attention TP. Head-slot storage is currently restricted to TP=EP=DP=1,
+unquantized BF16 homogeneous explicit KV. H100/SM90 uses SGL FA3 with
+head dimension 128 or 256. RTX Pro 6000/SM120 uses FlashInfer FA2 prefill
+(head dimension 64, 128 or 256) and its public tensor-core decode wrapper. Unsupported providers fail resolution explicitly.
+Prefix reuse/offload, recurrent/MLA/shared-KV/MoE, sparse-prefill overrides and
+sliding/position-biased attention are rejected. Head-slot graph metadata has
+stable writes and lengths plus an empty padding row. SGL FA3 and FlashInfer
+head-slot decode support batch-only CUDA Graphs. FlashInfer plans the full
+context-capacity split envelope once, then packs independent layer/head page
+metadata on device inside capture. No per-layer host planner or replay-time
+recapture is required. The plan and workspace remain fixed across head-length
+changes; shorter contexts mask empty splits. See the
+[head-slot design](head-nonuniform-design.md) for cost and lifecycle details.
 
-## Validation boundary
+Let `L` include prefix, `C` be source chunk, `R` replay length, `A` layers,
+`Hq` query heads, `Hkv` KV heads and `D` head dimension. Context prefill and
+`ceil((L-prefix)/C)` replay forwards remain. Replay attention costs
+`O(A Hq R L D)`; the tiled scorer costs `O(A Hq R (L+R) D)` without materializing
+`[Hq,R,L]`. Scores cost `4 A Hkv L` bytes; global sort costs
+`O(A Hkv L log(A Hkv L))`. Compaction changes address tables without copying KV.
+Replay scratch reserves at most `engine_prefill_chunk_size` logical tokens per
+layer, multiplied by `Hkv` for head-slot pools. Business admission and decode
+cannot consume that reserve; replay may consume its own reserve and releases
+it even when a forward fails. Metadata, packed queries/outputs and scorer/sort
+workspace are deducted before allocating physical KV. Startup profiling counts
+head-slot payload and metadata separately.
 
-CPU lifecycle checks cover scratch rollback on partial failure, missing-layer
-failure, deterministic global selection, incomplete batch rows, capacity
-headroom and full release. The CUDA oracle explicitly forms GQA probabilities
-and compares query/head/layer reductions. The existing
-`scripts/debug/compare_decode_graph_eager_logits.py --method kvzip` checks full
-eager versus actual graph logits, compaction evidence, padded mixed-length
-batches, repeated requests and no serving recapture. An explicit
-`max_model_len` in `--hyper_params` leaves room for auxiliary replay.
+Reuse `prefill_score_fwd`/`PrefillScoreWorkspace` for masked probability maxima.
+For head-slot scoring, pack Q into virtual MQA requests while keeping the same
+original-head identity. Reuse SGL FA3 prefill/decode through the same virtual MQA
+view; only Q and address/length metadata change layout. The SM120 adapter
+reuses FlashInfer paged wrappers with a new eager plan for each layer or a fixed
+capacity graph plan. Its tensor-core
+decode path handles GQA groups unsupported by the CUDA-core wrapper. Upstream ordinary LSE
+includes all original keys and cannot replace the reconstruction denominator.
+The imported head-slot publish/store/query-reorder kernels adapt addressing;
+no new dependencies or attention kernel clones are introduced. No efficiency
+claim is made without a matched benchmark.
 
-Quality and efficiency claims require a fixed evaluation workload and matched
-measurements including reconstruction. Synthetic logits checks establish runtime
-correctness, not benchmark quality or throughput.
+## Validation boundaries
+
+Independent tests cover global threshold/ties, shared unions and true head
+selections, real Gloo/NCCL TP thresholding, replay rollback, startup capacity and
+resource release. CUDA score oracles cover FP16/BF16, masked tails, multiple
+query/head tiles and virtual MQA identity. Head-slot tests cover strided KV
+writes, ragged original-position attention, graph padding and cache ownership.
+Attention tests select SM90 SGL FA3 or SM120 FlashInfer and skip other devices.
+They change head addresses/lengths between layers within one provider scope;
+graph cases additionally check dynamic lengths, padding, capacity boundaries,
+workspace reuse and the absence of runtime replanning. Kernel/scorer tests
+do not establish real-model head-slot quality or engine graph parity. Private
+run artifacts record actual executions and results; bounded RULER smoke is not
+a full quality benchmark, and no performance claim follows from it.

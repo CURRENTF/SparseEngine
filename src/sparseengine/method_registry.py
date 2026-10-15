@@ -34,8 +34,18 @@ METHOD_ALIASES = {
     "deltakv_less_memory_cudagraph": "deltakv",
 }
 
-SPARSE_AUXILIARY_PREFILL_PROMPTS = {
-    "kvzip": "\nReconstruct the following context span exactly:\n",
+_KVZIP_INSTRUCTIONS = {
+    "first": "\n\nRepeat the previous context exactly.",
+    "continuation": "\n\nRepeat the part of the previous context exactly, starting with ",
+}
+# SNU KVzip model/template.py: preserve the assistant boundary, including the
+# empty thinking block for Qwen3. These are assets, not user prompt wrappers.
+SPARSE_AUXILIARY_PREFILL_TEMPLATES = {
+    "kvzip": {
+        "qwen2": dict(_KVZIP_INSTRUCTIONS, suffix="<|im_end|>\n<|im_start|>assistant\n"),
+        "qwen3": dict(_KVZIP_INSTRUCTIONS, suffix="<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"),
+        "llama": dict(_KVZIP_INSTRUCTIONS, suffix="\n\n<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"),
+    },
 }
 SPARSE_METHOD_MODEL_TYPES = {
     "deepseek_v4": frozenset({"deepseek_v4"}),
@@ -51,6 +61,7 @@ CANONICAL_SPARSE_METHODS = {
     "",
     "streamingllm",
     "snapkv",
+    "adakv",
     "kvzip",
     "h2o",
     "pyramidkv",
@@ -181,6 +192,7 @@ PREFIX_CACHE_SUPPORTED_METHODS = {
     "omnikv",
     "quest",
     "snapkv",
+    "adakv",
     "h2o",
     "pyramidkv",
     "rkv",
@@ -221,7 +233,7 @@ class SparsePrefillAttentionContract:
 
 
 _PREFILL_POSTHOC_SCORE_METHODS = frozenset(
-    {"snapkv", "pyramidkv", "h2o"}
+    {"snapkv", "adakv", "pyramidkv", "h2o"}
 )
 
 # Prefill provider planning may be reused across transformer layers only when
@@ -235,6 +247,7 @@ _PREFILL_LAYER_VARYING_PAGE_TABLE = {
     "": False,
     "streamingllm": True,
     "snapkv": True,
+    "adakv": True,
     "kvzip": True,
     "h2o": True,
     "pyramidkv": True,
@@ -496,6 +509,7 @@ _DEFAULT_PREFILL_POLICY_BY_METHOD = {
     "": PREFILL_POLICY_ALL_CHUNKED,
     "streamingllm": PREFILL_POLICY_ALL_CHUNKED,
     "snapkv": PREFILL_POLICY_ALL_CHUNKED,
+    "adakv": PREFILL_POLICY_ALL_CHUNKED,
     "kvzip": PREFILL_POLICY_ALL_CHUNKED,
     "h2o": PREFILL_POLICY_ALL_CHUNKED,
     "pyramidkv": PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,

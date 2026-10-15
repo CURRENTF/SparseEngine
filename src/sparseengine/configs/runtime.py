@@ -154,6 +154,9 @@ class Config(
         validate_compilation_limit(self.runtime_compilation_limit)
         normalize_bootstrap(self)
         normalize_sparse_method_name(self)
+        from sparseengine.configs.head_slots import normalize_head_slot_layout
+
+        normalize_head_slot_layout(self)
         normalize_prefill_sparse_method(self)
         normalize_prefix_cache(self)
         normalize_scheduling(self)
@@ -176,9 +179,12 @@ class Config(
         validate_deltakv_runtime(self)
         resolve_auto_full_attention_layers(self)
         finalize_sparse_layout(self)
+        from sparseengine.configs.head_slots import validate_head_slots
+
+        validate_head_slots(self)
         async_compatible = (
             self.attn_dp_size == 1 and not self.enable_multimodal
-            and not self.enable_prefix_cache_offload and self.prefix_cache_mode != "chain"
+            and not self.enable_prefix_cache_offload and self.resolved_prefix_cache_mode != "chain"
             and not self.runtime_layout.linear_attention_layer_indices
         )
         if self.async_scheduling is None:

@@ -46,6 +46,83 @@ def test_zero_jitter_keeps_every_request_at_the_requested_length():
     assert all(trace.prompt_len == 101 and trace.output_len == 17 for trace in traces)
 
 
+def test_context_boundaries_preserve_matched_tokens_and_round_trip_to_engine():
+    """Adding KVzip's boundary must not resample a matched dense trace."""
+    from benchmark.efficiency.workload import context_boundary_kwargs, trace_metadata
+    from sparseengine.engine.sequence import Sequence
+
+    kwargs = dict(seed=17, request_count=4, nominal_prompt_len=100, nominal_output_len=8,
+                  vocab_size=1000, prompt_jitter_fraction=.2, output_jitter_fraction=0,
+                  vary_output_lengths=False)
+    original = build_request_trace(**kwargs)
+    bounded = build_request_trace(**kwargs, question_suffix_tokens=8, context_prefix_length=2)
+    for first, second in zip(original, bounded):
+        assert (first.prompt_token_ids, first.prompt_digest, first.trace_seed, first.output_len) == (
+            second.prompt_token_ids, second.prompt_digest, second.trace_seed, second.output_len)
+        seq = Sequence(second.prompt_token_ids, **second.request_kwargs())
+        assert seq.prefill_stage_remaining == len(second.prompt_token_ids) - 8
+        assert second.metadata()["context_length"] == seq.context_length
+        assert second.metadata()["context_prefix_length"] == seq.context_prefix_length == 2
+    assert trace_metadata(bounded)["requests"] == [r.metadata() for r in bounded]
+    for question, prefix in [(0, 2), (99, 2), (None, 2), (8, -1)]:
+        with pytest.raises(ValueError):
+            context_boundary_kwargs(100, question, prefix)
+
+
+@pytest.mark.parametrize("scenario,warmups", [("fixed", 1), ("fixed", 0), ("churn", 1), ("churn", 0)])
+def test_native_probe_forwards_declared_boundaries_in_warmup_and_measure(
+        monkeypatch, tmp_path, scenario, warmups):
+    """Protect the four real admission sites, not just the trace serializer."""
+    import sparseengine
+    import torch
+    from sparseengine.engine.sequence import Sequence
+
+    class ObservedAdmission(Exception):
+        pass
+
+    seen = []
+    class Engine:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def debug_sparse_state_summaries(self):
+            return [{"decode_graph": {}, "state": {"cache": {"kvzip_context_compactions": 0}}}]
+
+        def add_request(self, tokens, sampling, **kwargs):
+            seq = Sequence(tokens, sampling, **kwargs)
+            seen.append(seq)
+            raise ObservedAdmission
+
+        def exit(self):
+            pass
+
+    monkeypatch.setattr(sparseengine, "LLM", Engine)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(bench_probe, "_case_monitor", lambda *args: SimpleNamespace(stop=lambda: {}))
+    monkeypatch.setattr(bench_probe, "_actual_hardware_metrics", lambda summary: {})
+    monkeypatch.setattr(sys, "argv", ["probe", "--model-path", "fixture", "--output-dir", str(tmp_path),
+        "--sparse-method", "kvzip", "--scenario", scenario, "--prompt-lens", "100",
+        "--output-lens", "8", "--batch-sizes", "2", "--tensor-parallel-size", "1",
+        "--num-warmups", str(warmups), "--question-suffix-tokens", "8", "--context-prefix-length", "2"])
+    args = bench_probe.parse_args()
+    runner = bench_probe.run_sparseengine_probe if scenario == "fixed" else bench_probe.run_sparseengine_churn
+    with pytest.raises(ObservedAdmission):
+        runner(args, SimpleNamespace(vocab_size=1000))
+    assert len(seen) == 1
+    assert seen[0].context_length == seen[0].num_prompt_tokens - 8
+    assert seen[0].context_prefix_length == 2
+
+
+def test_compaction_evidence_rejects_uncompressed_runs_but_allows_recompute():
+    """A sparse label must not hide missing context compaction."""
+    from benchmark.efficiency.workload import context_compaction_evidence
+    before = {"state": {"cache": {"kvzip_context_compactions": 3}}}
+    with pytest.raises(RuntimeError, match="fewer contexts"):
+        context_compaction_evidence(before, {"state": {"cache": {"kvzip_context_compactions": 4}}}, expected=2)
+    assert context_compaction_evidence(before, {"state": {"cache": {"kvzip_context_compactions": 6}}}, expected=2) == {
+        "expected_contexts": 2, "executed_compactions": 3}
+
+
 def test_shared_prompt_reuses_only_within_workload(monkeypatch, tmp_path):
     """Prevent a cache benchmark's warmup or prior repeat from priming its measured prefix."""
     monkeypatch.setattr(sys, "argv", ["probe", "--model-path", "model", "--output-dir", str(tmp_path),
@@ -1359,3 +1436,16 @@ def test_native_probe_retains_explicit_graph_capacity_and_rejects_truncated_work
     assert _sparse_probe_max_model_len(args, {'max_model_len': 131072}) == 131072
     with pytest.raises(ValueError, match='cannot cover'):
         _sparse_probe_max_model_len(args, {'max_model_len': 8192})
+
+
+def test_adakv_probe_budget_matches_the_config_passed_to_the_engine():
+    """Prevent a measured AdaKV run from being labeled with unrelated fallback budgets."""
+    args = SimpleNamespace(hyper_params='{"decode_keep_tokens": 19, "adakv_alpha": 0.5}',
+        tensor_parallel_size=1, gpu_memory_utilization=.85, max_num_batched_tokens=512,
+        sparse_method="adakv", sparse_prefill_score_mode="probability")
+    hyper, budget, protocol, label = _resolve_sparse_probe_protocol(args)
+    assert budget == sum(hyper[name] for name in ("sink_keep_tokens", "decode_keep_tokens", "recent_keep_tokens"))
+    assert protocol["sparse_budget"] == budget
+    assert protocol["score_window"] == hyper["observation_window_size"]
+    assert protocol["adakv_alpha"] == hyper["adakv_alpha"]
+    assert "prefill-and-chain-compaction" in label

@@ -227,3 +227,16 @@ class RuntimeParamNamingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_auto_prefix_mode_cannot_enable_async_for_exclusive_chains(prefill_config, monkeypatch):
+    """Auto-resolved chain requests previously bypassed the async compatibility gate."""
+    from sparseengine.platforms import device_runtime
+
+    monkeypatch.setattr(device_runtime, "supports_streams", lambda: True)
+    make, _, _ = prefill_config
+    config = make(sparse_method="snapkv", enable_prefix_caching=True)
+    assert config.resolved_prefix_cache_mode == "chain"
+    assert not config.async_scheduling
+    with pytest.raises(ValueError, match="radix/no prefix"):
+        make(sparse_method="snapkv", enable_prefix_caching=True, async_scheduling=True)

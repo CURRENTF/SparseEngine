@@ -1870,6 +1870,10 @@ class SnapKVCacheManager(CacheManager):
 
         return select_indices
 
+    def _prefill_uses_retained_rows(self, seq: Sequence) -> bool:
+        return (getattr(seq, "chain_status", "") == "resumed"
+                and not bool(getattr(seq, "is_recompute_replay", False)))
+
     @torch.no_grad()
     def _allocate_prefill_batch_same_size_all_layers(
         self,
@@ -1901,12 +1905,8 @@ class SnapKVCacheManager(CacheManager):
                 for seq_idx, seq in enumerate(seqs):
                     row_idx = self._get_free_row(layer_id, int(seq.seq_id))
                     row_len = int(self.row_seq_lens[layer_id][row_idx])
-                    is_chain_resume = bool(
-                        getattr(seq, "chain_status", "") == "resumed"
-                        and not bool(getattr(seq, "is_recompute_replay", False))
-                    )
                     expected_start = int(seq.num_prefilled_tokens)
-                    if not is_chain_resume and row_len != expected_start:
+                    if not self._prefill_uses_retained_rows(seq) and row_len != expected_start:
                         raise ValueError(
                             "KV cache row length mismatch in batched prefill allocation: "
                             f"layer={layer_id} seq_id={seq.seq_id} row_seq_len={row_len} "
@@ -3190,8 +3190,7 @@ class SnapKVCacheManager(CacheManager):
                                     int(seq.seq_id)
                                 ]
                             ]
-                            if getattr(seq, "chain_status", "") == "resumed"
-                            and not bool(getattr(seq, "is_recompute_replay", False))
+                            if self._prefill_uses_retained_rows(seq)
                             else int(seq.num_prefilled_tokens)
                             + int(seq.current_chunk_size)
                         )
@@ -3234,19 +3233,13 @@ class SnapKVCacheManager(CacheManager):
                             )
                         if seq.seq_id in self.seq_id_to_row[layer_id]:
                             row_idx = self.seq_id_to_row[layer_id][seq.seq_id]
-                            is_chain_resume = (
-                                getattr(seq, "chain_status", "") == "resumed"
-                                and not bool(
-                                    getattr(seq, "is_recompute_replay", False)
-                                )
-                            )
                             expected_row_len = (
                                 resident_prefix_len
                                 if use_long_prefill_offload_staging
                                 else start_idx
                             )
                             if (
-                                not is_chain_resume
+                                not self._prefill_uses_retained_rows(seq)
                                 and self.row_seq_lens[layer_id][row_idx]
                                 != expected_row_len
                             ):

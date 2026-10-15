@@ -14,7 +14,8 @@ SparseEngine 围绕 cache-manager-first sparse runtime 构建。engine 支持 ph
 | `streamingllm` | Physical eviction | StreamingLLM 风格的固定 sink 加 recent-window cache。保留 prefix/tail 策略之外的 token 会从 active KV cache 中被物理淘汰。 | `sink_keep_tokens`, `recent_keep_tokens` |
 | `attention-sink` | Physical eviction | attention-sink alias policy，使用相同的 sink-token 和 recent-window 保留模型。适合将 sink-window 行为与其他 physical eviction 方法对比。 | `sink_keep_tokens`, `recent_keep_tokens` |
 | `snapkv` | Physical eviction | SnapKV 在 prompt 末尾的 observation window 选出重要 KV。decode 驱逐可选（`snapkv_decode_eviction` 默认关闭）；开启后，每层缓存最近 `observation_window_size` 个 decode query，在物理 KV 长度达到该层预算加 `decode_eviction_interval` 时评分并压缩。评分仅在驱逐边界、decode Graph replay 之后执行。 | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `snapkv_decode_eviction`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
-| `kvzip` | Physical eviction | 仓库现有的 token 共享 KVzip 重建打分，在 prefill 完成后统一压缩 prompt KV。 | `kvzip_token_budget`, `kvzip_score_chunk_size`, `kvzip_prev_postfix_size` |
+| `adakv` | Physical eviction | 按概率分数在每层各 KV head 间分配预算，保留逐 head 下限；在最终 prefill 和 chain 轮末压缩。 | `adakv_alpha`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `pool_kernel_size` |
+| `kvzip` | Physical eviction | query-agnostic 重建打分，支持 layer 独立并集或逐 head KV 回收。 | `kvzip_token_budget`, `kvzip_score_chunk_size`, `kvzip_prev_postfix_size`, `kv_cache_layout` |
 | `h2o` | Physical eviction | 中间 prefill chunk 可压缩到 `h2o_prefill_budget`，最终 prompt 压缩到 `h2o_decode_budget`。默认 decode 不评分或驱逐，物理 row 随生成 token 增长；开启 `h2o_decode_eviction` 后逐步累计概率分数并周期驱逐。 | `h2o_decode_eviction`, `h2o_decode_budget`, `h2o_decode_eviction_interval`, `h2o_prefill_budget`, `h2o_recent_ratio`, `h2o_prefill_score_window`, `sparse_prefill_score_mode` |
 | `pyramidkv` | Physical eviction | PyramidKV 按 layer 分配 KV 预算，decode 驱逐始终开启。每层缓存最近 `observation_window_size` 个 decode query，在物理 KV 长度达到该层预算加 `decode_eviction_interval` 时评分并压缩，默认间隔为 1024。评分仅在驱逐边界、decode Graph replay 之后执行。 | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
 | `omnikv` | Logical masking，可选 offload | 跨层共享 token 选择；可将稀疏层完整历史保存在 pinned CPU 内存，decode 精确取回当前选择的 KV。 | `full_attention_layers`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `enable_omnikv_offload` |
@@ -33,27 +34,76 @@ async scheduling。默认保留开头 4 个 token 与最近 64 个 token 做精�
 
 
 
+## 逐 KV head 独立缓存
+
+`kv_cache_layout="auto"` 对 AdaKV 解析为 `head_slots`，对其他方法解析为
+`token`。显式 `head_slots` 支持 native KVzip、AdaKV，以及 chain 轮末压缩的
+SnapKV 变体；普通 SnapKV 的默认 token 布局行为不变。
+
+SnapKV head 布局的 `head_slot_budgets` 是 `[KV layers][KV heads]` 总保留量列表，
+包含 sink/recent；`None` 禁用压缩。此变体使用最后观测的 query 窗口，在 chain
+轮末压缩，只支持 exclusive chain cache；它与普通 SnapKV 的 prompt 末尾及
+可选 decode 驱逐触发不同。
+
+AdaKV 自动使用 head 布局，平均每 head 总预算为
+`sink_keep_tokens + decode_keep_tokens + recent_keep_tokens`。`adakv_alpha` 在
+`(0, 1]` 定义逐 head 保护下限，其余名额在同层竞争。它要求 probability 评分，
+不能设置手工 head 预算，支持独立请求及 exclusive chain。这是将 KVPress 的
+保护下限/全局选择目标扩展到 ragged 候选与 sink/recent 保护的适配。
+
+Head 布局要求同构 BF16 Llama/Qwen2/Qwen3 显式 KV、TP=EP=DP=1，不支持 radix
+共享/修剪、cache offload 或 decode 驱逐。SM90 使用 SGL FA3；SM120 使用
+FlashInfer，均支持 batch-only decode CUDA Graph 和 eager 执行。算法差异与验证入口见
+[开发契约](../../development/head-nonuniform-design.md)。
+
 ## KVzip
 
 使用 `LLM(model, sparse_method="kvzip", kvzip_token_budget=4096)`，
-在上下文重建后最多保留 4096 个 prompt token。较短的 prompt 保留完整 KV。
-首个输出 token 来自原始 dense prefill；后续 decode 读取保留的 prompt KV
-和全部生成 token 的 KV。
+并显式传入 context/question 的 token 边界：
 
-这是仓库 `kvzip_global` 的 token 共享变体，与原论文逐 head 非均匀淘汰不同。
-各层、各 head 和 attention TP rank 共享选中的 token 位置，无需额外 checkpoint。
-`kvzip_token_budget` 是完整的 prompt 保留预算；`sink_keep_tokens`、
-`recent_keep_tokens`、`decode_keep_tokens` 不额外增加保护区域。
+```python
+# prompt_ids = protected_prefix_ids + context_ids + question_and_assistant_ids
+outputs = llm.generate(
+    [prompt_ids], sampling_params,
+    context_lengths=[len(protected_prefix_ids) + len(context_ids)],
+    context_prefix_lengths=[len(protected_prefix_ids)],
+)
+```
 
-支持显式 KV 存储的 Qwen2、Qwen3 和 Llama，可使用分块 prefill、批量请求、
-tensor parallel、eager decode 与 decode CUDA Graph。当前拒绝 radix/chain
-prefix cache、offload、稀疏 prefill 组合，以及 recurrent、MLA、共享 KV 和 MoE 模型。
+`context_lengths` 是含系统前缀的 context 结束位置，`context_prefix_lengths`
+是受保护系统前缀的结束位置，均为 exclusive token 索引。问题和 assistant 后缀
+放在 context 后，长度必须对应实际输入 token IDs。`add_request`/`admit_request`
+使用单数参数 `context_length`、`context_prefix_length`。需要压缩的请求必须提供
+这两个边界及非空系统前缀；context 未超过预算时保留完整 KV。
 
-`kvzip_score_chunk_size` 控制每次重建的原文 token 数（默认 2048），
-`kvzip_prev_postfix_size` 控制附带的前文 token 数（默认 64）。重建指令、
-前文与当前 chunk 的总长度必须不超过 `engine_prefill_chunk_size`；完整 prompt
-加重建输入必须不超过 `max_model_len`，需预留额外容量。重建会增加 prefill 开销，
-物理压缩生效不等于已证明性能提升。
+先完成 context 重建与淘汰，再处理问题，首个输出 token 也使用压缩后的 context KV。
+重建指令、assistant 后缀、系统前缀/当前原文块/因果 replay 的概率归一化，以及
+query 最大值打分遵循 KVzip 原实现。分数始终保留每个 KV head、每个 layer，
+无需额外 checkpoint。
+
+`kvzip_token_budget` 是跨 layer、KV head 平均保留的 **context** token 预算，
+不含系统前缀、问题及生成 KV。原版全局严格阈值自然分配不同 head/layer 的预算，
+并列分数可能减少实际 KV-pair 保留量。完整系统前缀、问题和生成 KV 均保留。
+`sink_keep_tokens`、`recent_keep_tokens`、`decode_keep_tokens` 不额外增加保护区域。
+旧 prefix 维护接口 `kvzip_global` 使用独立语义。
+
+默认 token 布局（`kv_cache_layout="auto"` 或 `"token"`） 保留每层原版 head 选择的并集，实际物理 token
+保留量可超过配置预算，每个 head 都会看到这个并集。设置
+`kv_cache_layout="head_slots"` 可独立保留各 head 的位置、长度，并实际释放被
+淘汰的 KV pair。当前要求未量化 BF16 Qwen2/Qwen3/Llama、同构显式 KV、
+TP=EP=DP=1；H100/SM90 使用 SGL FA3（head dimension 128 或 256），
+RTX Pro 6000/SM120 使用 FlashInfer（head dimension 64、128 或 256）。
+两者均支持 `decode_graph=True` 及逐层、逐 head 独立长度。
+不支持的设备在 provider 解析时明确报错。
+
+Token 布局支持分块 prefill、批量请求和 attention TP，decode 复用现有 graph
+元数据。当前拒绝 radix/chain prefix cache、offload、稀疏 prefill 组合，以及
+recurrent、MLA、共享 KV 和 MoE 模型；head slots 还拒绝滑窗和位置/logit bias。
+
+每次重建原文默认 2000 token，续块附带默认八个前文 token。指令、assistant 后缀、
+前文及当前 chunk 必须不超过 `engine_prefill_chunk_size`；context 加 replay 必须
+不超过 `max_model_len`，需预留额外容量。重建增加 prefill 工作量，质量与性能需评测。
+固定参照版本见[开发契约](../../development/kvzip-runtime.md)。
 
 
 ## OmniKV KV offload

@@ -8,6 +8,7 @@ from sparseengine.method_registry import (
 )
 
 from .base import SparseMethodRuntime
+from .adakv import AdaKVRuntime
 from .deepseek_v4 import DeepSeekV4Runtime
 from .dynamic import DeltaKVRuntime, OmniKVRuntime
 from .h2o import H2ORuntime
@@ -29,6 +30,7 @@ RUNTIME_BINDINGS: dict[str, type[SparseMethodRuntime]] = {
     "": PassThroughRuntime,
     "streamingllm": StreamingLLMRuntime,
     "snapkv": SnapKVRuntime,
+    "adakv": AdaKVRuntime,
     "kvzip": KVzipRuntime,
     "h2o": H2ORuntime,
     "pyramidkv": PyramidKVRuntime,
@@ -50,6 +52,11 @@ def create_sparse_method_runtime(
         prefill_sparse_method=getattr(config, "prefill_sparse_method", None),
     )
     runtime_cls = RUNTIME_BINDINGS.get(method)
+    if (getattr(config, "kv_cache_layout", "token") == "head_slots"
+            and method == "snapkv"):
+        from .head_slots import HeadSlotRuntime
+
+        runtime_cls = HeadSlotRuntime
     if runtime_cls is None:
         raise ValueError(f"Unsupported sparse_method={method!r}.")
     runtime = runtime_cls(config, cache_manager)
