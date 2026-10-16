@@ -11,6 +11,69 @@ from sparseengine.kernels.triton.prefill_score import (
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_reconstruction_compact_ranges_with_workspace_reuse_and_graph():
+    """Changing disjoint/overlapping tiles must not duplicate LSE or lose tails.
+
+    Unlike the manager tests, this uses ragged rows and observes only a suffix
+    of replay queries. The normalization still includes all earlier replay keys.
+    """
+    torch.manual_seed(71)
+    workspace = PrefillScoreWorkspace()
+    heads, kv_heads, dim = 6, 2, 128
+    for cached_lengths, replays, sink, start, end in (
+        ((4095, 4109), (137, 65), 65, 257, 1009),
+        ((4095, 4109), (137, 65), 65, 65, 129),
+        ((129, 145), (71, 137), 65, 65, 129),
+        ((4095, 4109), (137, 65), 0, 3969, 4095),
+    ):
+        lengths = tuple(c + r for c, r in zip(cached_lengths, replays))
+        width = max(lengths)
+        q = torch.randn(heads, sum(replays), dim, device="cuda", dtype=torch.bfloat16).transpose(0, 1)
+        k = torch.randn(sum(lengths), kv_heads, dim * 2, device="cuda", dtype=q.dtype)[..., :dim]
+        slots = torch.full((2, width), -1, device="cuda", dtype=torch.int32)
+        permutation = torch.randperm(sum(lengths), device="cuda").int()
+        slots[1, :lengths[0]] = permutation[:lengths[0]]
+        slots[0, :lengths[1]] = permutation[lengths[0]:]
+        tensor = lambda values: torch.tensor(values, device="cuda", dtype=torch.int32)
+        reqs, offsets = tensor((1, 0)), tensor((0, replays[0]))
+        cached, contexts = tensor(cached_lengths), tensor(lengths)
+        score_starts = contexts - 17
+        output = torch.empty((2, width + 7), device="cuda")[:, :width]
+        accum = torch.full((2, kv_heads, width + 7), -7.0, device="cuda")[..., :width]
+        expected = accum.clone()
+        for batch, (context, replay) in enumerate(zip(cached_lengths, replays)):
+            keys = torch.arange(lengths[batch], device="cuda")
+            eligible = (keys < sink) | ((keys >= start) & (keys < end)) | (keys >= context)
+            positions = keys[eligible]
+            selected_k = k[slots[1 - batch, positions].long()].double().repeat_interleave(heads // kv_heads, 1)
+            offset = sum(replays[:batch])
+            observed_q = q[offset + replay - 17:offset + replay].double()
+            z = torch.einsum("qhd,khd->hqk", observed_q, selected_k) * dim**-0.5
+            query_positions = torch.arange(lengths[batch] - 17, lengths[batch], device="cuda")
+            z.masked_fill_(positions[None, None] > query_positions[None, :, None], -torch.inf)
+            probabilities = z.softmax(-1)[..., (positions >= start) & (positions < end)]
+            expected[batch, :, start:end] = probabilities.reshape(kv_heads, heads // kv_heads, 17, -1).amax((1, 2)).float()
+
+        def run():
+            prefill_score_fwd(q, k, output, reqs, offsets, contexts, cached, 17,
+                             slots, score_starts, contexts, workspace=workspace,
+                             reconstruction_range=(sink, start, end),
+                             reconstruction_head_scores=accum)
+
+        for _ in range(3):
+            run()
+        torch.testing.assert_close(accum, expected, atol=2e-6, rtol=2e-3)
+        torch.cuda.synchronize()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            run()
+        for _ in range(2):
+            accum[:, :, start:end].fill_(99)
+            graph.replay()
+            torch.testing.assert_close(accum, expected, atol=2e-6, rtol=2e-3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize(
     "heads,kv_heads,dim", [(8, 2, 128), (4, 4, 64), (28, 4, 128), (32, 1, 128)]
 )

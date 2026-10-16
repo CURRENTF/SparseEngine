@@ -106,6 +106,7 @@ def _prefill_score_partial_lse_kernel(
     candidate_start,
     recent_keep_tokens,
     RECONSTRUCTION: tl.constexpr,
+    COMPACT_RECONSTRUCTION: tl.constexpr,
     sink_end,
     chunk_start,
     chunk_end,
@@ -164,13 +165,34 @@ def _prefill_score_partial_lse_kernel(
     )
     q = tl.load(Q + off_q, mask=q_row_valid[:, None], other=0.0)
 
-    start_n = cur_n_block * BLOCK_N
+    if COMPACT_RECONSTRUCTION:
+        # Visit only tiles intersecting sink, source chunk, or replay. Keep
+        # absolute tile alignment so causal masking and dot products agree
+        # with the dense grid. Boundary tiles shared by ranges are counted once.
+        sink_blocks = tl.cdiv(sink_end, BLOCK_N)
+        chunk_first = chunk_start // BLOCK_N
+        chunk_blocks = tl.cdiv(chunk_end, BLOCK_N) - chunk_first
+        in_sink = cur_n_block < sink_blocks
+        in_chunk = (cur_n_block >= sink_blocks) & (cur_n_block < sink_blocks + chunk_blocks)
+        key_block = tl.where(
+            in_sink, cur_n_block,
+            tl.where(in_chunk, chunk_first + cur_n_block - sink_blocks,
+                     prompt_cache_len // BLOCK_N + cur_n_block - sink_blocks - chunk_blocks),
+        )
+        unique_tile = in_sink | (in_chunk & (key_block >= sink_blocks)) | (
+            (~in_sink) & (~in_chunk) & (key_block >= sink_blocks)
+            & ((key_block < chunk_first) | (key_block >= chunk_first + chunk_blocks))
+        )
+        start_n = key_block * BLOCK_N
+    else:
+        start_n = cur_n_block * BLOCK_N
+        unique_tile = True
     kv_pos = start_n + offs_n
     candidate_end = tl.maximum(candidate_start, context_len - recent_keep_tokens)
     if RECONSTRUCTION:
         kv_in_candidate = ((kv_pos < sink_end)
                            | ((kv_pos >= chunk_start) & (kv_pos < chunk_end))
-                           | (kv_pos >= prompt_cache_len)) & (kv_pos < context_len)
+                           | (kv_pos >= prompt_cache_len)) & (kv_pos < context_len) & unique_tile
     else:
         kv_in_candidate = (kv_pos >= candidate_start) & (kv_pos < candidate_end)
     kv_loc = tl.load(
@@ -329,6 +351,8 @@ def _prefill_score_final_kernel(
     q = tl.load(Q + off_q, mask=q_row_valid[:, None], other=0.0)
 
     start_n = cur_n_block * BLOCK_N
+    if RECONSTRUCTION:
+        start_n += (chunk_start // BLOCK_N) * BLOCK_N
     kv_pos = start_n + offs_n
     candidate_end = tl.maximum(candidate_start, context_len - recent_keep_tokens)
     if RECONSTRUCTION:
@@ -887,7 +911,22 @@ def prefill_score_fwd(
         )
         return
 
-    reduce_blocks = triton.next_power_of_2(candidate_blocks)
+    lse_blocks = candidate_blocks
+    final_blocks = candidate_blocks
+    compact_reconstruction = False
+    if reconstruction:
+        final_blocks = triton.cdiv(chunk_end, block_n) - chunk_start // block_n
+        # Q contains every replay token (also for packed virtual head rows).
+        # Its total length bounds each row without reading GPU lengths on CPU;
+        # one extra partial tile covers an unaligned replay start.
+        replay_blocks = triton.cdiv(int(q.shape[0]) + block_n - 1, block_n)
+        lse_blocks = triton.cdiv(sink_end, block_n) + final_blocks + replay_blocks
+        # A total-Q bound can be loose for ragged/virtual head rows. Use the
+        # dense LSE grid when it requires fewer tiles (notably short contexts).
+        compact_reconstruction = lse_blocks < candidate_blocks
+        lse_blocks = min(lse_blocks, candidate_blocks)
+
+    reduce_blocks = triton.next_power_of_2(lse_blocks)
     reduce_rows = 16
     while reduce_rows > 1 and reduce_rows * reduce_blocks > 32768:
         reduce_rows //= 2
@@ -920,11 +959,11 @@ def prefill_score_fwd(
         )
     partial_lse, global_lse = workspace.probability_lse_buffers(
         group_count=group_count,
-        candidate_blocks=candidate_blocks,
+        candidate_blocks=lse_blocks,
         block_rows=block_rows,
         device=q.device,
     )
-    _prefill_score_partial_lse_kernel[(group_count, candidate_blocks)](
+    _prefill_score_partial_lse_kernel[(group_count, lse_blocks)](
         q,
         k,
         partial_lse,
@@ -955,10 +994,11 @@ def prefill_score_fwd(
         recent_keep_tokens=int(recent_keep_tokens),
         sm_scale=float(head_dim) ** -0.5,
         RECONSTRUCTION=reconstruction,
+        COMPACT_RECONSTRUCTION=compact_reconstruction,
         sink_end=int(sink_end),
         chunk_start=int(chunk_start),
         chunk_end=int(chunk_end),
-        NUM_BLOCKS=candidate_blocks,
+        NUM_BLOCKS=lse_blocks,
         BLOCK_H=block_h,
         BLOCK_ROWS=block_rows,
         BLOCK_DMODEL=head_dim,
@@ -971,14 +1011,14 @@ def prefill_score_fwd(
     _prefill_score_reduce_lse_kernel[reduce_grid](
         partial_lse,
         global_lse,
-        NUM_BLOCKS=candidate_blocks,
+        NUM_BLOCKS=lse_blocks,
         BLOCK_ROWS=block_rows,
         REDUCE_BLOCKS=reduce_blocks,
         REDUCE_ROWS=reduce_rows,
         num_warps=8 if reduce_blocks >= 1024 else 4,
         num_stages=4,
     )
-    _prefill_score_final_kernel[(group_count, candidate_blocks)](
+    _prefill_score_final_kernel[(group_count, final_blocks)](
         q,
         k,
         attn_score,

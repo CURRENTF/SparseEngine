@@ -593,16 +593,23 @@ def test_invalid_reconstruction_config_fails_before_execution(field, value):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-@pytest.mark.parametrize("replay,heads,dim,dtype", [
-    (17, 6, 32, torch.float16), (137, 14, 128, torch.bfloat16),
-    (137, 26, 32, torch.float16),
+@pytest.mark.parametrize("replay,heads,dim,dtype,length,sink,chunk_start,chunk_end", [
+    (17, 6, 32, torch.float16, 19, 3, 6, 15),
+    (137, 14, 128, torch.bfloat16, 19, 3, 6, 15),
+    (137, 26, 32, torch.float16, 19, 3, 6, 15),
+    # Disjoint tiles, shared boundary tiles, and an absent sink exercise the
+    # compact reconstruction grid; the original tiny cases share one key tile.
+    (137, 14, 128, torch.bfloat16, 4097, 65, 257, 2057),
+    (65, 6, 64, torch.float16, 1023, 0, 129, 513),
+    (137, 14, 128, torch.bfloat16, 129, 65, 65, 129),
 ])
-def test_reconstruction_scores_match_independent_probability_oracle(replay, heads, dim, dtype):
+def test_reconstruction_scores_match_independent_probability_oracle(
+    replay, heads, dim, dtype, length, sink, chunk_start, chunk_end,
+):
     """Oracle concatenates sink/chunk/replay keys and causally masks only replay."""
     torch.manual_seed(7)
     device = torch.device("cuda")
-    length, kv_heads = 19, 2
-    sink, chunk_start, chunk_end = 3, 6, 15
+    kv_heads = 2
     manager = object.__new__(KVzipCacheManager)
     manager.config = SimpleNamespace(sparse_attn_score_dtype="float32")
     manager.device = device
