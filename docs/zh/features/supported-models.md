@@ -40,6 +40,12 @@ AG/RS 是默认 DP 通信方式。`moe_backend="deepepv1"` 仍要求 attention T
 Llama、Qwen2 和 Qwen3 Dense FP8 checkpoint 还要求每个 TP-local dense
 projection 维度按 128 对齐，且非量化参数保持 BF16。
 
+Qwen3.5 / 3.6 / 3.8 的 GDN recurrent-state cache 遵循 checkpoint 的
+`mamba_ssm_dtype`；未声明时使用模型 dtype。该字段不会改变权重、激活或卷积
+状态的精度。缓存分配和显存预算按解析后的 state dtype 计算，不支持的 state
+精度会明确报错，不会自动转换为 BF16。Qwen3.6 MoE 目前要求 checkpoint
+声明 FP32 recurrent state。
+
 GLM 逐张量 FP8 加载支持 E4M3 权重以及每个量化投影对应的 BF16 标量
 `weight_scale`，例如 `marksverdhei/GLM-4.7-Flash-FP8` 使用的格式。
 它要求动态激活量化，并需要设备提供兼容的原生 FP8 provider。
@@ -81,13 +87,11 @@ TP=1 或 TP=2。
 Vanilla 和 OmniKV 仍受支持。
 
 ⁷ RetroInfer 仅支持 GPU、统一的 FP16/BF16 显式 KV、attention TP=1、eager decode，
-不支持 prefix cache 或 async scheduling。Llama 3.1 已有
-[完整 LongBench 质量结果](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/retroinfer_llama31_longbench/RESULTS.md)；
-其他模型条目表示代码兼容，尚未完成各自的模型验证。这些结果不构成服务吞吐证据。
+不支持 prefix cache 或 async scheduling。模型条目表示代码兼容，
+不构成各模型的质量或服务吞吐证据。
 
-⁸ GLM PyramidKV MLA 已有 [LongBench v1/v2 质量结果](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/glm47_fp8_streamingllm_pyramidkv_dp8_20260926/RESULTS.md)，
-条件为 FP8 权重、BF16 KV、attention TP=1；CUDA Graph 与 prefix cache 均关闭。
-该结果不覆盖其他拓扑。
+⁸ GLM PyramidKV MLA 支持 FP8 权重、BF16 KV、attention TP=1；
+CUDA Graph 与 prefix cache 均关闭。
 
 Palu（Llama/Qwen3）、KVzip（Qwen2/Qwen3/Llama）和 KV 量化方法
 （`kivi`、`turboquant`、`fp8_kv`：Llama/Qwen2/Qwen3/Qwen3MoE）另有运行要求，

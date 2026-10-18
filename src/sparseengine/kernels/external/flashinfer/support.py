@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import importlib.util
-import re
+
+from packaging.specifiers import SpecifierSet
+from packaging.version import InvalidVersion, Version
 
 from sparseengine.kernels.external.support import (
     KernelFamilyHealth,
@@ -11,8 +13,8 @@ from sparseengine.kernels.external.support import (
     RequiredExternalKernelFamilyError,
 )
 
-_MIN_VERSION = (0, 6, 15)
-_MAX_VERSION = (0, 7, 0)
+_VERSION_REQUIREMENT = ">=0.6.18.post1,<0.7"
+_SUPPORTED_VERSIONS = SpecifierSet(_VERSION_REQUIREMENT)
 _DISTRIBUTION = "flashinfer-python"
 
 
@@ -43,14 +45,16 @@ def flashinfer_kernel_metadata_health() -> KernelFamilyHealth:
             None,
             f"{_DISTRIBUTION} package metadata is unavailable",
         )
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
-    parsed = tuple(map(int, match.groups())) if match else None
-    if parsed is None or not _MIN_VERSION <= parsed < _MAX_VERSION:
+    try:
+        parsed = Version(version)
+    except InvalidVersion:
+        parsed = None
+    if parsed is None or parsed not in _SUPPORTED_VERSIONS:
         return KernelFamilyHealth(
             _DISTRIBUTION,
             KernelFamilyState.BROKEN,
             version,
-            f"requires {_DISTRIBUTION}>=0.6.15,<0.7, got {version}",
+            f"requires {_DISTRIBUTION}{_VERSION_REQUIREMENT}, got {version}",
         )
     return KernelFamilyHealth(
         _DISTRIBUTION,

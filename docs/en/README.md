@@ -8,8 +8,7 @@ benchmark runbooks.
 
 Keep `docs/` focused on stable project guides, contracts, and runbooks. Do not
 add local experiment ledgers here; cite concrete artifacts when a repo-facing
-result claim needs evidence. Paper experiment packages are maintained on
-[`dev-paper-branch`](https://github.com/CURRENTF/SparseEngine/tree/dev-paper-branch/scripts/official_experiments).
+result claim needs evidence.
 
 ## Stable Docs
 

@@ -620,6 +620,52 @@ def test_glm_tp1_prefill_uses_fused_routed_and_shared_path() -> None:
     block._shared_chunk.assert_not_called()
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_glm_bf16_eager_model_counts_shared_expert_once(monkeypatch, record_property):
+    """Cover model packing/branch selection beyond the isolated MoE kernel oracle."""
+    from sparseengine.operators.moe_execution import prepare_model_moe_execution
+    from tests.test_sgl_moe import _torch_local_moe
+
+    torch.manual_seed(20261016)
+    config = _config(hidden_size=2048, moe_intermediate_size=1536)
+    monkeypatch.setattr("sparseengine.models.glm4_moe_lite.get_parallel_context", _tp_context)
+    monkeypatch.setattr("sparseengine.layers.linear.get_parallel_context", _tp_context)
+    previous_dtype = torch.get_default_dtype()
+    torch.set_default_dtype(torch.bfloat16)
+    try:
+        with torch.device("cuda"):
+            block = Glm4MoeLiteSparseMoeBlock(config, mlp_chunk_size=32, decode_graph=False)
+    finally:
+        torch.set_default_dtype(previous_dtype)
+    prepare_model_moe_execution(block, torch.device("cuda"))
+    record_property("provider", block.experts.provider.name)
+    with torch.inference_mode():
+        for parameter in block.parameters():
+            parameter.normal_(std=0.02)
+        experts = block.experts
+        if block.shared_experts is None:
+            shared = experts.shared_expert_id
+            shared_w13, shared_w2 = experts.w13_weight[shared], experts.w2_weight[shared]
+        else:
+            shared_w13 = block.shared_experts.gate_up_proj.weight
+            shared_w2 = block.shared_experts.down_proj.weight
+        for is_prefill in (False, True):
+            monkeypatch.setattr("sparseengine.models.glm4_moe_lite.get_context",
+                                lambda: SimpleNamespace(is_prefill=is_prefill))
+            for batch in (1, 7, 16):
+                x = torch.randn(batch, 2048, device="cuda", dtype=torch.bfloat16) * .1
+                probs = F.linear(x.float(), block.gate.weight.float()).sigmoid()
+                ids = (probs + block.gate.e_score_correction_bias).topk(4, dim=-1).indices
+                weights = probs.gather(1, ids)
+                weights = weights / weights.sum(-1, keepdim=True) * config.routed_scaling_factor
+                routed = _torch_local_moe(x, experts.w13_weight[:64], experts.w2_weight[:64], ids, weights, 0)
+                gate, up = F.linear(x.float(), shared_w13.float()).bfloat16().chunk(2, -1)
+                activated = F.silu(gate.float()).bfloat16() * up
+                dense = F.linear(activated.float(), shared_w2.float()).bfloat16()
+                expected = (routed.float() + dense.float()).bfloat16()
+                torch.testing.assert_close(block(x), expected, atol=3e-2, rtol=3e-2)
+
+
 def test_glm_sparse_moe_reduces_hybrid_tp_ep_shards_over_outer_world() -> None:
     world_process_group = object()
     context = ParallelContext(

@@ -4,7 +4,7 @@
 
 本目录包含面向用户的稳定文档：安装指南、功能说明、架构说明、配置参考和基准测试运行手册。
 
-`docs/` 应专注于稳定的项目指南、约定和运行手册。不要在这里添加本地实验台账；当面向仓库的结果声明需要证据时，应直接引用具体产物。论文实验结果包保存在 [dev-paper-branch](https://github.com/CURRENTF/SparseEngine/tree/dev-paper-branch/scripts/official_experiments)。
+`docs/` 应专注于稳定的项目指南、约定和运行手册。不要在这里添加本地实验台账；当面向仓库的结果声明需要证据时，应直接引用具体产物。
 
 ## 稳定文档
 

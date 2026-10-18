@@ -678,20 +678,19 @@ def test_flashinfer_graph_page_pack_keeps_capture_separate_from_warmup():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize(
-    ("activation_dtype", "head_dim"),
+    ("provider_type", "query_heads", "head_dim"),
     [
-        (torch.bfloat16, 128),
+        (SglFa3PagedDecodeAttentionProvider, 16, 128),
+        (FlashInferPagedDecodeAttentionProvider, 16, 128),
+        pytest.param(FlashInferPagedDecodeAttentionProvider, 12, 256, id="flashinfer-gqa6-hd256"),
     ],
 )
-@pytest.mark.parametrize(
-    "provider_type",
-    [SglFa3PagedDecodeAttentionProvider, FlashInferPagedDecodeAttentionProvider],
-)
 def test_prepared_h2o_probability_score_matches_paged_torch(
-    activation_dtype,
-    head_dim,
     provider_type,
+    query_heads,
+    head_dim,
 ):
+    activation_dtype = torch.bfloat16
     if provider_type is SglFa3PagedDecodeAttentionProvider:
         supported, reason = sgl_fa3_device_support(torch.cuda.current_device())
         if not supported:
@@ -700,7 +699,7 @@ def test_prepared_h2o_probability_score_matches_paged_torch(
         flashinfer_paged_decode_support()
 
     torch.manual_seed(17)
-    batch, query_heads, kv_heads, width = 2, 16, 2, 17
+    batch, kv_heads, width = 2, 2, 17
     capacity = batch * width
     q = torch.randn(
         batch,
@@ -864,17 +863,20 @@ def test_sgl_decode_provider_uses_prepared_explicit_kv_adapter():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize(
-    "provider_type",
-    [SglFa3PagedDecodeAttentionProvider, FlashInferPagedDecodeAttentionProvider],
+    ("provider_type", "query_heads", "kv_heads", "head_dim"),
+    [
+        (SglFa3PagedDecodeAttentionProvider, 32, 8, 128),
+        (FlashInferPagedDecodeAttentionProvider, 32, 8, 128),
+        pytest.param(FlashInferPagedDecodeAttentionProvider, 12, 2, 256, id="flashinfer-gqa6-hd256"),
+    ],
 )
-def test_external_decode_page_size_16_matches_paged_torch_oracle(provider_type):
+def test_external_decode_page_size_16_matches_paged_torch_oracle(provider_type, query_heads, kv_heads, head_dim):
     if provider_type is SglFa3PagedDecodeAttentionProvider:
         supported, reason = sgl_fa3_device_support(torch.cuda.current_device())
         if not supported:
             pytest.skip(reason)
     torch.manual_seed(20260828)
     batch, page_size, logical_pages, physical_pages = 2, 16, 7, 19
-    query_heads, kv_heads, head_dim = 32, 8, 128
     q = torch.randn(
         batch, query_heads, head_dim, dtype=torch.bfloat16, device="cuda"
     )
@@ -950,11 +952,15 @@ def test_external_decode_page_size_16_matches_paged_torch_oracle(provider_type):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_flashinfer_graph_decode_replans_and_replays_new_metadata():
+@pytest.mark.parametrize(
+    ("query_heads", "head_dim", "capacity"),
+    [(8, 128, 17), pytest.param(12, 256, 257, id="gqa6-hd256")],
+)
+def test_flashinfer_graph_decode_replans_and_replays_new_metadata(query_heads, head_dim, capacity):
     flashinfer_paged_decode_support()
     torch.manual_seed(20260825)
     device = torch.device("cuda")
-    batch, query_heads, kv_heads, head_dim, capacity = 2, 8, 2, 128, 17
+    batch, kv_heads = 2, 2
     spec = _spec(
         num_query_heads=query_heads,
         num_kv_heads=kv_heads,
@@ -1042,14 +1048,14 @@ def test_flashinfer_graph_decode_replans_and_replays_new_metadata():
         return torch.stack(expected)
 
     try:
-        update_metadata([17, 13], [2, 0])
+        update_metadata([capacity, capacity - 4], [2, 0])
         provider.run(spec, q, view)
         torch.cuda.synchronize()
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
             graph_output = provider.run(spec, q, view)
 
-        update_metadata([9, 16], [1, 2])
+        update_metadata([9, capacity - 1], [1, 2])
         expected = reference()
         graph.replay()
         torch.cuda.synchronize()
@@ -1065,11 +1071,15 @@ def test_flashinfer_graph_decode_replans_and_replays_new_metadata():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_flashinfer_graph_page_size_16_replans_and_replays():
+@pytest.mark.parametrize(
+    ("query_heads", "head_dim"),
+    [(8, 128), pytest.param(12, 256, id="gqa6-hd256")],
+)
+def test_flashinfer_graph_page_size_16_replans_and_replays(query_heads, head_dim):
     flashinfer_paged_decode_support()
     torch.manual_seed(20260828)
     device = torch.device("cuda")
-    batch, page_size, query_heads, kv_heads, head_dim = 2, 16, 8, 2, 128
+    batch, page_size, kv_heads = 2, 16, 2
     context_capacity = 96
     page_capacity = context_capacity // page_size
     physical_pages = 20

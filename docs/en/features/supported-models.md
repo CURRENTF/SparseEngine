@@ -49,6 +49,13 @@ a `128 x 128` weight block size. Llama, Qwen2, and Qwen3 dense FP8 checkpoints
 also require every TP-local dense projection dimension to be 128-aligned and
 keep non-quantized parameters in BF16.
 
+Qwen3.5 / 3.6 / 3.8 GDN recurrent-state caches follow the checkpoint's
+`mamba_ssm_dtype`; when absent, they use the model dtype. This does not change
+weight, activation or convolution-state precision. Cache allocation and memory
+accounting use the resolved state dtype. Unsupported state precisions fail
+explicitly rather than being converted to BF16. Qwen3.6 MoE currently requires
+checkpoints declaring FP32 recurrent state.
+
 GLM per-tensor FP8 loading accepts E4M3 weights with a BF16 scalar
 `weight_scale` for each quantized projection, as used by
 `marksverdhei/GLM-4.7-Flash-FP8`. It requires dynamic activation quantization
@@ -92,14 +99,12 @@ guaranteed. CPU offload supports attention TP=1 or TP=2.
 eviction. Vanilla and OmniKV remain supported.
 
 ⁷ RetroInfer is GPU-only with uniform FP16/BF16 explicit KV, attention TP=1,
-eager decode, and no prefix caching or async scheduling. Llama 3.1 has
-[full LongBench quality results on dev-paper-branch](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/retroinfer_llama31_longbench/RESULTS.md);
-the other model entries describe implemented compatibility, not completed
-model-specific validation. These results do not establish serving throughput.
+eager decode, and no prefix caching or async scheduling. Model entries describe
+implemented compatibility; they do not establish model-specific quality or
+serving throughput.
 
-⁸ GLM PyramidKV MLA has [LongBench v1/v2 quality results on dev-paper-branch](https://github.com/CURRENTF/SparseEngine/blob/dev-paper-branch/scripts/official_experiments/glm47_fp8_streamingllm_pyramidkv_dp8_20260926/RESULTS.md)
-for FP8 weights and BF16 KV with attention TP=1. CUDA Graph and prefix caching
-were disabled; other topologies are not covered by that result.
+⁸ GLM PyramidKV MLA supports FP8 weights and BF16 KV with attention TP=1,
+with CUDA Graph and prefix caching disabled.
 
 Palu (Llama/Qwen3), KVzip (Qwen2/Qwen3/Llama), and quantized KV
 (`kivi`, `turboquant`, `fp8_kv`: Llama/Qwen2/Qwen3/Qwen3MoE) have separate

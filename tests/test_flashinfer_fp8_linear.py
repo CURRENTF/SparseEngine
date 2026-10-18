@@ -42,7 +42,7 @@ def test_flashinfer_health_distinguishes_missing_package() -> None:
 def test_flashinfer_metadata_health_does_not_import_package() -> None:
     with (
         patch("importlib.util.find_spec", return_value=object()),
-        patch("importlib.metadata.version", return_value="0.6.15"),
+        patch("importlib.metadata.version", return_value="0.6.18.post1"),
         patch("importlib.import_module", side_effect=AssertionError("unexpected import")),
     ):
         health = flashinfer_kernel_metadata_health()
@@ -50,7 +50,7 @@ def test_flashinfer_metadata_health_does_not_import_package() -> None:
     assert health.state is KernelFamilyState.READY
 
 
-@pytest.mark.parametrize("version", ["0.6.14", "0.7.0"])
+@pytest.mark.parametrize("version", ["0.6.17", "0.6.18", "0.7.0rc1", "0.7.0", "invalid"])
 def test_flashinfer_health_rejects_outside_declared_range(version: str) -> None:
     with (
         patch("importlib.util.find_spec", return_value=object()),
@@ -59,7 +59,7 @@ def test_flashinfer_health_rejects_outside_declared_range(version: str) -> None:
         health = flashinfer_kernel_health()
 
     assert health.state is KernelFamilyState.BROKEN
-    assert "flashinfer-python>=0.6.15,<0.7" in health.reason
+    assert "flashinfer-python>=0.6.18.post1,<0.7" in health.reason
 
 
 def test_flashinfer_feature_does_not_hide_broken_family() -> None:

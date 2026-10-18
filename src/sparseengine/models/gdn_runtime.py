@@ -11,6 +11,25 @@ from sparseengine.operators.gated_delta_rule import (
 from sparseengine.operators.moe import model_activation_dtype
 
 
+def resolve_recurrent_state_dtype(config) -> torch.dtype:
+    value = getattr(config, "mamba_ssm_dtype", None)
+    if value is None:
+        value = config.dtype
+    dtype = value
+    if isinstance(dtype, str):
+        dtype = {
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "float32": torch.float32,
+        }.get(dtype)
+    if dtype not in (torch.float16, torch.bfloat16, torch.float32):
+        raise ValueError(
+            f"Unsupported GDN recurrent state dtype {value!r}; "
+            "mamba_ssm_dtype must be float16, bfloat16 or float32."
+        )
+    return dtype
+
+
 def build_gated_delta_rule_op(
     config,
     *,
@@ -27,16 +46,6 @@ def build_gated_delta_rule_op(
             f"key_heads={total_key_heads} value_heads={total_value_heads} "
             f"tp_size={tp_size}."
         )
-    recurrent_state_dtype = getattr(
-        config,
-        "runtime_recurrent_state_dtype",
-        config.dtype,
-    )
-    if not isinstance(recurrent_state_dtype, torch.dtype):
-        raise TypeError(
-            "GDN runtime recurrent-state dtype must be a torch.dtype, got "
-            f"{recurrent_state_dtype!r}."
-        )
     return prepare_gated_delta_rule_op(
         GatedDeltaRuleOpSpec(
             num_key_heads=total_key_heads // tp_size,
@@ -44,7 +53,7 @@ def build_gated_delta_rule_op(
             key_head_dim=int(config.linear_key_head_dim),
             value_head_dim=int(config.linear_value_head_dim),
             activation_dtype=model_activation_dtype(config),
-            recurrent_state_dtype=recurrent_state_dtype,
+            recurrent_state_dtype=resolve_recurrent_state_dtype(config),
             cuda_graph_decode=bool(cuda_graph),
         ),
         device_index=int(device.index or 0),
@@ -76,4 +85,5 @@ def bind_gated_delta_rule_op(
 __all__ = [
     "bind_gated_delta_rule_op",
     "build_gated_delta_rule_op",
+    "resolve_recurrent_state_dtype",
 ]

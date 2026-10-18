@@ -780,8 +780,8 @@ class FlashInferHeadSlotDecodeAttentionProvider(FlashInferPagedDecodeAttentionPr
     """Virtual MQA with a fixed-plan, device-metadata CUDA Graph lifecycle."""
 
     name = "flashinfer_head_slot_decode"
-    # The CUDA-core wrapper rejects non-power-of-two GQA groups. The public
-    # tensor-core path reuses paged prefill and supports the virtual MQA shape.
+    # The tensor-core path reuses paged prefill and supports virtual MQA groups
+    # beyond the CUDA-core dispatcher's fixed GQA group set.
     _use_tensor_cores = True
     capabilities = replace(FlashInferPagedDecodeAttentionProvider.capabilities,
                            head_slots=True)

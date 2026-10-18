@@ -22,7 +22,10 @@ from sparseengine.models.qwen3_5 import (
 from sparseengine.models.attention_runtime import (
     bind_mha_full_attention_provider,
 )
-from sparseengine.models.gdn_runtime import bind_gated_delta_rule_op
+from sparseengine.models.gdn_runtime import (
+    bind_gated_delta_rule_op,
+    resolve_recurrent_state_dtype,
+)
 from sparseengine.operators.full_attention import FullAttentionProvider
 from sparseengine.operators.gated_delta_rule import PreparedGatedDeltaRuleOp
 from sparseengine.models.qwen3_moe import Qwen3MoePackedExperts
@@ -323,7 +326,6 @@ class Qwen35MoeDecoderLayer(Qwen35DecoderLayer):
 
 class Qwen35MoeModel(Qwen35Model):
     def __init__(self, config) -> None:
-        setattr(config, "runtime_recurrent_state_dtype", torch.float32)
         super().__init__(config, Qwen35MoeDecoderLayer)
 
 
@@ -334,13 +336,6 @@ class Qwen35MoeForCausalLM(Qwen35ForCausalLM):
         ".packed_expert_weight": "load_packed_expert_weight",
         ".expert_weight": "load_expert_weight",
     }
-
-    @staticmethod
-    def build_runtime_kwargs(config, **runtime_kwargs) -> dict:
-        # Qwen3.5/3.6 MoE checkpoints use FP32 live recurrent state. Resolve
-        # the GDN provider against that contract before model construction.
-        setattr(config, "runtime_recurrent_state_dtype", torch.float32)
-        return Qwen35ForCausalLM.build_runtime_kwargs(config, **runtime_kwargs)
 
     def __init__(
         self,
@@ -402,7 +397,7 @@ class Qwen35MoeForCausalLM(Qwen35ForCausalLM):
                 RecurrentTensorSpec(
                     "recurrent_state",
                     (num_v_heads, key_head_dim, value_head_dim),
-                    torch.float32,
+                    resolve_recurrent_state_dtype(config),
                 ),
             ),
         )

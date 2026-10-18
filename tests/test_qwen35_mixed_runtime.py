@@ -48,10 +48,12 @@ from sparseengine.models.qwen3_5 import (
     _get_rotary_dim,
 )
 from sparseengine.models.qwen3_5_moe import (
+    Qwen35MoeForCausalLM,
     Qwen35MoePackedExperts,
     Qwen35MoeRouter,
     Qwen35MoeSparseMoeBlock,
 )
+from sparseengine.models.gdn_runtime import build_gated_delta_rule_op
 from sparseengine.models.spec import resolve_model_spec
 from sparseengine.platforms.cpu import CpuPlatform
 from sparseengine.sampling_params import SamplingParams
@@ -197,10 +199,83 @@ def _make_config(tmp_path, **kwargs):
         return Config(model=str(tmp_path), **kwargs)
 
 
+@pytest.mark.parametrize(
+    ("model_cls", "state_dtype"),
+    [
+        (Qwen35ForCausalLM, torch.float32),
+        (Qwen35ForCausalLM, torch.bfloat16),
+        (Qwen35MoeForCausalLM, torch.float32),
+    ],
+)
+def test_checkpoint_state_precision_survives_prefill_storage_and_decode_pool(model_cls, state_dtype):
+    # Catch both ignored checkpoint precision and a provider/model/pool mismatch.
+    config = _qwen35_outer_config(num_layers=1, full_layers=()).text_config
+    config.dtype = torch.bfloat16
+    config.mamba_ssm_dtype = str(state_dtype).removeprefix("torch.")
+    config.quantization_config = None
+    parallel = _single_process_parallel_context()
+    with (
+        patch("sparseengine.models.qwen3_5.get_parallel_context", return_value=parallel),
+        patch("sparseengine.layers.linear.get_parallel_context", return_value=parallel),
+        patch("sparseengine.models.gdn_runtime.prepare_gated_delta_rule_op") as prepare,
+    ):
+        attention = Qwen35LinearAttention(config)
+        build_gated_delta_rule_op(config, attention_tp_size=1, device=torch.device("cpu"), cuda_graph=True)
+
+    op_spec = prepare.call_args.args[0]
+    assert op_spec.activation_dtype == torch.bfloat16
+    assert op_spec.recurrent_state_dtype == state_dtype
+    pool_config = SimpleNamespace(
+        runtime_layout=SimpleNamespace(
+            linear_attention_layer_indices=(0,), is_linear_attention=lambda index: index == 0,
+        ),
+        enable_prefix_caching=False,
+        max_num_seqs_in_batch=2, max_decoding_seqs=2, max_num_seqs_in_gpu=2,
+        recurrent_state_max_bytes=None,
+    )
+    manager = RecurrentStateManager(
+        pool_config, parallel, device=torch.device("cpu"),
+        state_spec=model_cls.recurrent_state_spec(config, 1),
+    )
+    context = SimpleNamespace(seqs=[SimpleNamespace(seq_id=7)], now_layer_idx=0)
+    conv = torch.ones(1, attention.conv_dim, attention.conv_kernel_dim - 1, dtype=torch.bfloat16)
+    state = torch.full((1, attention.num_v_heads, attention.head_k_dim, attention.head_v_dim),
+                       1 + 1 / 1024, dtype=torch.float32)
+    attention._store_batch_states(context, manager, conv, state)
+    loaded_conv, loaded_state, _ = attention._load_batch_states(
+        context, manager, require_existing=True, activation_dtype=torch.bfloat16, device=torch.device("cpu"),
+    )
+    assert loaded_state.dtype == state_dtype
+    torch.testing.assert_close(loaded_state, state.to(state_dtype), rtol=0, atol=0)
+    torch.testing.assert_close(loaded_conv, conv, rtol=0, atol=0)
+    if state_dtype == torch.float32:
+        assert not torch.equal(loaded_state, state.bfloat16().float())
+
+    manager.prepare_decode_static(context.seqs, token_batch=2, device=torch.device("cpu"))
+    buffers, indices = manager.get_decode_layer_state(
+        context.seqs, layer_idx=0, token_batch=2, dtype=torch.bfloat16, device=torch.device("cpu"),
+    )
+    assert buffers["conv_state"].dtype == torch.bfloat16
+    assert buffers["recurrent_state"].dtype == state_dtype
+    torch.testing.assert_close(buffers["recurrent_state"][indices[0]], loaded_state[0], rtol=0, atol=0)
+    assert manager.pool_bytes == sum(tensor.numel() * tensor.element_size() for tensor in buffers.values())
+
+
+def test_invalid_checkpoint_state_dtype_fails_before_provider_preparation():
+    config = _qwen35_outer_config().text_config
+    config.mamba_ssm_dtype = "float64"
+    with (
+        patch("sparseengine.models.gdn_runtime.prepare_gated_delta_rule_op") as prepare,
+        pytest.raises(ValueError, match="mamba_ssm_dtype"),
+    ):
+        build_gated_delta_rule_op(config, attention_tp_size=1, device=torch.device("cpu"), cuda_graph=False)
+    prepare.assert_not_called()
+
+
 def test_linear_attention_fuses_qkvz_and_ba_projections():
     config = _qwen35_outer_config(num_layers=1, full_layers=()).text_config
     config.quantization_config = None
-    config.runtime_recurrent_state_dtype = torch.float32
+    config.mamba_ssm_dtype = "float32"
     parallel_context = _single_process_parallel_context()
     with (
         patch(

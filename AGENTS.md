@@ -42,8 +42,7 @@ use the documented Nsight diagnostic for kernel-timeline attribution.
 ## Benchmark Entrypoints and Shared Statistics
 
 - For paper comparisons, use the [efficiency runbook](docs/en/benchmarking/efficiency.md)
-  for metric definitions and check out `dev-paper-branch` for experiment-specific
-  configurations and workflows. Main decode results use continuous windows
+  for metric definitions. Main decode results use continuous windows
   with boundary-only synchronization,
   preserving supported async/overlap execution. Step-synchronized runs are diagnostics.
 - Use `scripts/benchmarks/run_efficiency_probe.sh` (idle-GPU checks and sweeps)

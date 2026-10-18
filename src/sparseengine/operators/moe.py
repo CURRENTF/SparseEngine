@@ -513,7 +513,12 @@ def use_packed_shared_experts(
     )
     if weight_dtype == torch.float8_e4m3fn and fp8_tensor_scales:
         return _tensor_fp8_shared_decode_profile(profile, cuda_graph)
-    return weight_dtype == torch.bfloat16 and bool(cuda_graph) and profile in _PACKED_SHARED_EXPERT_PROFILES
+    # Single-rank packing also removes shared-branch launches in eager mode.
+    return (
+        weight_dtype == torch.bfloat16
+        and (bool(cuda_graph) or int(tp_size) == 1)
+        and profile in _PACKED_SHARED_EXPERT_PROFILES
+    )
 
 
 def use_packed_shared_experts_in_prefill(
@@ -537,7 +542,10 @@ def use_packed_shared_experts_in_prefill(
         int(tp_size),
         int(ep_size),
     )
-    return weight_dtype == torch.bfloat16 and bool(cuda_graph) and profile in _PACKED_SHARED_PREFILL_PROFILES
+    return (
+        weight_dtype == torch.bfloat16
+        and profile in _PACKED_SHARED_PREFILL_PROFILES
+    )
 
 
 def append_shared_expert_route(

@@ -22,6 +22,7 @@ from sparseengine.models.attention_runtime import (
 from sparseengine.models.gdn_runtime import (
     bind_gated_delta_rule_op,
     build_gated_delta_rule_op,
+    resolve_recurrent_state_dtype,
 )
 from sparseengine.operators.full_attention import FullAttentionProvider
 from sparseengine.operators.gated_delta_rule import PreparedGatedDeltaRuleOp
@@ -404,16 +405,7 @@ class Qwen35LinearAttention(nn.Module):
         if self.activation not in ("silu", "swish"):
             raise NotImplementedError(f"qwen3_5 linear attention supports silu/swish activation, got {self.activation!r}.")
         self.proj_chunk_size = int(getattr(config, "mlp_chunk_size", 16384))
-        self.recurrent_state_dtype = getattr(
-            config,
-            "runtime_recurrent_state_dtype",
-            config.dtype,
-        )
-        if not isinstance(self.recurrent_state_dtype, torch.dtype):
-            raise TypeError(
-                "qwen3_5 runtime_recurrent_state_dtype must be a torch.dtype, "
-                f"got {self.recurrent_state_dtype!r}."
-            )
+        self.recurrent_state_dtype = resolve_recurrent_state_dtype(config)
         quantization = getattr(config, "quantization_config", None)
 
         hidden_size = int(config.hidden_size)
@@ -1130,7 +1122,7 @@ class Qwen35ForCausalLM(nn.Module):
                 RecurrentTensorSpec(
                     "recurrent_state",
                     (num_v_heads, key_head_dim, value_head_dim),
-                    config.dtype,
+                    resolve_recurrent_state_dtype(config),
                 ),
             ),
         )

@@ -2,9 +2,7 @@
 
 Use this page as the stable checklist for reproducing SparseEngine experiments.
 Keep local run ledgers out of this repo; when a repo-facing result needs
-evidence, cite the original run artifact path. Commit finalized paper results
-to the matching package on
-[`dev-paper-branch`](https://github.com/CURRENTF/SparseEngine/tree/dev-paper-branch/scripts/official_experiments).
+evidence, cite the original run artifact path.
 
 ## Environment
 
