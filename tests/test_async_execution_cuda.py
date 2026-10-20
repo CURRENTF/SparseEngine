@@ -155,9 +155,11 @@ def test_output_leases_survive_graph_reuse_discard_and_shape_churn():
         return tokens, DeviceLogprobs(values[:, 0], values, values.long())
     runner.run = run
     expected = []
+    leases = []
     for step in range(18):
         order = seqs[:step % len(seqs) + 1]
         execution.submit(step, order, False)
+        leases.extend(execution.results[step].output_buffers)
         expected.append((len(order), step + 1))
         if step >= 3:
             count, value = expected[step - 3]
@@ -168,7 +170,7 @@ def test_output_leases_survive_graph_reuse_discard_and_shape_churn():
     for step in range(15, 18):
         count, value = expected[step]
         assert execution.collect(step)[0] == [value] * count
-    assert execution.output_pool.reuses > 0
+    assert len({id(buffer) for buffer in leases}) < len(leases)
     assert execution.output_pool.live_bytes == 0
     assert execution.output_pool.cached_bytes <= execution.output_pool.peak_live_bytes
 
@@ -208,7 +210,7 @@ def test_state_tables_grow_with_prior_tickets_in_flight():
     torch.manual_seed(31)
     logits = torch.randn(9, 257, device=runner.device)
     def run(order, prefill):
-        source = torch.empty(16, dtype=torch.long, device=runner.device)
+        source = torch.empty(max(16, len(order)), dtype=torch.long, device=runner.device)
         execution.prepare_inputs(source, order)
         return execution.apply_penalties(logits[:len(order)], order).argmax(-1), None
     runner.run = run
@@ -224,6 +226,17 @@ def test_state_tables_grow_with_prior_tickets_in_flight():
             assert execution.collect(ticket - 2)[0] == expected[ticket - 2]
     assert execution.collect(6)[0] == expected[6]
     assert execution.collect(7)[0] == expected[7]
+    # Reuse holes, then grow: live request count must not alias occupied slots.
+    retired = seqs[1::3]
+    execution.forget([s.seq_id for s in retired])
+    fresh = [Sequence([i + 20], SamplingParams(repetition_penalty=1.3, presence_penalty=.7))
+             for i in range(12)]
+    order = [s for s in seqs if s not in retired] + fresh
+    generated.update((s.seq_id, []) for s in fresh)
+    logits = torch.randn(len(order), 257, device=runner.device)
+    reference = _penalty_reference(logits, order, generated)
+    execution.submit(8, order, False)
+    assert execution.collect(8)[0] == reference.argmax(-1).tolist()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')

@@ -61,12 +61,12 @@ class AsyncExecution:
         self._last_batch_tokens = None
         self._free_feedback: list[int] = []
         self._free_penalties: list[int] = []
-        self._next_feedback = self._next_penalty = 0
         self._feedback = torch.empty(0, dtype=torch.long, device=runner.device)
         self._penalty_flags = torch.empty((1, 1), dtype=torch.uint8, device=runner.device)
         self._penalty_parameters = None
         self._step_metadata = None
         self._metadata_cache = OrderedDict()
+        self._metadata_limit = max(2, getattr(getattr(runner, "config", None), "async_max_inflight", 2))
         self._is_prefill = False
         self.state_provider = prepare_async_state_provider(torch.device(runner.device))
         self.output_pool = HostOutputPool()
@@ -97,14 +97,10 @@ class AsyncExecution:
     def _ensure_feedback(self, seqs):
         for seq in seqs:
             if seq.seq_id not in self._request_rows:
-                if self._free_feedback:
-                    slot = self._free_feedback.pop()
-                else:
-                    slot = self._next_feedback
-                    self._next_feedback += 1
-                self._request_rows[seq.seq_id] = slot
-        if self._next_feedback > self._feedback.numel():
-            capacity = 1 << (self._next_feedback - 1).bit_length()
+                self._request_rows[seq.seq_id] = (
+                    self._free_feedback.pop() if self._free_feedback else len(self._request_rows))
+        if len(self._request_rows) > self._feedback.numel():
+            capacity = 1 << (len(self._request_rows) - 1).bit_length()
             previous = self._feedback
             self.keepalive.append(previous)
             self._feedback = torch.empty(capacity, dtype=torch.long, device=self.runner.device)
@@ -131,8 +127,7 @@ class AsyncExecution:
             ])
             if reusable:
                 self._metadata_cache[key] = self._step_metadata
-                limit = max(2, getattr(getattr(self.runner, "config", None), "async_max_inflight", 2))
-                while len(self._metadata_cache) > limit:
+                while len(self._metadata_cache) > self._metadata_limit:
                     self._metadata_cache.popitem(last=False)
         return self._step_metadata
 
@@ -169,15 +164,11 @@ class AsyncExecution:
         if self._penalty_parameters is not None and vocab != self._penalty_flags.shape[1]:
             raise ValueError("Async penalty vocabulary changed within one runner")
         for seq in new:
-            if self._free_penalties:
-                row = self._free_penalties.pop()
-            else:
-                row = self._next_penalty
-                self._next_penalty += 1
-            self._penalty_rows[seq.seq_id] = row
+            self._penalty_rows[seq.seq_id] = (
+                self._free_penalties.pop() if self._free_penalties else len(self._penalty_rows))
         previous = self._penalty_flags
-        if self._penalty_parameters is None or self._next_penalty > previous.shape[0]:
-            capacity = 1 << (self._next_penalty - 1).bit_length()
+        if self._penalty_parameters is None or len(self._penalty_rows) > previous.shape[0]:
+            capacity = 1 << (len(self._penalty_rows) - 1).bit_length()
             self._penalty_flags = torch.empty((capacity, vocab), dtype=torch.uint8, device=logits.device)
             parameters = torch.empty((2, capacity), dtype=torch.float32, device=logits.device)
             if self._penalty_parameters is not None:
@@ -211,7 +202,7 @@ class AsyncExecution:
         self._ensure_penalties(logits, seqs)
         metadata = self._metadata(seqs)
         result = torch.empty(logits.shape, dtype=torch.float32, device=logits.device)
-        self.state_provider.penalize(logits, self._penalty_flags, metadata[3],
+        self.state_provider.penalize(logits, self._penalty_flags, metadata,
                                      self._penalty_parameters, result)
         return result
 
@@ -244,8 +235,7 @@ class AsyncExecution:
         if runner.parallel_context.attn_tp_size > 1:
             dist.broadcast(tokens, src=0, group=runner.parallel_context.attn_tp.process_group)
         metadata = self._metadata(seqs)
-        self.state_provider.commit(tokens, metadata[0], metadata[3], metadata[4],
-                                    self._feedback, self._penalty_flags)
+        self.state_provider.commit(tokens, metadata, self._feedback, self._penalty_flags)
         self._feedback_ready.update(s.seq_id for s in seqs if not is_prefill or s.is_last_chunk_prefill)
         if all(not is_prefill or s.is_last_chunk_prefill for s in seqs):
             self._last_batch_ids = tuple(s.seq_id for s in seqs)
@@ -259,10 +249,10 @@ class AsyncExecution:
         self.copy_stream.wait_stream(main)
         output_buffers = []
         def copy_host(tensor):
-            host, buffer = self.output_pool.acquire(tensor)
+            buffer = self.output_pool.acquire(tensor)
             output_buffers.append(buffer)
-            host.copy_(tensor, non_blocking=True)
-            return host
+            buffer.view.copy_(tensor, non_blocking=True)
+            return buffer.view
         with device_runtime.stream_context(self.copy_stream):
             host_tokens = copy_host(tokens)
             host_inputs = copy_host(self.input_tokens) if records and self.input_tokens is not None else None
@@ -318,14 +308,7 @@ class AsyncExecution:
         return {"submitted": self.submitted, "completed": self.completed,
                 "inflight": len(self.results), "peak_inflight": self.peak_inflight,
                 "device_feedback_requests": len(self._request_rows),
-                "penalty_requests": len(self._penalty_rows),
-                "state_provider": self.state_provider.name,
-                "feedback_capacity": self._feedback.numel(),
-                "penalty_state_bytes": self._penalty_flags.numel(),
-                "output_pool_allocations": self.output_pool.allocations,
-                "output_pool_reuses": self.output_pool.reuses,
-                "output_pool_cached_bytes": self.output_pool.cached_bytes,
-                "output_pool_live_bytes": self.output_pool.live_bytes}
+                "penalty_requests": len(self._penalty_rows)}
 
     @cpu_timing.timed
     def prepare_synchronous_execution(self):
@@ -339,10 +322,8 @@ class AsyncExecution:
         self._last_batch_ids = self._last_batch_tokens = None
         self._free_feedback.clear()
         self._free_penalties.clear()
-        self._next_feedback = self._next_penalty = 0
         self._step_metadata = None
         self._metadata_cache.clear()
-
 
     def assert_releasable(self, seq_ids) -> None:
         """Control-boundary guard; a completed event is not a retired result.
