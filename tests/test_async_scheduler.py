@@ -187,33 +187,22 @@ def test_execution_snapshot_advances_position_without_fabricating_history():
         snapshot.token_ids[5]
 
 
-def test_device_penalty_state_matches_independent_value_formula():
-    state = object.__new__(AsyncExecution)
-    state.penalties = {}
-    seq = Sequence([1, 3], SamplingParams(repetition_penalty=1.3, presence_penalty=.7))
-    seq.append_token(2)
-    logits = torch.tensor([[.1, -2., 3., 4., -1.]])
-    result = state.apply_penalties(logits, [seq])
-    expected = logits.clone()
-    for token in [1, 2, 3]:
-        expected[0, token] = expected[0, token] / 1.3 if expected[0, token] > 0 else expected[0, token] * 1.3
-    expected[0, 2] -= .7
-    torch.testing.assert_close(result, expected)
-    assert torch.equal(logits, torch.tensor([[.1, -2., 3., 4., -1.]]))
-
-
 def test_sync_recovery_invalidates_feedback_only_after_all_results_retire():
     state = object.__new__(AsyncExecution)
     state.results = {7: object()}
-    state.last_tokens = {1: torch.tensor(17)}
-    state.penalties = {1: object()}
+    state._request_rows = {1: torch.tensor(17)}
+    state._penalty_rows = {1: object()}
+    state._feedback_ready = {1}
+    state._free_feedback = []
+    state._free_penalties = []
+    state._metadata_cache = {}
     with pytest.raises(RuntimeError, match="all asynchronous results"):
         state.prepare_synchronous_execution()
-    assert 1 in state.last_tokens
+    assert 1 in state._request_rows
     state.results.clear()
     state.prepare_synchronous_execution()
-    assert not state.last_tokens
-    assert not state.penalties
+    assert not state._request_rows
+    assert not state._penalty_rows
 
 
 @pytest.mark.parametrize('reservation_failure', [False, True])

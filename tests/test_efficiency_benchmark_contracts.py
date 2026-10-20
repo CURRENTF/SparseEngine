@@ -103,7 +103,8 @@ def test_native_probe_forwards_declared_boundaries_in_warmup_and_measure(
     monkeypatch.setattr(sys, "argv", ["probe", "--model-path", "fixture", "--output-dir", str(tmp_path),
         "--sparse-method", "kvzip", "--scenario", scenario, "--prompt-lens", "100",
         "--output-lens", "8", "--batch-sizes", "2", "--tensor-parallel-size", "1",
-        "--num-warmups", str(warmups), "--question-suffix-tokens", "8", "--context-prefix-length", "2"])
+        "--num-warmups", str(warmups), "--question-suffix-tokens", "8", "--context-prefix-length", "2",
+        "--presence-penalty", ".7", "--repetition-penalty", "1.3"])
     args = bench_probe.parse_args()
     runner = bench_probe.run_sparseengine_probe if scenario == "fixed" else bench_probe.run_sparseengine_churn
     with pytest.raises(ObservedAdmission):
@@ -111,6 +112,8 @@ def test_native_probe_forwards_declared_boundaries_in_warmup_and_measure(
     assert len(seen) == 1
     assert seen[0].context_length == seen[0].num_prompt_tokens - 8
     assert seen[0].context_prefix_length == 2
+    assert seen[0].presence_penalty == .7
+    assert seen[0].repetition_penalty == 1.3
 
 
 def test_compaction_evidence_rejects_uncompressed_runs_but_allows_recompute():

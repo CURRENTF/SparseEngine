@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import statistics
@@ -795,7 +796,9 @@ def run_sparseengine_probe(
                             waiting_for_first.add(int(llm.add_request(
                                 request.prompt_token_ids,
                                 SamplingParams(temperature=0.0, top_p=1.0, top_k=1,
-                                               ignore_eos=True, max_tokens=request.output_len),
+                                               ignore_eos=True, max_tokens=request.output_len,
+                                               presence_penalty=args.presence_penalty,
+                                               repetition_penalty=args.repetition_penalty),
                                 **request.request_kwargs(),
                             )))
                         if wave_size:
@@ -857,7 +860,9 @@ def run_sparseengine_probe(
                                 seq_id = int(llm.add_request(
                                     request.prompt_token_ids,
                                     SamplingParams(temperature=0.0, top_p=1.0, top_k=1,
-                                                   ignore_eos=True, max_tokens=request.output_len),
+                                                   ignore_eos=True, max_tokens=request.output_len,
+                                                   presence_penalty=args.presence_penalty,
+                                                   repetition_penalty=args.repetition_penalty),
                                     **request.request_kwargs(),
                                 ))
                                 if seq_id in seq_to_request:
@@ -1151,6 +1156,8 @@ def run_sparseengine_churn(
                                     top_k=1,
                                     ignore_eos=True,
                                     max_tokens=request.output_len,
+                                    presence_penalty=args.presence_penalty,
+                                    repetition_penalty=args.repetition_penalty,
                                 ),
                                 **request.request_kwargs(),
                             )
@@ -1194,6 +1201,8 @@ def run_sparseengine_churn(
                                             top_k=1,
                                             ignore_eos=True,
                                             max_tokens=request.output_len,
+                                            presence_penalty=args.presence_penalty,
+                                            repetition_penalty=args.repetition_penalty,
                                         ),
                                         **request.request_kwargs(),
                                     )
@@ -1964,6 +1973,10 @@ def parse_args():
         help="fixed measures one variable-length batch; churn oversubscribes the scheduler.",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--presence-penalty", type=float, default=0.,
+                        help="Native SparseEngine request presence penalty; also applied during warmup.")
+    parser.add_argument("--repetition-penalty", type=float, default=1.,
+                        help="Native SparseEngine request repetition penalty; also applied during warmup.")
     parser.add_argument("--question-suffix-tokens", type=int, default=None,
                         help="Declare the final N prompt tokens as the question; required for KVzip.")
     parser.add_argument("--context-prefix-length", type=int, default=0,
@@ -2049,7 +2062,14 @@ def parse_args():
         default=100,
         help="nvidia-smi activity sampling interval for each measured case.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not math.isfinite(args.presence_penalty) or not -2 <= args.presence_penalty <= 2:
+        parser.error("--presence-penalty must be finite and in [-2, 2]")
+    if not math.isfinite(args.repetition_penalty) or args.repetition_penalty <= 0:
+        parser.error("--repetition-penalty must be finite and positive")
+    if args.engine != "sparseengine" and (args.presence_penalty != 0 or args.repetition_penalty != 1):
+        parser.error("Sampling penalty probes currently require --engine sparseengine")
+    return args
 
 
 def main():

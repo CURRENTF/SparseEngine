@@ -18,6 +18,9 @@
 依赖和输出盘可用，并用 `nvidia-smi` 检查所有参与 GPU 空闲。Wrapper 有空卡检查，
 独立 Python CLI 需要手动检查。每次运行使用新的持久输出目录。
 
+原生 SparseEngine probe 支持 `--presence-penalty` 和 `--repetition-penalty`。
+两个参数同时应用于 fixed/churn 场景的 warmup 与测量请求；其他 engine 不接受非默认惩罚值。
+
 以下是请求模式的功能 smoke，不是论文测量点：
 
 ```bash

@@ -6,12 +6,16 @@ the runner stream; a copied result is never an alias of a graph's next output.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import OrderedDict
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from sparseengine.utils.profiler import cpu_timing
 from sparseengine.engine.decode_graph_staging import DecodeGraphHostInputs
 from sparseengine.platforms import device_runtime
+from sparseengine.engine.async_scheduling.output_pool import HostOutputPool
+from sparseengine.operators.async_state import prepare_async_state_provider
 
 
 class AsyncDrainRequired(RuntimeError):
@@ -40,6 +44,7 @@ class DeviceResult:
     logprobs: DeviceLogprobs | None
     prefix_records: list
     keepalive: list
+    output_buffers: list
 
 
 class AsyncExecution:
@@ -49,8 +54,22 @@ class AsyncExecution:
         self.runner = runner
         self.copy_stream = device_runtime.new_stream(runner.device)
         self.results: dict[int, DeviceResult] = {}
-        self.last_tokens: dict[int, torch.Tensor] = {}
-        self.penalties: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+        self._request_rows: dict[int, int] = {}
+        self._penalty_rows: dict[int, int] = {}
+        self._feedback_ready: set[int] = set()
+        self._last_batch_ids = None
+        self._last_batch_tokens = None
+        self._free_feedback: list[int] = []
+        self._free_penalties: list[int] = []
+        self._next_feedback = self._next_penalty = 0
+        self._feedback = torch.empty(0, dtype=torch.long, device=runner.device)
+        self._penalty_flags = torch.empty((1, 1), dtype=torch.uint8, device=runner.device)
+        self._penalty_parameters = None
+        self._step_metadata = None
+        self._metadata_cache = OrderedDict()
+        self._is_prefill = False
+        self.state_provider = prepare_async_state_provider(torch.device(runner.device))
+        self.output_pool = HostOutputPool()
         self.input_tokens = None
         self.keepalive = []
         self.submitted = self.completed = self.peak_inflight = 0
@@ -58,12 +77,64 @@ class AsyncExecution:
         self.host_tensor_pool: dict[tuple, list[torch.Tensor]] = {}
 
     def acquire_host_tensor(self, template):
-        key = (tuple(template.shape), template.dtype, template.is_pinned())
+        return self._acquire_host(tuple(template.shape), template.dtype, template.is_pinned())
+
+    def _acquire_host(self, shape, dtype, pinned=True):
+        key = (shape, dtype, pinned)
         pool = self.host_tensor_pool.setdefault(key, [])
-        tensor = pool.pop() if pool else torch.empty_like(
-            template, pin_memory=template.is_pinned())
+        tensor = pool.pop() if pool else torch.empty(shape, dtype=dtype, pin_memory=pinned)
         self.keepalive.append(tensor)
         return tensor
+
+    def _upload(self, values, dtype=torch.int64):
+        array = np.asarray(values)
+        host = self._acquire_host(array.shape, dtype)
+        host.numpy()[...] = array
+        uploaded = host.to(device=self.runner.device, non_blocking=True)
+        self.keepalive.append(uploaded)
+        return uploaded
+
+    def _ensure_feedback(self, seqs):
+        for seq in seqs:
+            if seq.seq_id not in self._request_rows:
+                if self._free_feedback:
+                    slot = self._free_feedback.pop()
+                else:
+                    slot = self._next_feedback
+                    self._next_feedback += 1
+                self._request_rows[seq.seq_id] = slot
+        if self._next_feedback > self._feedback.numel():
+            capacity = 1 << (self._next_feedback - 1).bit_length()
+            previous = self._feedback
+            self.keepalive.append(previous)
+            self._feedback = torch.empty(capacity, dtype=torch.long, device=self.runner.device)
+            if previous.numel():
+                self._feedback[:previous.numel()].copy_(previous)
+
+    def _metadata(self, seqs):
+        if self._step_metadata is None:
+            ids = tuple(s.seq_id for s in seqs)
+            publish = tuple(not self._is_prefill or s.is_last_chunk_prefill for s in seqs)
+            reusable = all(sid in self._feedback_ready for sid in ids)
+            key = (ids, publish)
+            if reusable and key in self._metadata_cache:
+                self._step_metadata = self._metadata_cache[key]
+                self._metadata_cache.move_to_end(key)
+                return self._step_metadata
+            self._ensure_feedback(seqs)
+            self._step_metadata = self._upload([
+                [self._request_rows[s.seq_id] for s in seqs],
+                [s.decode_input_token for s in seqs],
+                [s.seq_id in self._feedback_ready for s in seqs],
+                [self._penalty_rows.get(s.seq_id, -1) for s in seqs],
+                publish,
+            ])
+            if reusable:
+                self._metadata_cache[key] = self._step_metadata
+                limit = max(2, getattr(getattr(self.runner, "config", None), "async_max_inflight", 2))
+                while len(self._metadata_cache) > limit:
+                    self._metadata_cache.popitem(last=False)
+        return self._step_metadata
 
     def acquire_host_inputs(self, capacity):
         pool = self.host_input_pool.setdefault(capacity, [])
@@ -73,44 +144,75 @@ class AsyncExecution:
 
     @cpu_timing.timed
     def prepare_inputs(self, input_ids, seqs):
-        # Request identity, not the previous batch row, defines feedback.
-        missing = any(s.seq_id not in self.last_tokens for s in seqs)
-        initial = torch.tensor([s.decode_input_token for s in seqs], device=input_ids.device) if missing else None
-        values = torch.stack([
-            self.last_tokens[s.seq_id] if s.seq_id in self.last_tokens else initial[i]
-            for i, s in enumerate(seqs)
-        ])
-        input_ids[:len(seqs)].copy_(values)
-        if input_ids.numel() > len(seqs):
-            input_ids[len(seqs):].copy_(values[0].expand(input_ids.numel()-len(seqs)))
+        if input_ids.numel() < len(seqs) or not seqs:
+            raise ValueError("Async feedback needs a nonempty batch fitting the input capacity")
+        if tuple(s.seq_id for s in seqs) == self._last_batch_ids:
+            # An unchanged order already has a private packed device result.
+            # Keep the request table for later reorder/join/leave transitions.
+            values = self._last_batch_tokens
+            input_ids[:len(seqs)].copy_(values)
+            if input_ids.numel() > len(seqs):
+                input_ids[len(seqs):].copy_(values[0].expand(input_ids.numel() - len(seqs)))
+            self.input_tokens = values
+            return
+        metadata = self._metadata(seqs)
+        # Private selected tokens survive overwrites of graph input storage.
+        values = torch.empty(len(seqs), dtype=torch.long, device=input_ids.device)
+        self.state_provider.gather(self._feedback, metadata, input_ids, values)
         self.input_tokens = values
+
+    def _ensure_penalties(self, logits, seqs):
+        new = [s for s in seqs if s.has_sampling_penalty and s.seq_id not in self._penalty_rows]
+        if not new:
+            return
+        vocab = logits.shape[-1]
+        if self._penalty_parameters is not None and vocab != self._penalty_flags.shape[1]:
+            raise ValueError("Async penalty vocabulary changed within one runner")
+        for seq in new:
+            if self._free_penalties:
+                row = self._free_penalties.pop()
+            else:
+                row = self._next_penalty
+                self._next_penalty += 1
+            self._penalty_rows[seq.seq_id] = row
+        previous = self._penalty_flags
+        if self._penalty_parameters is None or self._next_penalty > previous.shape[0]:
+            capacity = 1 << (self._next_penalty - 1).bit_length()
+            self._penalty_flags = torch.empty((capacity, vocab), dtype=torch.uint8, device=logits.device)
+            parameters = torch.empty((2, capacity), dtype=torch.float32, device=logits.device)
+            if self._penalty_parameters is not None:
+                self.keepalive.extend((previous, self._penalty_parameters))
+                self._penalty_flags[:previous.shape[0]].copy_(previous)
+                parameters[:, :previous.shape[0]].copy_(self._penalty_parameters)
+            self._penalty_parameters = parameters
+        rows = self._upload([self._penalty_rows[s.seq_id] for s in new])
+        self._penalty_flags.index_fill_(0, rows, 0)
+        parameters = self._upload([[s.repetition_penalty for s in new],
+                                   [s.presence_penalty for s in new]], torch.float32)
+        self._penalty_parameters.index_copy_(1, rows, parameters)
+        for source, flag in (("prompt_token_ids", 1), ("completion_token_ids", 3)):
+            indices = []
+            for seq in new:
+                tokens = getattr(seq, source)
+                if any(t < 0 or t >= vocab for t in tokens):
+                    raise ValueError("Sampling penalty history contains an out-of-vocabulary token")
+                indices.extend(self._penalty_rows[seq.seq_id] * vocab + t for t in set(tokens))
+            if indices:
+                self._penalty_flags.view(-1).index_fill_(0, self._upload(indices), flag)
+        self._step_metadata = None
+        self._metadata_cache.clear()
 
     @cpu_timing.timed
     def apply_penalties(self, logits, seqs):
         if not any(s.has_sampling_penalty for s in seqs):
             return logits
-        result = logits.float().clone()
-        for row, seq in enumerate(seqs):
-            if not seq.has_sampling_penalty:
-                continue
-            if seq.seq_id not in self.penalties:
-                present = torch.zeros(logits.shape[-1], dtype=torch.bool, device=logits.device)
-                repeated = torch.zeros_like(present)
-                prompt = torch.tensor(seq.prompt_token_ids, dtype=torch.long, device=logits.device)
-                repeated[prompt] = True
-                # Re-entering after a drained control/recompute boundary.
-                history = torch.tensor(seq.completion_token_ids, dtype=torch.long, device=logits.device)
-                present[history] = True
-                repeated[history] = True
-                self.penalties[seq.seq_id] = present, repeated
-            present, repeated = self.penalties[seq.seq_id]
-            values = result[row]
-            if seq.repetition_penalty != 1.0:
-                penalized = torch.where(values > 0, values / seq.repetition_penalty,
-                                        values * seq.repetition_penalty)
-                values.copy_(torch.where(repeated, penalized, values))
-            if seq.presence_penalty != 0.0:
-                values.sub_(present.to(values.dtype) * seq.presence_penalty)
+        if logits.ndim != 2 or logits.shape[0] != len(seqs):
+            raise ValueError("Sampling penalties require one logits row per request")
+        self._ensure_penalties(logits, seqs)
+        metadata = self._metadata(seqs)
+        result = torch.empty(logits.shape, dtype=torch.float32, device=logits.device)
+        self.state_provider.penalize(logits, self._penalty_flags, metadata[3],
+                                     self._penalty_parameters, result)
         return result
 
     @cpu_timing.timed
@@ -120,6 +222,8 @@ class AsyncExecution:
         runner = self.runner
         self.input_tokens = None
         self.keepalive = []
+        self._step_metadata = None
+        self._is_prefill = bool(is_prefill)
         records = []
         runner.cache_manager._async_prefix_records = records
         runner._async_submitting = True
@@ -139,29 +243,34 @@ class AsyncExecution:
             tokens = torch.empty(len(seqs), dtype=torch.long, device=runner.device)
         if runner.parallel_context.attn_tp_size > 1:
             dist.broadcast(tokens, src=0, group=runner.parallel_context.attn_tp.process_group)
-        for i, seq in enumerate(seqs):
-            if not is_prefill or seq.is_last_chunk_prefill:
-                self.last_tokens[seq.seq_id] = tokens[i]
-                if seq.seq_id in self.penalties:
-                    present, repeated = self.penalties[seq.seq_id]
-                    present[tokens[i]] = True
-                    repeated[tokens[i]] = True
+        metadata = self._metadata(seqs)
+        self.state_provider.commit(tokens, metadata[0], metadata[3], metadata[4],
+                                    self._feedback, self._penalty_flags)
+        self._feedback_ready.update(s.seq_id for s in seqs if not is_prefill or s.is_last_chunk_prefill)
+        if all(not is_prefill or s.is_last_chunk_prefill for s in seqs):
+            self._last_batch_ids = tuple(s.seq_id for s in seqs)
+            self._last_batch_tokens = tokens
+        else:
+            self._last_batch_ids = self._last_batch_tokens = None
         # Snapshots are kept alive until DMA completes, including H2D staging.
-        keepalive = [tokens, self.input_tokens, logprobs, *self.keepalive]
+        keepalive = [tokens, self.input_tokens, logprobs, metadata, self._feedback,
+                     self._penalty_flags, self._penalty_parameters, *self.keepalive]
         main = device_runtime.current_stream(runner.device)
         self.copy_stream.wait_stream(main)
+        output_buffers = []
         def copy_host(tensor):
-            host = torch.empty_like(tensor, device='cpu', pin_memory=True)
+            host, buffer = self.output_pool.acquire(tensor)
+            output_buffers.append(buffer)
             host.copy_(tensor, non_blocking=True)
             return host
         with device_runtime.stream_context(self.copy_stream):
             host_tokens = copy_host(tokens)
-            host_inputs = copy_host(self.input_tokens) if self.input_tokens is not None else None
+            host_inputs = copy_host(self.input_tokens) if records and self.input_tokens is not None else None
             host_logprobs = logprobs.copy_with(copy_host) if logprobs is not None else None
             event = device_runtime.new_event(runner.device)
             event.record(self.copy_stream)
         self.results[ticket] = DeviceResult(seqs, is_prefill, event, host_tokens,
-                                           host_inputs, host_logprobs, records, keepalive)
+                                           host_inputs, host_logprobs, records, keepalive, output_buffers)
         self.submitted += 1
         self.peak_inflight = max(self.peak_inflight, len(self.results))
 
@@ -196,6 +305,7 @@ class AsyncExecution:
             logs = sampled, tops
         self.completed += 1
         del self.results[ticket]
+        self.output_pool.release(result.output_buffers)
         for buffer in result.keepalive:
             if isinstance(buffer, DecodeGraphHostInputs):
                 self.host_input_pool[buffer.batch_capacity].append(buffer)
@@ -207,8 +317,15 @@ class AsyncExecution:
     def stats(self):
         return {"submitted": self.submitted, "completed": self.completed,
                 "inflight": len(self.results), "peak_inflight": self.peak_inflight,
-                "device_feedback_requests": len(self.last_tokens),
-                "penalty_requests": len(self.penalties)}
+                "device_feedback_requests": len(self._request_rows),
+                "penalty_requests": len(self._penalty_rows),
+                "state_provider": self.state_provider.name,
+                "feedback_capacity": self._feedback.numel(),
+                "penalty_state_bytes": self._penalty_flags.numel(),
+                "output_pool_allocations": self.output_pool.allocations,
+                "output_pool_reuses": self.output_pool.reuses,
+                "output_pool_cached_bytes": self.output_pool.cached_bytes,
+                "output_pool_live_bytes": self.output_pool.live_bytes}
 
     @cpu_timing.timed
     def prepare_synchronous_execution(self):
@@ -216,8 +333,16 @@ class AsyncExecution:
             raise RuntimeError("Synchronous execution requires all asynchronous results to retire")
         # A synchronous recovery step can advance any live request. Re-seed
         # feedback and penalties from accepted history on the next submission.
-        self.last_tokens.clear()
-        self.penalties.clear()
+        self._request_rows.clear()
+        self._penalty_rows.clear()
+        self._feedback_ready.clear()
+        self._last_batch_ids = self._last_batch_tokens = None
+        self._free_feedback.clear()
+        self._free_penalties.clear()
+        self._next_feedback = self._next_penalty = 0
+        self._step_metadata = None
+        self._metadata_cache.clear()
+
 
     def assert_releasable(self, seq_ids) -> None:
         """Control-boundary guard; a completed event is not a retired result.
@@ -236,6 +361,16 @@ class AsyncExecution:
                 )
 
     def forget(self, seq_ids):
+        seq_ids = tuple(seq_ids)
+        self.assert_releasable(seq_ids)
+        self._last_batch_ids = self._last_batch_tokens = None
         for seq_id in seq_ids:
-            self.last_tokens.pop(seq_id, None)
-            self.penalties.pop(seq_id, None)
+            row = self._request_rows.pop(seq_id, None)
+            if row is not None:
+                self._free_feedback.append(row)
+            row = self._penalty_rows.pop(seq_id, None)
+            if row is not None:
+                self._free_penalties.append(row)
+            self._feedback_ready.discard(seq_id)
+        self._step_metadata = None
+        self._metadata_cache.clear()

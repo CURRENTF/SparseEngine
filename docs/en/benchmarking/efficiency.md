@@ -19,6 +19,10 @@ conda run). Check dependencies, model access, persistent output capacity, and
 every participating GPU's idle state with `nvidia-smi`. Wrappers check idle
 devices; the standalone Python CLI requires a manual check. Use a new run directory.
 
+Native SparseEngine probes accept `--presence-penalty` and `--repetition-penalty`.
+These apply to both warmup and measured requests in fixed and churn scenarios;
+non-default penalties are rejected for other engines.
+
 This request-mode smoke checks functionality, not paper performance:
 
 ```bash

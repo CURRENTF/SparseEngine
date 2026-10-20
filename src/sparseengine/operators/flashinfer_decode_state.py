@@ -9,6 +9,7 @@ from sparseengine.engine.decode_graph_contract import (
     DecodeGraphContract,
     DecodeGraphInputs,
 )
+from sparseengine.platforms import device_runtime
 from sparseengine.kernels.external.flashinfer.decode import (
     make_flashinfer_paged_decode_wrapper,
 )
@@ -184,6 +185,7 @@ class FlashInferPagedDecodeGraphState:
                 paged_kv_last_page_len_buffer=self.sparse_last_page_len,
             )
         self.planned = False
+        self._plan_upload_done = None
         self._eager_page_pack_keys: dict[bool, tuple[object, ...] | None] = {
             False: None,
             True: None,
@@ -231,6 +233,11 @@ class FlashInferPagedDecodeGraphState:
         )
 
     def prepare_out_graph(self) -> None:
+        # plan(non_blocking=True) reads reusable pinned host state, including
+        # the wrapper's planning workspace. Retire that upload before rewriting
+        # it, without waiting for the following attention/model execution.
+        if self._plan_upload_done is not None:
+            device_runtime.synchronize_event(self._plan_upload_done)
         dense_context_lens = self.inputs.host.context_lens
         if torch.any(dense_context_lens <= 0):
             raise ValueError(
@@ -249,6 +256,9 @@ class FlashInferPagedDecodeGraphState:
         )
         if self.sparse_wrapper is not None:
             self._plan_sparse(dense_context_lens)
+        if self._plan_upload_done is None:
+            self._plan_upload_done = device_runtime.new_event(self.inputs.context_lens.device)
+        device_runtime.record_event(self._plan_upload_done, self.inputs.context_lens.device)
         self.planned = True
 
     def _plan_sparse(self, dense_context_lens: torch.Tensor) -> None:
