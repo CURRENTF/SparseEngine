@@ -1686,9 +1686,28 @@ class QuantizedPagesDecodeAttentionProvider(DecodeAttentionProvider):
             return SupportResult.unsupported("requires token slot maps and a bounded context capacity")
         return SupportResult.yes()
 
+    @classmethod
+    def bind(cls, spec, caps):
+        provider = cls()
+        provider._bind_decode(spec)
+        return provider
+
+    def _bind_decode(self, spec):
+        from sparseengine.kernels.triton.quantized_kv import quantized_decode
+
+        self._decode = quantized_decode
+        self._grouped_fp8 = spec.kv_storage_format == "fp8_kv" and spec.num_query_heads > spec.num_kv_heads
+        if self._grouped_fp8:
+            from sparseengine.kernels.triton.fp8_kv_decode import fp8_grouped_decode
+
+            self._decode = fp8_grouped_decode
+
     def prepare(self, spec, *, device_index=None):
+        self._bind_decode(spec)
         device = torch.device("cuda", int(device_index or 0))
         splits = math.ceil(spec.context_capacity / 128)
+        if self._grouped_fp8:
+            splits = min(splits, 32)
         self.mid_o = torch.empty(spec.max_batch_size * spec.num_query_heads * splits * spec.head_dim,
                                  dtype=torch.float32, device=device)
         self.mid_lse = torch.empty(spec.max_batch_size * spec.num_query_heads * splits,
@@ -1700,7 +1719,6 @@ class QuantizedPagesDecodeAttentionProvider(DecodeAttentionProvider):
 
     def run(self, spec, q, view, **kwargs):
         from sparseengine.engine.cache_manager.storage.quantized_kv import QuantizedKVPayload
-        from sparseengine.kernels.triton.quantized_kv import quantized_decode
 
         kwargs.pop("decode_launch_op", None)
         if kwargs:
@@ -1718,10 +1736,12 @@ class QuantizedPagesDecodeAttentionProvider(DecodeAttentionProvider):
             raise ValueError("Quantized decode exceeds its prepared batch/context capacity.")
         # Graph topology depends only on the prepared capacity, never live length.
         splits = math.ceil((spec.context_capacity if spec.cuda_graph else length) / 128)
+        if self._grouped_fp8:
+            splits = min(splits, 32)
         mid_o = self.mid_o[:batch * heads * splits * dim].view(batch, heads, splits, dim)
         mid_lse = self.mid_lse[:batch * heads * splits].view(batch, heads, splits)
         query = q if payload.rotation is None else (q.float() @ payload.rotation).to(q.dtype)
-        output = quantized_decode(query, payload, view.meta.active_slots, view.meta.req_indices,
+        output = self._decode(query, payload, view.meta.active_slots, view.meta.req_indices,
                                   view.meta.context_lens, mid_o, mid_lse, softmax_scale=spec.softmax_scale,
                                   output=self.output[:batch], output_lse=self.output_lse[:heads * batch].view(heads, batch))
         return output if payload.rotation is None else (output.float() @ payload.rotation.T).to(q.dtype)
@@ -1731,7 +1751,8 @@ class QuantizedPagesDecodeAttentionProvider(DecodeAttentionProvider):
 
     def binding_metadata(self):
         return {"implementation_kind": "atomic_provider", "implementation_source": "repo_triton",
-                "kernel_path": "quantized_kv", "workspace_owner": "provider"}
+                "kernel_path": "fp8_kv_decode" if self._grouped_fp8 else "quantized_kv",
+                "workspace_owner": "provider"}
 
 
 class PreparedDecodeAttentionOp:

@@ -14,6 +14,7 @@ from sparseengine.engine.cache_manager.storage.quantized_kv import (
     QuantizedKVStorage, gaussian_codebook, orthogonal_rotation,
 )
 from sparseengine.kernels.triton.quantized_kv import encode_pages, quantized_decode_append, materialize_sequence, quantized_decode
+from sparseengine.kernels.triton.fp8_kv_decode import fp8_grouped_decode
 from sparseengine.operators.decode_attention import DecodeAttentionOpSpec, DECODE_ATTENTION_REGISTRY
 from sparseengine.operators.registry import OpResolver
 from sparseengine.platforms.interface import DeviceCaps, PlatformEnum
@@ -417,7 +418,8 @@ def test_packed_page_attention_matches_independent_reference(kernel_device, form
     mid_lse = torch.empty(2, qh, splits, device=device, dtype=torch.float32)
     output = torch.empty_like(q)
     output_lse = torch.empty(qh, 2, device=device, dtype=torch.float32)
-    actual = quantized_decode(q, payload, slots, rows, lengths, mid_o, mid_lse,
+    decode = fp8_grouped_decode if format == "fp8_kv" else quantized_decode
+    actual = decode(q, payload, slots, rows, lengths, mid_o, mid_lse,
                              softmax_scale=d ** -0.5, output=output, output_lse=output_lse)
     for b, (key, value) in enumerate(references):
         k = key.repeat_interleave(qh // h, 1).transpose(0, 1)
@@ -429,6 +431,69 @@ def test_packed_page_attention_matches_independent_reference(kernel_device, form
     # Count physical words and scales, including int3 padding, against allocation.
     page_tensors = (storage.data, storage.key_scale, storage.value_scale, storage.key_min, storage.value_min)
     assert sum(t.numel() * t.element_size() for t in page_tensors) == 8 * storage.bytes_per_page_per_layer()
+
+
+@pytest.mark.parametrize("g,d,ratio,dtype", [
+    (16, 64, 3, torch.float16), (32, 128, 4, torch.bfloat16),
+    (128, 256, 20, torch.float16),
+])
+def test_grouped_fp8_attention_preserves_scales_tails_and_split_coverage(kernel_device, g, d, ratio, dtype):
+    """Catch wrong GQA tiles, omitted long-context tokens and raw-tail scale leaks.
+
+    Torch constructs FP8 pages independently of the Triton codec. This also
+    avoids the interpreter's known FP8 store-rounding bug. Existing page tests
+    use only two Q heads per KV head and fewer tokens than the split grid.
+    """
+    device = kernel_device
+    if device.type == "cpu" and dtype == torch.bfloat16:
+        pytest.skip("Triton 3.6 interpreter tl.dot treats BF16 storage as uint16; requires CUDA")
+    torch.manual_seed(123)
+    h, capacity = 2, 4352
+    storage = QuantizedKVStorage(format="fp8_kv", bits=8, page_size=g,
+                                 num_kv_heads=h, head_dim=d, dtype=dtype, seed=0)
+    storage.allocate(num_layers=1, num_slots=2 * capacity, num_rows=2, device=device)
+    payload = storage.layer_payload(0)
+    # Independent, heterogeneous scales expose accidental sharing across K/V,
+    # tokens or heads. Poison the raw tail outside the live prefix.
+    storage.data.copy_(torch.randn(storage.data.shape, device=device).to(storage.data.dtype))
+    storage.key_scale.uniform_(0.1, 1.5)
+    storage.value_scale.uniform_(0.1, 1.5)
+    for raw in (payload.raw_key, payload.raw_value):
+        raw.fill_(float("nan"))
+        raw[0, :1].normal_()
+        raw[1, :max(4097 % g, 31 % g)].normal_()
+    slots = torch.arange(2 * capacity, device=device, dtype=torch.int32).reshape(2, capacity)
+    rows = torch.tensor([1, 0, 1], device=device, dtype=torch.int32)
+    q = torch.randn(3, 2 * h * ratio, d, device=device, dtype=dtype)[:, ::2]
+    splits = 4  # Long rows require looping across several tiles per split.
+    mid_o = torch.empty(3, h * ratio, splits, d, device=device, dtype=torch.float32)
+    mid_lse = torch.empty(3, h * ratio, splits, device=device, dtype=torch.float32)
+    output = torch.empty_like(q)
+    output_lse = torch.empty(h * ratio, 3, device=device, dtype=torch.float32)
+    for live in ([4097, 129, 31], [0, 1, g]):
+        lengths = torch.tensor(live, device=device, dtype=torch.int32)
+        mid_o.fill_(float("nan"))
+        mid_lse.fill_(float("nan"))
+        fp8_grouped_decode(q, payload, slots, rows, lengths, mid_o, mid_lse,
+                           softmax_scale=d ** -0.5, output=output, output_lse=output_lse)
+        for b, (row, length) in enumerate(zip([1, 0, 1], live)):
+            if not length:
+                torch.testing.assert_close(output[b], torch.zeros_like(output[b]), atol=0, rtol=0)
+                assert torch.isneginf(output_lse[:, b]).all()
+                continue
+            full = length // g * g
+            history = []
+            for data, scales, raw in ((payload.k_cache, payload.key_scale, payload.raw_key),
+                                      (payload.v_cache, payload.value_scale, payload.raw_value)):
+                dense = (data.float() * scales[..., None]).reshape(-1, h, d)
+                key_or_value = torch.cat((dense[row * capacity:row * capacity + full],
+                                          raw[row, :length - full].float()))
+                history.append(key_or_value.repeat_interleave(ratio, dim=1).transpose(0, 1))
+            logits = torch.einsum("hd,hnd->hn", q[b].float(), history[0]) / math.sqrt(d)
+            expected = torch.einsum("hn,hnd->hd", logits.softmax(-1), history[1])
+            tolerance = 2e-3 if dtype == torch.float16 else 1e-2
+            torch.testing.assert_close(output[b].float(), expected, atol=tolerance, rtol=tolerance)
+            torch.testing.assert_close(output_lse[:, b], logits.logsumexp(-1), atol=2e-4, rtol=2e-4)
 
 
 @pytest.mark.parametrize("method,bits", [("kivi", 4), ("turboquant", 3), ("fp8_kv", 8)])
@@ -478,7 +543,8 @@ def test_gqa_head_shards_match_unsharded_quantization(kernel_device, method, bit
 
 
 @pytest.mark.parametrize("method,bits,d", [("kivi", 4, 64), ("kivi", 4, 128),
-                                         ("kivi", 2, 256), ("turboquant", 3, 64), ("fp8_kv", 8, 64)])
+                                         ("kivi", 2, 256), ("turboquant", 3, 64),
+                                         ("fp8_kv", 8, 64), ("fp8_kv", 8, 128)])
 def test_provider_graph_replay_reads_live_lengths_and_rows(kernel_device, method, bits, d):
     """Catch stale inactive splits when a large captured grid changes live lengths."""
     from sparseengine.operators.decode_attention import QuantizedPagesDecodeAttentionProvider

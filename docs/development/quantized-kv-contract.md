@@ -34,6 +34,30 @@ FP8 uses separate per-token, per-KV-head dynamic scales for K and V. This
 recipe is calibration-free and is not a claim of parity with a particular
 vLLM/SGLang backend or of FP8 tensor-core attention acceleration.
 
+FP8 GQA decode groups query heads sharing a KV head and uses FP16/BF16 matrix
+products with FP32 accumulation. E4M3 keys are exactly representable in the
+query dtype; their per-token scales multiply the FP32 QK result. Values are
+dequantized to the activation dtype before the probability/value product.
+Queries remain in the activation dtype. The raw incomplete page participates
+in the same softmax with unit scales. Groups larger than 16 use multiple head
+tiles, without crossing KV-head boundaries. MHA retains the scalar provider.
+The grouped provider bounds its split workspace at 32 partial outputs per
+query head and loops over token tiles within each split. Device lengths
+determine the split spans; no host length read or full-history copy is needed.
+The baseline launch uses one pipeline stage: with this tile layout and
+Triton 3.6, two stages exceed SM120's shared-memory limit at D256. This is a
+resource-compatible baseline, not a claim of optimal tuning across devices.
+
+This adapts SGLang's
+[`_fwd_grouped_kernel_stage1`](https://github.com/sgl-project/sglang/blob/7e5d3780ef06bcd56756e31df27a3b4bb125568b/python/sglang/kernels/ops/attention/decode_attention.py)
+(Apache-2.0). The local adapter adds dynamic per-token scales, the raw tail,
+2D slot maps, and neutral writes for inactive splits. SGLang's standard FA3
+FP8 path uses a different scale/cache contract and is not interchangeable
+with this payload. Grouped arithmetic changes reduction order and rounds V
+and softmax weights to the activation dtype; bitwise equality is not claimed.
+GPU numerical, graph-replay and matched serving performance validation are
+required before treating the grouped path as performance-ready.
+
 The custom mixed packed-page/raw-tail payload requires a repository provider.
 Standard prefill remains upstream-first. There is no runtime provider
 reselection or silent dense fallback.
@@ -74,7 +98,8 @@ their owners; request release reclaims pages without replacing captured tensors.
 The append work is O(batch * KV_heads * head_dim) for raw tails and
 O(completed_pages * page_size * KV_heads * head_dim) for page encoding, with
 no full-history copy. Decode remains O(batch * context * query_heads * head_dim);
-its FP32 split workspace is bounded by configured capacity. TurboQuant retains
+its FP32 split workspace is bounded by configured capacity (and capped at 32
+splits for grouped FP8). TurboQuant retains
 its per-head rotation cost. No new inter-rank communication is introduced.
 
 Reuse review: vLLM `reshape_and_cache_kernel` (v0.26.0,
@@ -84,7 +109,8 @@ pattern, but not this mixed compressed-page/raw-tail lifecycle. SGL kernel 0.4.5
 `sgl_per_token_quant_fp8` and `sgl_per_token_group_quant_fp8` interfaces consume
 dense token tensors, not page completion state or KIVI/TurboQuant metadata.
 Neither directly substitutes for the state transition. Reuse the repository's
-codec and fixed-grid attention reducer; no upstream implementation is copied.
+codec and fixed-grid attention reducer; only the grouped FP8 compute kernel
+adapts upstream code, as described above.
 
 Validation must distinguish kernel replay/codec equivalence, real-model
 generation and resource reclamation, and matched eager/graph throughput.
