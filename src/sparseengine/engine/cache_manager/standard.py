@@ -145,7 +145,7 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
         self.layer_batch_state = LayerBatchStates()
 
         self.enable_prefix_caching = bool(
-            config.enable_prefix_caching and config.sparse_method in ("", "omnikv")
+            config.enable_prefix_caching and config.sparse_method in ("", "omnikv", "fp8_kv")
             and getattr(config, "resolved_prefix_cache_mode", "radix") == "radix"
             and not getattr(getattr(config, "runtime_layout", None), "linear_attention_layer_indices", ())
         )
@@ -1471,27 +1471,27 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
         if not self.enable_prefix_caching or self.prefix_cache is None:
             return
         needed_slots = int(needed_slots)
-        if self._num_free_slots >= needed_slots:
+        if self.num_free_slots >= needed_slots:
             return
         if self._prefix_offload_enabled():
             controller = self.prefix_offload_controller
             assert controller is not None
-            while self._num_free_slots < needed_slots:
+            while self.num_free_slots < needed_slots:
                 self._poll_prefix_offload()
-                missing_slots = needed_slots - int(self._num_free_slots)
+                missing_slots = needed_slots - int(self.num_free_slots)
                 with profiler.record("prefix_cache_device_demote"):
                     demoted = self.prefix_cache.demote_device_until_weight(
                         missing_slots,
                         self._block_resident_tokens_or_full,
                     )
                 self._free_device_prefix_blocks(demoted)
-                if self._num_free_slots >= needed_slots:
+                if self.num_free_slots >= needed_slots:
                     return
                 if not controller.wait_oldest_d2h():
                     break
             return
 
-        missing_slots = needed_slots - int(self._num_free_slots)
+        missing_slots = needed_slots - int(self.num_free_slots)
         with profiler.record("prefix_cache_evict"):
             evicted = self.prefix_cache.evict_until_weight(
                 missing_slots,
@@ -2194,12 +2194,24 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
     def free_part_slots(self, layer_idx: int, seq: Sequence, keep_indices: torch.Tensor):
         raise ValueError('不需要实现该方法')
 
+    def _attach_prefill_prefixes(self, seqs):
+        # A promotion for an earlier request must not evict a later admitted hit.
+        protected = {block.stable_block_id: block for seq in seqs
+                     if seq.seq_id not in self.seq_id_to_prefix_blocks
+                     for block in self._prefix_hit_chain(seq)}
+        for block in protected.values():
+            self.prefix_cache.acquire_block_ref(block)
+        try:
+            for seq in seqs:
+                self._attach_prefix_cache_if_needed(seq)
+        finally:
+            self._release_prefix_blocks(list(protected.values()))
+
     def _prepare_prefill(self, seqs: list[Sequence]):
         with profiler.record("cache_prepare_prefill"):
             self._poll_prefix_offload()
             self._prefix_offload_step_h2d_operations = {}
-            for seq in seqs:
-                self._attach_prefix_cache_if_needed(seq)
+            self._attach_prefill_prefixes(seqs)
 
             total_chunk_tokens = sum(seq.current_chunk_size for seq in seqs)
 

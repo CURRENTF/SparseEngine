@@ -1,7 +1,8 @@
 # Quantized KV cache
 
-`kivi`, `turboquant`, and `fp8_kv` compress KV representations without dropping
-tokens. They do not quantize model weights.
+`kivi`, `turboquant`, and `fp8_kv` compress KV representations and retain all
+tokens by default. FP8 also supports explicit prefix pruning. These methods
+do not quantize model weights.
 
 The standalone `kivi` and `turboquant` methods currently have known
 decode-efficiency problems:
@@ -41,10 +42,23 @@ caches. The models supported by this KV quantization path require
 `data_parallel_size=1`; GLM DP attention uses its separate MLA latent cache.
 FP8 requires a GPU with native FP8
 support. `kv_quant_page_size` must be a power of two from 16 to 128 and divide
-the head dimension. Decode CUDA Graphs are supported. Prefix caching/offload and sparse prefill
-combinations are rejected. [Palu](palu.md) uses a separate low-rank cache path.
+the head dimension. Decode CUDA Graphs are supported. FP8 KV supports radix
+prefix caching and CPU prefix offload (TP=1 or TP=2 for offload). Set
+`enable_prefix_caching=True`; `prefix_cache_mode="auto"` selects radix. Prefix
+blocks use the standard prefix-cache block-size setting and need not align
+with `kv_quant_page_size`. Offload also requires `enable_prefix_cache_offload=True`
+and sufficient `prefix_cache_host_size_gb` for the existing write-through policy.
+FP8 uses token slots and supports physical prefix token pruning through the
+standard pruning API, including offload/restore of retained tokens. Pruning
+keeps the selected FP8 bytes and their scales without requantization. Chain
+mode is unsupported for FP8. KIVI/TurboQuant reject
+prefix caching/offload. All three reject sparse prefill combinations.
+[Palu](palu.md) uses a separate low-rank cache path.
 
-Full pages are compressed; incomplete pages stay in the activation dtype.
+KIVI/TurboQuant compress full pages and retain an activation-dtype incomplete
+page. FP8 encodes independent tokens on write, while newly appended tokens in
+the final incomplete interval are read at activation precision. Cached prefix
+tokens remain encoded, including after non-aligned pruning.
 Prefill uses a bounded dense history workspace, so reduce prefill batch size
 or maximum context length if startup reports insufficient workspace memory.
 Decode reads compressed pages directly.

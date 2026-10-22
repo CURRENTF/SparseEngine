@@ -9,6 +9,7 @@ import torch
 
 from ..base import ExplicitKVPayload
 from .base import CacheLayout
+from .components import CacheComponentSpec
 
 
 def quantized_kv_reserved_bytes(config, *, num_layers, num_heads, head_dim):
@@ -21,7 +22,7 @@ def quantized_kv_reserved_bytes(config, *, num_layers, num_heads, head_dim):
     tail = 2 * num_layers * rows * g * h * d * item
     maps = (rows * int(config.max_model_len) + capacity) * 4
     scratch = 2 * (int(config.max_num_batched_tokens) + g) * h * d * (item + 4)
-    return workspace + tail + maps + scratch + d * d * 4 + 64
+    return workspace + tail + maps + scratch + d * d * 4 + rows * 4 + 64
 
 
 @lru_cache(maxsize=3)
@@ -66,6 +67,7 @@ class QuantizedKVPayload(ExplicitKVPayload):
     raw_value: torch.Tensor | None = None
     codebook: torch.Tensor | None = None
     rotation: torch.Tensor | None = None
+    encoded_prefix_lens: torch.Tensor | None = None
 
 
 class QuantizedKVStorage:
@@ -118,6 +120,10 @@ class QuantizedKVStorage:
                                      dtype=torch.float32, device=device)
         self.tensors = (self.data, self.raw, self.key_scale, self.key_min,
                         self.value_scale, self.value_min, self.codebook)
+        self.encoded_prefix_lens = (torch.zeros(num_rows, dtype=torch.int32, device=device)
+                                    if self.format == "fp8_kv" else None)
+        if self.encoded_prefix_lens is not None:
+            self.tensors += (self.encoded_prefix_lens,)
         if self.rotation is not None:
             self.tensors += (self.rotation,)
 
@@ -130,6 +136,7 @@ class QuantizedKVStorage:
             value_min=self.value_min[layer_idx] if self.format == "kivi" else self.value_min,
             raw_key=self.raw[0, layer_idx], raw_value=self.raw[1, layer_idx],
             codebook=self.codebook, rotation=self.rotation,
+            encoded_prefix_lens=self.encoded_prefix_lens,
         )
 
     def validate_slot_mapping(self, slots: torch.Tensor) -> None:
@@ -145,3 +152,23 @@ class QuantizedKVStorage:
 
     def accounting_tensors(self) -> tuple[torch.Tensor, ...]:
         return self.tensors
+
+    def component_specs(self, layer_idx: int) -> tuple[CacheComponentSpec, ...]:
+        if self.format != "fp8_kv":
+            raise ValueError("Prefix transfers are supported only for FP8 KV.")
+        # Copy the FP8 bit patterns, without a floating-point conversion.
+        return (
+            CacheComponentSpec("key", (self.num_kv_heads, self.head_dim), torch.uint8),
+            CacheComponentSpec("value", (self.num_kv_heads, self.head_dim), torch.uint8),
+            CacheComponentSpec("key_scale", (self.num_kv_heads,), torch.float32),
+            CacheComponentSpec("value_scale", (self.num_kv_heads,), torch.float32),
+        )
+
+    def component_tensors(self, layer_idx: int) -> tuple[torch.Tensor, ...]:
+        self.component_specs(layer_idx)
+        return (
+            self.data[0, layer_idx].view(torch.uint8).flatten(0, 1),
+            self.data[1, layer_idx].view(torch.uint8).flatten(0, 1),
+            self.key_scale[layer_idx].flatten(0, 1),
+            self.value_scale[layer_idx].flatten(0, 1),
+        )

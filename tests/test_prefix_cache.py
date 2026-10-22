@@ -2357,6 +2357,197 @@ def test_standard_offload_gpu_pressure_only_demotes_dual_resident_blocks():
     assert manager._num_free_slots == 88
 
 
+def _make_fp8_manager_with_cached_continuation(*, host_only):
+    from sparseengine.engine.cache_manager.fp8 import FP8CacheManager
+    from sparseengine.method_registry import PREFILL_POLICY_ALL_CHUNKED
+
+    manager = object.__new__(FP8CacheManager)
+    manager.__dict__.update(_make_standard_manager_for_prefix().__dict__)
+    manager._prefix_prune_scoring = None
+    manager.row_logical_lens = manager.row_seq_lens.copy()
+    manager.attention_cache_storage = SimpleNamespace(
+        encoded_prefix_lens=torch.zeros(2, dtype=torch.int32),
+        validate_slot_mapping=lambda slots: None,
+    )
+    manager.config.__dict__.update(
+        sparse_method="fp8_kv", max_num_seqs_in_batch=2, max_num_batched_tokens=4,
+        max_decoding_seqs=2, max_num_seqs_in_gpu=2, engine_prefill_chunk_size=2,
+        prefill_schedule_policy=PREFILL_POLICY_ALL_CHUNKED, eos=-1,
+    )
+    manager.prefix_offload_controller = _FakePrefixOffloadController(manager.prefix_cache)
+    blocks, parent = [], None
+    for index, tokens in enumerate(((1, 2), (3, 4))):
+        block = PrefixCacheBlock(
+            stable_block_id=manager.prefix_cache.stable_block_id(tokens, parent),
+            parent_block_id=parent, block_size=2, logical_block_idx=index,
+            payload=StandardPrefixBlockPayload(
+                token_slots=torch.tensor([index * 2, index * 2 + 1], dtype=torch.int32),
+                host_block_index=index), token_ids=tokens)
+        manager.prefix_cache.insert_block(block)
+        manager.prefix_cache.begin_d2h(block)
+        manager.prefix_cache.finish_d2h(block)
+        blocks.append(block)
+        parent = block.stable_block_id
+    _remove_free_slots(manager, [0, 1, 2, 3])
+    if host_only:
+        demoted = manager.prefix_cache.demote_device_until_weight(2, manager._block_resident_tokens_or_full)
+        manager._free_device_prefix_blocks(demoted)
+        assert not blocks[1].residency.device_present
+    return manager, blocks
+
+
+@pytest.mark.parametrize("host_only", [False, True])
+@pytest.mark.parametrize("has_headroom", [False, True])
+def test_fp8_scheduler_accounts_for_continuation_restore_before_admission(host_only, has_headroom):
+    """Catch admitted prefills failing after a continuation is restored/demoted.
+
+    The allocator-only rejection test bypasses prompt admission and chunk
+    selection. Use the real scheduler/runtime and publish/free ownership here.
+    """
+    from sparseengine.engine.runtime_state import RuntimeState
+    from sparseengine.engine.scheduler import Scheduler
+
+    manager, blocks = _make_fp8_manager_with_cached_continuation(host_only=host_only)
+    # Both residency states expose the same total free/reclaimable budget.
+    free = (3 if host_only else 1) + int(has_headroom)
+    occupied = manager._take_device_slots(manager.num_free_slots - free, copy=True)
+    seq = Sequence([1, 2, 3, 4])
+    scheduler = Scheduler(manager.config, RuntimeState(manager.config, manager))
+    scheduler.waiting.append(seq)
+    if not has_headroom:
+        with pytest.raises(RuntimeError, match="[Aa]dmission"):
+            scheduler.schedule()
+        assert not manager.seq_id_to_row and manager.num_free_slots == free
+        # Freeing a different request makes admission possible on the next pass.
+        manager._return_prefix_device_slots(occupied[:1])
+    scheduled, is_prefill, preempted = scheduler.schedule()
+    assert scheduled == [seq] and is_prefill and not preempted
+    manager._prepare_prefill(scheduled)
+    manager.on_forward_end(scheduled, True)
+    assert blocks[1].residency.device_present
+    assert blocks[1].stable_block_id in manager.seq_id_to_materialized_blocks[seq.seq_id]
+    manager.free_seq(seq.seq_id)
+    assert not manager.seq_id_to_row and all(block.ref_count == 0 for block in blocks)
+
+
+def test_fp8_scheduler_splits_partial_prefill_before_continuation_restore():
+    """A partial prefill bypasses fresh admission but must still fit each step."""
+    from sparseengine.engine.runtime_state import RuntimeState
+    from sparseengine.engine.scheduler import Scheduler
+
+    manager, blocks = _make_fp8_manager_with_cached_continuation(host_only=True)
+    seq = Sequence([1, 2, 3, 4])
+    manager.refresh_prefix_cache_hit(seq)
+    manager._attach_prefix_cache_if_needed(seq)
+    seq.num_prefilled_tokens = seq.prefix_cache_hit_len
+    occupied = manager._take_device_slots(manager.num_free_slots - 3, copy=True)
+    scheduler = Scheduler(manager.config, RuntimeState(manager.config, manager))
+    scheduler.waiting.append(seq)
+    scheduled, is_prefill, _ = scheduler.schedule()
+    assert scheduled == [seq] and is_prefill and seq.current_chunk_size == 1
+    manager._prepare_prefill(scheduled)
+    manager.on_forward_end(scheduled, True)
+    seq.num_prefilled_tokens += seq.current_chunk_size
+    manager._return_prefix_device_slots(occupied[:1])
+    scheduler.waiting.append(seq)
+    scheduled, is_prefill, _ = scheduler.schedule()
+    assert scheduled == [seq] and is_prefill and seq.current_chunk_size == 1
+    manager._prepare_prefill(scheduled)
+    manager.on_forward_end(scheduled, True)
+    assert blocks[1].residency.device_present and manager.num_free_slots == 0
+    manager.free_seq(seq.seq_id)
+    assert not manager.seq_id_to_row and all(block.ref_count == 0 for block in blocks)
+
+
+def test_fp8_model_store_waits_before_reading_restored_history(monkeypatch):
+    """Protect the model's store-before-Attention order from stale prefix reads.
+
+    Codec tests manually waited before storage and missed this CPU-owned fence
+    contract. Simulate transfer readiness; GPU numerics are tested separately.
+    """
+    from sparseengine.engine.cache_manager.fp8 import FP8CacheManager
+    from sparseengine.models.llama import LlamaAttention
+
+    manager = object.__new__(FP8CacheManager)
+    manager.device = torch.device("cpu")
+    manager.hf_config = SimpleNamespace(dtype=torch.float16)
+    manager.num_kv_heads, manager.head_dim = 1, 64
+    manager._prefill_active = True
+    manager._write_plan = [(0, 1, 2, 0, torch.tensor([1], dtype=torch.int32))]
+    manager.layer_batch_state = SimpleNamespace(slot_mapping=torch.tensor([1], dtype=torch.int32))
+    manager.attention_cache_storage = SimpleNamespace(layer_payload=lambda index: object())
+    manager.kv_layer_index = lambda index: index
+    events = []
+    manager.prefix_offload_controller = SimpleNamespace(
+        wait_for_layer=lambda operation, index: events.append(("restored", index)))
+    manager._prefix_offload_step_h2d_operations = {0: object()}
+
+    def materialize(*args):
+        assert events and events[-1] == ("restored", 0)
+        events.append(("history_read", 0))
+
+    monkeypatch.setattr("sparseengine.engine.cache_manager.fp8.materialize_prefill_history", materialize)
+    monkeypatch.setattr("sparseengine.engine.cache_manager.fp8.fp8_store_tokens", lambda *args, **kwargs: None)
+    monkeypatch.setattr("sparseengine.models.llama.get_context", lambda: SimpleNamespace(
+        cache_manager=manager, now_layer_idx=0))
+
+    def attention(q, k, v):
+        assert ("history_read", 0) in events
+        manager.before_prefill_layer_attention(0, None)
+        return q
+
+    model = SimpleNamespace(qkv_proj=lambda hidden: hidden.repeat(1, 3),
+                            q_size=64, kv_size=64, num_heads=1, num_kv_heads=1, head_dim=64,
+                            rotary_emb=lambda positions, q, k: (q, k), attn=attention,
+                            _o_proj_chunked=lambda output, hidden: output)
+    hidden = torch.ones(1, 64, dtype=torch.float16)
+    torch.testing.assert_close(LlamaAttention.forward(model, torch.tensor([1]), hidden), hidden)
+
+
+def test_fp8_continuation_demotion_rechecks_admission_before_query_allocation():
+    """Prevent a full cache from admitting a token without restore headroom.
+
+    Ordinary attach tests do not cover a cached continuation becoming host-only
+    during the same step's eviction. This admission/ownership contract is CPU-owned.
+    """
+    from sparseengine.engine.cache_manager.fp8 import FP8CacheManager
+    from sparseengine.engine.cache_manager.prefix_cache_mixin import PrefixRuntimeState
+
+    manager = object.__new__(FP8CacheManager)
+    manager.__dict__.update(_make_standard_manager_for_prefix().__dict__)
+    manager._prefix_prune_scoring = None
+    manager.prefix_offload_controller = _FakePrefixOffloadController(manager.prefix_cache)
+    blocks, parent = [], None
+    for index, tokens in enumerate(((1, 2), (3, 4))):
+        block = PrefixCacheBlock(
+            stable_block_id=manager.prefix_cache.stable_block_id(tokens, parent),
+            parent_block_id=parent, block_size=2, logical_block_idx=index,
+            payload=StandardPrefixBlockPayload(
+                token_slots=torch.tensor([index * 2, index * 2 + 1], dtype=torch.int32),
+                host_block_index=index), token_ids=tokens)
+        manager.prefix_cache.insert_block(block)
+        manager.prefix_cache.begin_d2h(block)
+        manager.prefix_cache.finish_d2h(block)
+        blocks.append(block)
+        parent = block.stable_block_id
+    _remove_free_slots(manager, [0, 1, 2, 3])
+    manager.prefix_cache.acquire_block_ref(blocks[0])
+    occupied = manager._take_device_slots(manager.num_free_slots, copy=True)
+    seq = Sequence([1, 2, 3, 4])
+    manager.prefix_runtime_states[seq.seq_id] = PrefixRuntimeState(
+        blocks[0].stable_block_id, 1, [3], [])
+    with pytest.raises(RuntimeError, match="Insufficient FP8 slots"):
+        manager._reserve_decode_prefix_promotions([seq])
+    assert manager.num_free_slots == 2 and not manager.seq_id_to_row
+    assert not blocks[1].residency.device_present and blocks[1].residency.host_present
+    manager._return_prefix_device_slots(occupied[:1])
+    manager._reserve_decode_prefix_promotions([seq])
+    manager._take_device_slots(1)
+    manager._hold_materialized_prefix_block_ref(seq, blocks[1])
+    assert manager.num_free_slots == 0
+    assert blocks[1].payload.token_slots.numel() == 2
+
+
 def test_standard_offload_gpu_pressure_batches_partial_block_demotions():
     manager = _make_standard_manager_for_prefix(block_size=4)
     controller = _FakePrefixOffloadController(manager.prefix_cache)

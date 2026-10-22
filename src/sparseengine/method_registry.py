@@ -186,6 +186,7 @@ def prefill_sparse_method_fingerprint(config) -> dict[str, object]:
     return payload
 
 PREFIX_CACHE_SUPPORTED_METHODS = {
+    "fp8_kv",
     "deepseek_v4",
     "",
     "streamingllm",

@@ -290,6 +290,163 @@ def _unpack_page(payload, page, *, key):
     return codes.float() * scale + minimum
 
 
+@pytest.mark.parametrize("offload", [False, True])
+def test_fp8_pruned_prefix_forks_restore_and_graph_append_preserve_tokens(tmp_path, offload):
+    """Catch subpage leaks, scale corruption and reading a pruned prefix as raw.
+
+    Private-page codec tests do not exercise arbitrary retained slots or a
+    compressed prefix ending inside the next request's raw-tail interval.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("requires an idle CUDA device")
+    from transformers import LlamaConfig
+    from sparseengine.config import Config
+    from sparseengine.distributed.parallel_context import ParallelContext, ParallelGroup
+    from sparseengine.engine.cache_manager import CacheManager, ExplicitKVWrite
+    from sparseengine.engine.sequence import Sequence
+    from sparseengine.engine.startup.capacity import profiling_kv_budget_bytes, profiling_kv_slots
+
+    LlamaConfig(hidden_size=256, intermediate_size=512, num_hidden_layers=2,
+                num_attention_heads=4, num_key_value_heads=2, head_dim=64,
+                vocab_size=128, max_position_embeddings=160, dtype="float16").save_pretrained(tmp_path)
+    config = Config(model=str(tmp_path), sparse_method="fp8_kv", max_model_len=160,
+                    max_num_batched_tokens=256, engine_prefill_chunk_size=32,
+                    max_num_seqs_in_batch=2, max_decoding_seqs=2, max_num_seqs_in_gpu=2,
+                    enable_prefix_caching=True, prefix_cache_block_size=32,
+                    enable_prefix_cache_offload=offload,
+                    prefix_cache_host_size_gb=0.01 if offload else None, decode_graph=True)
+    config.startup_cache_phase = "profiling"
+    group = ParallelGroup(None, (0,), 0, 1)
+    manager = CacheManager.create(config, ParallelContext(world=group, attn_tp=group, moe_ep=group,
+                                  attn_dp=group, moe_tp=group),
+                                  allocation_budget_bytes=profiling_kv_budget_bytes(config, profiling_kv_slots(config)) + (1 << 20))
+    initial = manager.num_free_slots
+    storage = manager.attention_cache_storage
+    seq = Sequence(list(range(67)))
+    generator = torch.Generator(device="cuda").manual_seed(913)
+    kv = torch.randn(2, 2, 67, 2, 64, generator=generator, device="cuda", dtype=torch.float16)
+    for start, end in ((0, 17), (17, 67)):
+        seq.current_chunk_size = end - start
+        manager._prepare_prefill([seq])
+        for layer in range(2):
+            manager.store_attention_payload(layer, ExplicitKVWrite(kv[0, layer, start:end], kv[1, layer, start:end]))
+        manager.on_forward_end([seq], True)
+        seq.num_prefilled_tokens = end
+    original_slots = manager.buffer_req_to_token_slots[manager.seq_id_to_row[seq.seq_id], :64].long().clone()
+    retained = torch.tensor([0, 3, 7, 17, 31] + list(range(32, 64)), device="cuda")
+    saved = [[tensor[original_slots[retained]].clone() for tensor in storage.component_tensors(layer)]
+             for layer in range(2)]
+    manager.free_seq(seq.seq_id)
+    assert initial - manager.num_free_slots == 64
+    result = manager.prefix_cache_prune(list(range(67)), range_start=0, range_end=32,
+                                       keep_indices=retained[:5], policy="oracle", prune_id="subpage")
+    assert result["freed_device_slots"] == 27
+    assert initial - manager.num_free_slots == 37
+    if offload:
+        manager.prefix_offload_controller.synchronize_all()
+        manager._evict_prefix_cache_until_free(initial)
+        assert manager.num_free_slots == initial
+        assert all(block.residency.host_present and not block.residency.device_present
+                   for block in manager.prefix_cache.blocks.values())
+        storage.data.view(torch.uint8).zero_()
+        storage.key_scale.fill_(float("nan"))
+        storage.value_scale.fill_(float("nan"))
+    forks = [Sequence(list(range(64)) + [70 + i, 80 + i, 90 + i]) for i in range(2)]
+    for fork in forks:
+        manager.refresh_prefix_cache_hit(fork)
+        assert fork.prefix_cache_hit_len == 64
+        fork.num_prefilled_tokens = 64
+        fork.current_chunk_size = 3
+    manager._prepare_prefill(forks)
+    for layer in range(2):
+        manager.store_attention_payload(layer, ExplicitKVWrite(kv[0, layer, :6], kv[1, layer, :6]))
+    manager.on_forward_end(forks, True)
+    rows = [manager.seq_id_to_row[fork.seq_id] for fork in forks]
+    assert all(manager.row_seq_lens[row] == 40 and manager.row_logical_lens[row] == 67 for row in rows)
+    assert initial - manager.num_free_slots == 43
+    shared = manager.buffer_req_to_token_slots[rows[0], :37].long().clone()
+    assert torch.equal(shared, manager.buffer_req_to_token_slots[rows[1], :37].long())
+    for layer in range(2):
+        for tensor, expected in zip(storage.component_tensors(layer), saved[layer]):
+            torch.testing.assert_close(tensor[shared], expected, atol=0, rtol=0)
+    for fork in forks:
+        fork.num_prefilled_tokens = 67
+    buffers = dict(input_ids=torch.empty(2, dtype=torch.int64, device="cuda"),
+                   positions=torch.empty(2, dtype=torch.int64, device="cuda"),
+                   slot_mapping=torch.empty(2, dtype=torch.int32, device="cuda"),
+                   context_lens=torch.empty(2, dtype=torch.int32, device="cuda"),
+                   req_indices=torch.empty(2, dtype=torch.int32, device="cuda"))
+    write = torch.randn(2, 2, 64, generator=generator, device="cuda", dtype=torch.float16)
+    manager._prefill_active = False
+    manager.layer_batch_state = SimpleNamespace(req_indices=buffers["req_indices"],
+                                                context_lens=buffers["context_lens"],
+                                                slot_mapping=buffers["slot_mapping"])
+    buffers["slot_mapping"].fill_(-1)
+    buffers["req_indices"].zero_()
+    buffers["context_lens"].zero_()
+    for layer in range(2):
+        manager.store_attention_payload(layer, ExplicitKVWrite(write, write))
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        for layer in range(2):
+            manager.store_attention_payload(layer, ExplicitKVWrite(write, write))
+    for _ in range(31):
+        for fork in forks:
+            fork.append_token(2)
+        manager._prepare_decode_graph_buffers(forks, publish_slots_outside_graph=True, **buffers)
+        graph.replay()
+        manager.on_forward_end(forks, False)
+    torch.cuda.synchronize()
+    for index, fork in enumerate(forks):
+        row = manager.seq_id_to_row[fork.seq_id]
+        assert manager.row_logical_lens[row] == 98 and manager.row_seq_lens[row] == 71
+        for layer in range(2):
+            actual = [torch.empty(71, 2, 64, device="cuda", dtype=torch.float32) for _ in range(2)]
+            materialize_sequence(storage.layer_payload(layer), manager.buffer_req_to_token_slots, row, 71, *actual)
+            for kind, restored in enumerate(actual):
+                encoded = saved[layer][kind].view(torch.float8_e4m3fn).float() * saved[layer][kind + 2][..., None]
+                torch.testing.assert_close(restored[:37], encoded, atol=0, rtol=0)
+                source = torch.cat((kv[kind, layer, index * 3:index * 3 + 3], write[index:index + 1].expand(31, -1, -1)))
+                scale = source[:27].float().abs().amax(-1, keepdim=True).clamp_min(1e-12) / 448
+                assert torch.all((restored[37:64] - source[:27]).abs() <= scale * 16 + 1e-6)
+                torch.testing.assert_close(restored[64:], source[27:].float(), atol=0, rtol=0)
+        q = torch.randn(1, 4, 64, generator=generator, device="cuda", dtype=torch.float16)
+        for heads, decode in ((4, fp8_grouped_decode), (2, quantized_decode)):
+            query = q[:, :heads]
+            mid = torch.empty(1, heads, 2, 64, device="cuda")
+            lse = torch.empty(1, heads, 2, device="cuda")
+            output = torch.empty_like(query)
+            decode(query, storage.layer_payload(1), manager.buffer_req_to_token_slots,
+                   torch.tensor([row], dtype=torch.int32, device="cuda"),
+                   torch.tensor([71], dtype=torch.int32, device="cuda"), mid, lse,
+                   softmax_scale=1 / 8, output=output,
+                   output_lse=torch.empty(heads, 1, device="cuda"))
+            keys, values = [tensor.repeat_interleave(heads // 2, dim=1) for tensor in actual]
+            scores = torch.einsum("hd,thd->ht", query[0].float(), keys) / 8
+            oracle = torch.einsum("ht,thd->hd", scores.softmax(-1), values)
+            torch.testing.assert_close(output[0].float(), oracle, atol=0.02, rtol=0.02)
+    for fork in forks:
+        manager.free_seq(fork.seq_id)
+    # Reuse a row after a non-aligned prefix. Its fresh short history is raw.
+    fresh = Sequence([101, 102, 103])
+    fresh.current_chunk_size = 3
+    manager._prepare_prefill([fresh])
+    manager.store_attention_payload(0, ExplicitKVWrite(kv[0, 0, :3], kv[1, 0, :3]))
+    restored = [torch.empty(3, 2, 64, device="cuda", dtype=torch.float32) for _ in range(2)]
+    materialize_sequence(storage.layer_payload(0), manager.buffer_req_to_token_slots,
+                         manager.seq_id_to_row[fresh.seq_id], 3, *restored)
+    for kind in range(2):
+        torch.testing.assert_close(restored[kind], kv[kind, 0, :3].float(), atol=0, rtol=0)
+    manager.free_seq(fresh.seq_id)
+    if offload:
+        manager.prefix_offload_controller.synchronize_all()
+    manager._evict_prefix_cache_until_free(initial)
+    assert manager.num_free_slots == initial
+    manager.reset_after_warmup()
+    assert manager.num_free_slots == initial and not manager.seq_id_to_row
+    assert manager.free_slots_stack[:initial].unique().numel() == initial
+
+
 @pytest.mark.parametrize("method", ["kivi", "turboquant", "fp8_kv"])
 def test_manager_chunk_append_and_free_preserve_history(tmp_path, kernel_device, method):
     """Exercise real config/factory and raw-tail transitions across chunk boundaries."""
@@ -351,11 +508,12 @@ def test_manager_chunk_append_and_free_preserve_history(tmp_path, kernel_device,
             slot_mapping=torch.empty(batch, dtype=torch.int32, device=kernel_device),
             context_lens=torch.empty(batch, dtype=torch.int32, device=kernel_device),
             req_indices=torch.empty(batch, dtype=torch.int32, device=kernel_device),
+            publish_slots_outside_graph=True,
         )
         new = torch.randn(batch, 2, 64, dtype=torch.float16, device=kernel_device)
         manager.store_attention_payload(0, ExplicitKVWrite(new, new))
     expected_pages = math.ceil((67 + 31) / 32)
-    assert initial_free - manager.num_free_slots == expected_pages * 32
+    assert initial_free - manager.num_free_slots == (98 if method == "fp8_kv" else expected_pages * 32)
     manager.free_seq(seq.seq_id)
     assert manager.num_free_slots == initial_free
     assert not manager.seq_id_to_row

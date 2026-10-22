@@ -587,6 +587,10 @@ class CacheManager(ABC):
 
             return create_manager(PaluCacheManager)
         if sparse_method in QUANTIZED_KV_METHODS:
+            if sparse_method == "fp8_kv":
+                from .fp8 import FP8CacheManager
+
+                return create_manager(FP8CacheManager)
             from .quantized import QuantizedCacheManager
 
             return create_manager(QuantizedCacheManager)

@@ -27,7 +27,7 @@ import triton.language as tl
 
 @triton.jit
 def _fp8_grouped_stage1(
-    Q, KD, VD, KS, VS, RK, RV, Slots, Rows, Lengths, MO, ML,
+    Q, KD, VD, KS, VS, RK, RV, EncodedPrefix, Slots, Rows, Lengths, MO, ML,
     Q0: tl.constexpr, Q1: tl.constexpr, SLOT_STRIDE: tl.constexpr,
     H: tl.constexpr, QH: tl.constexpr, D: tl.constexpr, G: tl.constexpr,
     SPLITS: tl.constexpr, SCALE: tl.constexpr,
@@ -42,6 +42,9 @@ def _fp8_grouped_stage1(
     mask_h = qheads < (head + 1) * ratio
     d = tl.arange(0, D)
     row, length = tl.load(Rows + batch), tl.load(Lengths + batch)
+    packed_end = (length // G) * G
+    if EncodedPrefix is not None:
+        packed_end = tl.maximum(packed_end, tl.load(EncodedPrefix + row))
     # Bound split workspace by the prepared grid; long contexts loop over
     # token tiles rather than allocating one partial output per 128 tokens.
     splits = tl.maximum(1, tl.minimum(tl.cdiv(length, 128), SPLITS))
@@ -61,7 +64,7 @@ def _fp8_grouped_stage1(
     for offset in tl.range(start, end, N):
         positions = offset + tl.arange(0, N)
         valid = positions < end
-        packed = valid & (positions < (length // G) * G)
+        packed = valid & (positions < packed_end)
         tail = valid & ~packed
         slot = tl.load(Slots + row * SLOT_STRIDE + positions, valid, 0)
         packed_k = tl.load(KD + (slot[None, :] * H + head) * D + d[:, None],
@@ -110,7 +113,7 @@ def fp8_grouped_decode(q, payload, slots, rows, lengths, mid_o, mid_lse, *,
     # One pipeline stage keeps D256 within SM120's shared-memory limit.
     _fp8_grouped_stage1[(batch, h * triton.cdiv(heads // h, 16), splits)](
         q, payload.k_cache, payload.v_cache, payload.key_scale, payload.value_scale,
-        payload.raw_key, payload.raw_value, slots, rows, lengths, mid_o, mid_lse,
+        payload.raw_key, payload.raw_value, payload.encoded_prefix_lens, slots, rows, lengths, mid_o, mid_lse,
         Q0=q.stride(0), Q1=q.stride(1), SLOT_STRIDE=slots.stride(0),
         H=h, QH=heads, D=d, G=payload.page_size, SPLITS=splits, SCALE=softmax_scale,
         BH=16, N=64, num_warps=4, num_stages=1,

@@ -64,7 +64,7 @@ def normalize_prefix_cache(config) -> None:
             raise ValueError(
                 "enable_prefix_cache_offload requires enable_prefix_caching=True."
             )
-        if cache_method not in ("", "omnikv", "quest") and config.resolved_prefix_cache_mode != "chain":
+        if cache_method not in ("", "omnikv", "quest", "fp8_kv") and config.resolved_prefix_cache_mode != "chain":
             raise ValueError(
                 "prefix cache offload requires a supported radix or chain cache; "
                 f"got cache method={cache_method!r}."
@@ -108,7 +108,7 @@ def normalize_prefix_cache(config) -> None:
     if config.enable_prefix_caching and cache_method not in PREFIX_CACHE_SUPPORTED_METHODS:
         raise ValueError(
             "prefix caching only supports vanilla, streamingllm, omnikv, quest, "
-            "snapkv, adakv, h2o, pyramidkv, rkv, and skipkv."
+            "snapkv, adakv, h2o, pyramidkv, rkv, skipkv, and fp8_kv."
         )
     config.prefix_cache_salt = str(config.prefix_cache_salt or "")
 

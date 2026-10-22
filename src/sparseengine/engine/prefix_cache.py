@@ -84,6 +84,7 @@ def build_prefix_cache_fingerprint(config: Any, block_size: int) -> bytes:
         "obs_layer_ids": _jsonable(getattr(config, "obs_layer_ids", None)),
         "quest_chunk_size": _jsonable(getattr(config, "quest_chunk_size", None)),
         "quest_skip_layers": _jsonable(getattr(config, "quest_skip_layers", None)),
+        "kv_quant_page_size": _jsonable(getattr(config, "kv_quant_page_size", None)),
     }
     payload.update(
         {

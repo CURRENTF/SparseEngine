@@ -1,7 +1,8 @@
 # Quantized KV cache contract
 
-The `kivi`, `turboquant`, and `fp8_kv` methods retain every token. They share
-page allocation and expose compressed storage to a prepared decode provider.
+The `kivi`, `turboquant`, and `fp8_kv` methods retain every token during ordinary
+generation. KIVI/TurboQuant use whole-page allocation; FP8 uses the Standard
+token-slot allocator. Both expose compressed storage to a prepared decode provider.
 They do not use sparse attention scores, token selection, or a compressor
 checkpoint. Logical orchestration uses `PassThroughRuntime`.
 
@@ -9,13 +10,13 @@ checkpoint. Logical orchestration uses `PassThroughRuntime`.
 | --- | --- |
 | Identity | `kivi`, `turboquant`, `fp8_kv`; no external assets |
 | Representation | KIVI asymmetric min/max int2/int4; TurboQuant MSE random rotation and Gaussian Lloyd-Max codebook, int2/int3/int4; dynamically scaled E4M3 FP8 |
-| Persistent state | Cache-manager-owned pages, per-page or per-token scales, and one high-precision incomplete page per live row and layer |
+| Persistent state | Cache-manager-owned token slots or pages, per-token or per-page scales, and one high-precision incomplete interval per live row and layer |
 | Selection and scores | All logical tokens; no score output |
 | Model/layout | Homogeneous explicit KV, Llama/Qwen2/Qwen3, FP16/BF16 activations, head dimension 64/128/256 |
 | Prefill | Batched/chunked standard attention; materialize historical compressed KV into a bounded layer workspace and use original current-chunk KV |
-| Decode | Read packed full pages and the raw incomplete page directly; no full-history dense materialization |
-| Admission | Page-rounded costs, raw-tail pool, row metadata, and prefill workspaces included in allocation budget |
-| Lifecycle | Append and free; no prefix attach/fork, cache offload, or rollback API advertised |
+| Decode | Read encoded history and the raw incomplete interval directly; no full-history dense materialization |
+| Admission | Token-exact costs for FP8, page-rounded costs for KIVI/TurboQuant; raw tails, row metadata and bounded prefill workspaces included |
+| Lifecycle | Append/free; FP8 additionally supports radix attach/fork, arbitrary-token prefix pruning, eviction, delete, reset, and CPU offload/restore; no speculative rollback API |
 | Graph/topology | Shared eager/decode-CUDA-Graph updates; model-validated TP and Qwen3-MoE EP/outer-TP; no quantization collectives; internal DP remains model-rejected |
 | Validation | Independent numerical codec/attention oracles, allocation failure atomicity and reclamation, configuration/provider rejection, actual GPU generation when an idle device is available |
 
@@ -58,6 +59,48 @@ and softmax weights to the activation dtype; bitwise equality is not claimed.
 GPU numerical, graph-replay and matched serving performance validation are
 required before treating the grouped path as performance-ready.
 
+FP8 inherits `StandardCacheManager`'s token allocation/free, radix ownership,
+physical token pruning, logical/physical position mapping, eviction priorities,
+write-through offload and restore fences. Storage's page-shaped tensors are a
+physical layout only; they impose no allocation or pruning granularity.
+Pruning changes retained slot mappings and frees individual token slots. It
+preserves FP8 bytes and both per-token scales, without requantization. Chain
+mode remains unsupported.
+
+`fp8_store_tokens` encodes each new token independently into its allocated slot.
+New tokens in the final incomplete interval also remain in the existing
+activation-precision raw buffer, preserving cache-off attention precision.
+`encoded_prefix_lens` is one stable int32 vector per cache, shared by layers.
+Readers use the larger of this prefix length and the completed raw interval
+boundary to distinguish encoded history from the private raw tail. This lets
+an attached pruned prefix end at any physical token count without converting
+its retained FP8 data to raw values or requantizing it later. Allocation/free,
+pruning and row reuse update the vector outside graph capture.
+
+The existing grouped FP8 decode, scalar oracle and history materializer consume
+this boundary. The standard upstream FP8 attention writers use different scale
+and raw-tail contracts and cannot directly write this payload. The local
+per-token writer fills that storage gap; it adds no selection algorithm or
+provider reselection. Per layer, encoded storage uses `2*H*D + 8*H` bytes per
+slot. The boundary vector costs `4*rows` bytes. Writes are O(tokens*H*D), and
+decode remains O(context*H*D) per KV-head group; raw-tail storage stays bounded
+by `2*layers*rows*G*H*D` activation elements. All allocations participate in
+the existing startup budget. No device page IDs are read back during attach
+or reclamation.
+
+`ComponentPrefixOffloadController` reuses the indexed transfer kernel for FP8
+bytes and both FP32 scales. Retained offsets select the same tokens from host
+backing after pruning. Recomputed continuations can duplicate host-only blocks
+beyond the prompt hit: these index-owned blocks are promoted before a new GPU
+child is published, while the request keeps its private recomputation.
+Prompt admission, partial-prefill reservations and chunk selection include
+continuation promotion slots. Device-reclaimable duplicate continuations also
+reserve restore headroom because allocation can demote them during the step.
+Decode-window reservations bound extra slots for possible completed prefix
+blocks because future sampled tokens are unknown. This preserves the tree's
+device-resident root path. Each layer waits for prefix restore before the FP8
+store path materializes historical KV into the prefill workspace.
+
 The custom mixed packed-page/raw-tail payload requires a repository provider.
 Standard prefill remains upstream-first. There is no runtime provider
 reselection or silent dense fallback.
@@ -81,11 +124,12 @@ must not silently route compressed requests to dense attention.
 
 ## Decode graph contract
 
-CPU admission reserves pages and publishes row/length/write-slot metadata
-outside capture. The batched GPU writer uses that metadata to append a raw
-token or encode a newly completed page. Negative write slots suppress padded
+CPU admission reserves FP8 token slots or integer-codec pages and publishes
+row/length/write-slot metadata outside capture. The batched GPU writer uses
+that metadata to encode individual FP8 tokens or complete integer-codec pages,
+and updates the raw tail. Negative write slots suppress padded
 writes even when padded read rows alias a live request. Prefill and decode
-share the page codec, including rounding and scale axes; TurboQuant rotation
+share the codec, including rounding and scale axes; TurboQuant rotation
 is unchanged. Prefill still executes eagerly.
 
 Decode attention prepares a capacity-bounded workspace once. Graph launches
@@ -93,10 +137,10 @@ use a fixed split grid for the prepared context capacity; device lengths mask
 unused tokens. Context length does not add graph keys, recapture triggers,
 provider choices, or new workspace shapes. Eager mode can use fewer splits
 with the same kernel. Cache storage and provider workspaces remain alive with
-their owners; request release reclaims pages without replacing captured tensors.
+their owners; request release reclaims slots without replacing captured tensors.
 
-The append work is O(batch * KV_heads * head_dim) for raw tails and
-O(completed_pages * page_size * KV_heads * head_dim) for page encoding, with
+The append work is O(batch * KV_heads * head_dim) for FP8 and raw tails, and
+O(completed_pages * page_size * KV_heads * head_dim) for integer-page encoding, with
 no full-history copy. Decode remains O(batch * context * query_heads * head_dim);
 its FP32 split workspace is bounded by configured capacity (and capped at 32
 splits for grouped FP8). TurboQuant retains

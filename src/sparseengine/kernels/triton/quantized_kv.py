@@ -125,13 +125,16 @@ def _encode_vectors(k, v, page, head, t, KD, VD, KS, KM, VS, VM, C,
 
 
 @triton.jit
-def _load_vectors(KD, VD, KS, KM, VS, VM, RK, RV, C, Slots,
+def _load_vectors(KD, VD, KS, KM, VS, VM, RK, RV, C, EncodedPrefix, Slots,
                   row, positions, length, slot_stride: tl.constexpr,
                   head, H: tl.constexpr, D: tl.constexpr, G: tl.constexpr,
                   W: tl.constexpr, BITS: tl.constexpr, MODE: tl.constexpr):
     d = tl.arange(0, D)
     valid = positions < length
-    packed = valid & (positions < (length // G) * G)
+    packed_end = (length // G) * G
+    if EncodedPrefix is not None:
+        packed_end = tl.maximum(packed_end, tl.load(EncodedPrefix + row))
+    packed = valid & (positions < packed_end)
     slot = tl.load(Slots + row * slot_stride + positions, valid, 0)
     if MODE == 2:
         off = (slot[:, None] * H + head) * D + d[None, :]
@@ -161,7 +164,7 @@ def _load_vectors(KD, VD, KS, KM, VS, VM, RK, RV, C, Slots,
 
 
 @triton.jit
-def _decode(Q, KD, VD, KS, KM, VS, VM, RK, RV, C, Slots, Rows, Lengths, MO, ML,
+def _decode(Q, KD, VD, KS, KM, VS, VM, RK, RV, C, EncodedPrefix, Slots, Rows, Lengths, MO, ML,
             SLOT_STRIDE: tl.constexpr, Q0: tl.constexpr, Q1: tl.constexpr,
             H: tl.constexpr, QH: tl.constexpr, D: tl.constexpr, G: tl.constexpr,
             W: tl.constexpr, BITS: tl.constexpr, MODE: tl.constexpr,
@@ -186,7 +189,7 @@ def _decode(Q, KD, VD, KS, KM, VS, VM, RK, RV, C, Slots, Rows, Lengths, MO, ML,
     numerator = tl.full((D,), 0.0, tl.float32)
     for offset in range(0, N, T):
         positions = split * N + offset + tl.arange(0, T)
-        k, v = _load_vectors(KD, VD, KS, KM, VS, VM, RK, RV, C, Slots,
+        k, v = _load_vectors(KD, VD, KS, KM, VS, VM, RK, RV, C, EncodedPrefix, Slots,
                              row, positions, length, SLOT_STRIDE, qhead // (QH // H),
                              H, D, G, W, BITS, MODE)
         score = tl.sum(k * q[None, :], 1) * SCALE
@@ -203,15 +206,15 @@ def _decode(Q, KD, VD, KS, KM, VS, VM, RK, RV, C, Slots, Rows, Lengths, MO, ML,
     tl.store(ML + base, tl.where(total > 0, tl.log(total) + maximum, -float("inf")))
 
 
-@triton.jit
-def _materialize(KD, VD, KS, KM, VS, VM, RK, RV, C, Slots, KO, VO,
+@triton.jit(do_not_specialize=["ROW", "LENGTH"])
+def _materialize(KD, VD, KS, KM, VS, VM, RK, RV, C, EncodedPrefix, Slots, KO, VO,
                  ROW, LENGTH, SLOT_STRIDE: tl.constexpr,
                  H: tl.constexpr, D: tl.constexpr, G: tl.constexpr,
                  W: tl.constexpr, BITS: tl.constexpr, MODE: tl.constexpr,
                  N: tl.constexpr):
     positions = tl.program_id(0) * N + tl.arange(0, N)
     head = tl.program_id(1)
-    k, v = _load_vectors(KD, VD, KS, KM, VS, VM, RK, RV, C, Slots,
+    k, v = _load_vectors(KD, VD, KS, KM, VS, VM, RK, RV, C, EncodedPrefix, Slots,
                          ROW, positions, LENGTH, SLOT_STRIDE, head, H, D, G, W, BITS, MODE)
     off = (positions[:, None] * H + head) * D + tl.arange(0, D)[None, :]
     tl.store(KO + off, k, positions[:, None] < LENGTH)
@@ -255,7 +258,7 @@ def materialize_sequence(payload, slots, row, length, key_out, value_out):
     if length == 0:
         return
     _materialize[(triton.cdiv(length, 32), payload.raw_key.shape[-2])](
-        *_args(payload), slots, key_out, value_out,
+        *_args(payload), payload.encoded_prefix_lens, slots, key_out, value_out,
         ROW=row, LENGTH=length, SLOT_STRIDE=slots.stride(0), **_constants(payload), N=32,
     )
 
@@ -272,7 +275,7 @@ def quantized_decode(q, payload, slots, rows, lengths, mid_o, mid_lse, *, softma
     batch, heads, dim = q.shape
     splits = mid_o.shape[2]
     _decode[(batch, heads, splits)](
-        q, *_args(payload), slots, rows, lengths, mid_o, mid_lse,
+        q, *_args(payload), payload.encoded_prefix_lens, slots, rows, lengths, mid_o, mid_lse,
         SLOT_STRIDE=slots.stride(0), Q0=q.stride(0), Q1=q.stride(1), QH=heads,
         **_constants(payload), SPLITS=splits, SCALE=softmax_scale, N=128, num_warps=4,
     )

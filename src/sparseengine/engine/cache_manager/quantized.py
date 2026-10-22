@@ -12,45 +12,66 @@ from .standard import StandardCacheManager
 from .storage.quantized_kv import QuantizedKVStorage, quantized_kv_reserved_bytes
 
 
+def allocate_quantized_storage(self):
+    config = self.config
+    self.page_size = int(config.kv_quant_page_size)
+    method = config.sparse_method
+    bits = config.kivi_bits if method == "kivi" else config.turboquant_bits if method == "turboquant" else 8
+    storage = QuantizedKVStorage(
+        format=method, bits=bits, page_size=self.page_size,
+        num_kv_heads=self.num_kv_heads, head_dim=self.head_dim,
+        dtype=self.hf_config.dtype, seed=config.turboquant_seed,
+    )
+    self.attention_cache_storage = storage
+    available, _ = self._get_available_slots_info()
+    h, d, g = self.num_kv_heads, self.head_dim, self.page_size
+    self.prefill_capacity = int(config.max_num_seqs_in_batch) * self.max_model_len
+    fixed = quantized_kv_reserved_bytes(config, num_layers=self.num_kv_layers, num_heads=h, head_dim=d)
+    page_bytes = self.num_kv_layers * storage.bytes_per_page_per_layer() + g * 4
+    num_pages = (available - fixed) // page_bytes
+    minimum_pages = 1 if getattr(config, "startup_cache_phase", "") == "profiling" else math.ceil(self.max_model_len / g)
+    if num_pages < minimum_pages:
+        raise RuntimeError(
+            "Insufficient memory for quantized KV pages and bounded prefill/tail workspaces: "
+            f"available={available}, reserved={fixed}, page_bytes={page_bytes}. "
+            "Reduce max_model_len or max_num_seqs_in_batch."
+        )
+    config.num_kvcache_slots = int(num_pages * g)
+    storage.allocate(num_layers=self.num_kv_layers, num_slots=config.num_kvcache_slots,
+                     num_rows=self.max_buffer_rows, device=self.device)
+    self.kv_cache = None
+    self.prefill_kv = torch.empty(2, self.prefill_capacity, h, d,
+                                  dtype=self.hf_config.dtype, device=self.device)
+    self.prefill_rotated = (torch.empty(2, self.prefill_capacity, h, d,
+                                        dtype=torch.float32, device=self.device)
+                            if method == "turboquant" else None)
+    self.prefill_slot_map = torch.arange(self.prefill_capacity, dtype=torch.int32, device=self.device).reshape(
+        int(config.max_num_seqs_in_batch), self.max_model_len)
+    self._write_plan = []
+    self._prefill_active = False
+    return int(num_pages)
+
+
+def materialize_prefill_history(self, layer, k, v):
+    for index, (row, start, end, offset, _) in enumerate(self._write_plan):
+        base = index * self.max_model_len
+        self.prefill_kv[0, base + start:base + end].copy_(k[offset:offset + end - start])
+        self.prefill_kv[1, base + start:base + end].copy_(v[offset:offset + end - start])
+        if start:
+            outputs = self.prefill_rotated if layer.rotation is not None else self.prefill_kv
+            # Read history before overwriting its incomplete raw page.
+            materialize_sequence(layer, self.buffer_req_to_token_slots, row, start,
+                                 outputs[0, base:base + start], outputs[1, base:base + start])
+            if layer.rotation is not None:
+                for kv in range(2):
+                    restored = outputs[kv, base:base + start] @ layer.rotation.T
+                    self.prefill_kv[kv, base:base + start].copy_(restored)
+
+
 class QuantizedCacheManager(StandardCacheManager):
     def allocate_kv_cache(self):
-        config = self.config
-        self.page_size = int(config.kv_quant_page_size)
-        method = config.sparse_method
-        bits = config.kivi_bits if method == "kivi" else config.turboquant_bits if method == "turboquant" else 8
-        storage = QuantizedKVStorage(
-            format=method, bits=bits, page_size=self.page_size,
-            num_kv_heads=self.num_kv_heads, head_dim=self.head_dim,
-            dtype=self.hf_config.dtype, seed=config.turboquant_seed,
-        )
-        self.attention_cache_storage = storage
-        available, _ = self._get_available_slots_info()
-        h, d, g = self.num_kv_heads, self.head_dim, self.page_size
-        self.prefill_capacity = int(config.max_num_seqs_in_batch) * self.max_model_len
-        fixed = quantized_kv_reserved_bytes(config, num_layers=self.num_kv_layers, num_heads=h, head_dim=d)
-        page_bytes = self.num_kv_layers * storage.bytes_per_page_per_layer() + g * 4
-        num_pages = (available - fixed) // page_bytes
-        minimum_pages = 1 if getattr(config, "startup_cache_phase", "") == "profiling" else math.ceil(self.max_model_len / g)
-        if num_pages < minimum_pages:
-            raise RuntimeError(
-                "Insufficient memory for quantized KV pages and bounded prefill/tail workspaces: "
-                f"available={available}, reserved={fixed}, page_bytes={page_bytes}. "
-                "Reduce max_model_len or max_num_seqs_in_batch."
-            )
-        config.num_kvcache_slots = int(num_pages * g)
-        self.page_pool = QuantizedPagePool(int(num_pages), g, self.max_model_len)
-        storage.allocate(num_layers=self.num_kv_layers, num_slots=config.num_kvcache_slots,
-                         num_rows=self.max_buffer_rows, device=self.device)
-        self.kv_cache = None
-        self.prefill_kv = torch.empty(2, self.prefill_capacity, h, d,
-                                      dtype=self.hf_config.dtype, device=self.device)
-        self.prefill_rotated = (torch.empty(2, self.prefill_capacity, h, d,
-                                            dtype=torch.float32, device=self.device)
-                                if method == "turboquant" else None)
-        self.prefill_slot_map = torch.arange(self.prefill_capacity, dtype=torch.int32, device=self.device).reshape(
-            int(config.max_num_seqs_in_batch), self.max_model_len)
-        self._write_plan = []
-        self._prefill_active = False
+        pages = allocate_quantized_storage(self)
+        self.page_pool = QuantizedPagePool(pages, self.page_size, self.max_model_len)
 
     @property
     def num_free_slots(self):
@@ -145,19 +166,7 @@ class QuantizedCacheManager(StandardCacheManager):
             return state.slot_mapping
         k, v = k[:expected[0]], v[:expected[0]]
         # Standard prefill consumes exact current K/V, including pages just encoded.
-        for index, (row, start, end, offset, _) in enumerate(self._write_plan):
-            base = index * self.max_model_len
-            self.prefill_kv[0, base + start:base + end].copy_(k[offset:offset + end - start])
-            self.prefill_kv[1, base + start:base + end].copy_(v[offset:offset + end - start])
-            if start:
-                outputs = self.prefill_rotated if layer.rotation is not None else self.prefill_kv
-                # Read history before overwriting its incomplete raw page.
-                materialize_sequence(layer, self.buffer_req_to_token_slots, row, start,
-                                     outputs[0, base:base + start], outputs[1, base:base + start])
-                if layer.rotation is not None:
-                    for kv in range(2):
-                        restored = outputs[kv, base:base + start] @ layer.rotation.T
-                        self.prefill_kv[kv, base:base + start].copy_(restored)
+        materialize_prefill_history(self, layer, k, v)
         if layer.rotation is not None:
             k = (k.float() @ layer.rotation).to(self.hf_config.dtype)
             v = (v.float() @ layer.rotation).to(self.hf_config.dtype)

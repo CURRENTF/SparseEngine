@@ -16,17 +16,22 @@ from sparseengine.kernels.triton.indexed_host_copy import (
     _transfer,
 )
 
+_TRANSFER_DTYPES = {
+    torch.float16: tl.float16, torch.bfloat16: tl.bfloat16,
+    torch.uint8: tl.uint8, torch.float32: tl.float32,
+}
+
 
 def make_pointer_table(tensors, *, device) -> torch.Tensor:
-    """Bind contiguous FP16/BF16 components for GPU-indexed host transfers.
+    """Bind contiguous components for GPU-indexed host transfers.
 
     Call during storage preparation, outside graph capture. The storage owner
     must retain every tensor while a transfer or captured graph can use the
     table. Component widths may differ (for example MLA latent and RoPE).
     """
     tensors = tuple(tensors)
-    if not tensors or tensors[0].dtype not in (torch.float16, torch.bfloat16):
-        raise ValueError("Indexed host transfers require FP16/BF16 components.")
+    if not tensors or tensors[0].dtype not in _TRANSFER_DTYPES:
+        raise ValueError("Indexed host transfers require FP16/BF16/uint8/FP32 components.")
     device = torch.device(device)
     if device.type != "cuda":
         raise ValueError("Indexed host pointer tables require a CUDA device.")
@@ -218,7 +223,7 @@ def transfer_rows(
             slot_map,
             width,
             component,
-            tl.bfloat16 if dtype == torch.bfloat16 else tl.float16,
+            _TRANSFER_DTYPES[dtype],
             256,
         )
 
@@ -242,7 +247,7 @@ def transfer_components(
             None,
             width,
             None,
-            tl.bfloat16 if dtype == torch.bfloat16 else tl.float16,
+            _TRANSFER_DTYPES[dtype],
             256,
         )
 

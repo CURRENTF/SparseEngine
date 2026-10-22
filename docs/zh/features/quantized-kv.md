@@ -1,6 +1,7 @@
 # KV cache 量化压缩
 
-`kivi`、`turboquant`、`fp8_kv` 保留所有 token，只压缩 KV 表示，不量化模型权重。
+`kivi`、`turboquant`、`fp8_kv` 默认保留所有 token，只压缩 KV 表示，不量化模型权重。
+FP8 也支持显式的 prefix pruning。
 
 独立 `kivi` 和 `turboquant` 方法目前均存在已知的 decode 效率问题：功能和
 CUDA Graph 验证通过，不代表延迟已达到可用水平。请将两者视为实验性实现；
@@ -34,10 +35,19 @@ llm = LLM(
 独立推理副本各自维护 KV cache。本 KV 量化路径支持的模型要求
 `data_parallel_size=1`；GLM DP attention 使用单独的 MLA latent cache。
 FP8 需要 GPU 原生 FP8 支持。页大小必须是 16～128 的 2 的幂，
-且能整除 head dimension。支持 decode CUDA Graph；prefix cache/offload 和 sparse prefill
-组合会明确报错。[Palu](palu.md) 使用独立的低秩缓存路径。
+且能整除 head dimension。支持 decode CUDA Graph。FP8 KV 支持 radix prefix cache，
+以及 TP=1/2 下的 CPU prefix offload。设置 `enable_prefix_caching=True`，
+`prefix_cache_mode="auto"` 会选择 radix；prefix block 使用通用配置，
+不要求与 `kv_quant_page_size` 对齐。Offload 还需设置 `enable_prefix_cache_offload=True`
+及足够的 `prefix_cache_host_size_gb`，满足现有 write-through 容量要求。
+FP8 按 token slot 分配和回收，支持通用 API 的物理 prefix token pruning，
+以及裁剪后的 offload/restore。保留的 FP8 数据和对应 scale 不重新量化。FP8 不支持 chain 模式。
+KIVI/TurboQuant 仍拒绝 prefix cache/offload；三种方法与 sparse prefill 的组合
+均会明确报错。[Palu](palu.md) 使用独立的低秩缓存路径。
 
-整页量化，未满的一页保留模型精度；prefill 在有界工作区内恢复历史 KV，decode
+KIVI/TurboQuant 整页量化，未满页保留模型精度。FP8 逐 token 编码，
+新追加 token 的最后一个未满区间仍按模型精度读取；命中 prefix 的 token 保持
+FP8 编码，允许裁剪后的任意长度。Prefill 在有界工作区内恢复历史 KV，decode
 直接读取压缩页。若启动提示工作区内存不足，可减小 prefill batch 或最大上下文长度。
 
 这些是服务引擎适配版，不宣称与官方完全一致：KIVI 只保留未满页，不额外配置独立

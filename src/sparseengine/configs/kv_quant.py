@@ -29,7 +29,7 @@ def validate_quantized_kv(config) -> None:
         raise ValueError("Quantized KV methods require FP16 or BF16 model activations.")
     # ModelSpec validates topology and head/expert divisibility. Quantization
     # operates on each rank's local heads and adds no collective operations.
-    if config.enable_prefix_caching or config.enable_prefix_cache_offload:
+    if config.sparse_method != "fp8_kv" and (config.enable_prefix_caching or config.enable_prefix_cache_offload):
         raise ValueError("Quantized KV methods do not yet support prefix caching/offload.")
     if config.prefill_sparse_method:
         raise ValueError("Quantized KV methods currently require dense prefill attention.")
