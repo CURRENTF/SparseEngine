@@ -135,3 +135,26 @@ def test_model_key_transform_reconstruction_and_graph():
         positions[:4].add_(3)
         graph.replay()
         check()
+
+
+def test_model_key_norm_preserves_heads_with_a_2d_provider():
+    """P1: resumed/reconstructed KV must obey the model norm provider's 2D ABI.
+
+    The GPU reconstruction test checks numerics and replay; this CPU boundary
+    test catches the provider shape error without depending on an idle GPU.
+    """
+    class HeadNorm(torch.nn.Module):
+        def forward(self, values):
+            assert values.ndim == 2, "model norm provider requires 2D input"
+            return values / values.square().mean(-1, keepdim=True).sqrt()
+
+    manager = object.__new__(DeltaKVCacheManager)
+    manager._model_key_transform = True
+    manager._sparse_key_norms = [HeadNorm()]
+    key = torch.arange(1, 49, dtype=torch.float32).reshape(3, 2, 8)
+    original = key.clone()
+    actual = manager._apply_sparse_k_norm_if_needed(0, key)
+    assert actual.shape == key.shape
+    torch.testing.assert_close(actual.square().mean(-1), torch.ones(3, 2))
+    torch.testing.assert_close(actual / key, (actual / key)[..., :1].expand_as(key))
+    torch.testing.assert_close(key, original, rtol=0, atol=0)

@@ -1197,7 +1197,8 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
     def _apply_sparse_k_norm_if_needed(self, l_idx: int, key: torch.Tensor) -> torch.Tensor:
         if getattr(self, "_model_key_transform", False):
             norm = self._sparse_key_norms[l_idx]
-            return norm(key) if norm is not None else key
+            # Model norm providers accept [tokens * heads, head_dim].
+            return norm(key.reshape(-1, key.shape[-1])).reshape_as(key) if norm is not None else key
         return super()._apply_sparse_k_norm_if_needed(l_idx, key)
 
     def _apply_sparse_key_rope(self, l_idx: int, positions: torch.Tensor, key: torch.Tensor) -> torch.Tensor:
