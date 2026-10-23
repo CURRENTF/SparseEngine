@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+from .deltakv_chain import DeltaKVChainMixin
 from .deltakv_less_memory_cuda_graph import DeltaKVLessMemoryCudaGraphCacheManager
 
 
-class DeltaKVCacheManager(DeltaKVLessMemoryCudaGraphCacheManager):
-    """Slim public DeltaKV runtime.
+class DeltaKVCacheManager(DeltaKVChainMixin, DeltaKVLessMemoryCudaGraphCacheManager):
+    """Public DeltaKV runtime, also available as residualkv.
 
-    Supported storage paths:
-    1. raw BF16/FP16 full layers + BF16/FP16 compressor latent residual sparse layers;
-    2. KIVI int4 full layers + int4 compressor latent residual sparse layers.
+    Sparse residuals may use trained compressors or retain the full KV dimension.
+    Raw full layers accept floating-point or int4 residuals; KIVI int4 full layers
+    require int4 residuals.
 
     CUDA Graph support is inherited from the same static decode path.  The graph
     runner owns batch/context bucketing, so this manager does not need separate

@@ -8,19 +8,53 @@ only the native SparseEngine inference path and native benchmark integration.
 Set `sparse_method` to one of:
 
 - `"deltakv"`
+- `"residualkv"` is an alias of `"deltakv"` with identical defaults.
 - Legacy aliases such as `"deltakv-less-memory"` and
   `"deltakv-less-memory-cudagraph"` still normalize to `"deltakv"` for older
   configs.
 
-For DeltaKV inference, also pass
+With the default `use_compression=true`, also pass
 `deltakv_checkpoint_path="/path/to/local/trained_compressor_dir_or_file"`.
-The current SparseEngine DeltaKV runtime is compressor-backed; missing
-checkpoints are for construction-only tests, not reportable benchmark runs.
+Compressor mode requires trained weights for inference.
+
+To quantize residuals without a learned compressor, use:
+
+```json
+{
+  "sparse_method": "residualkv",
+  "use_compression": false,
+  "deltakv_latent_quant_bits": 4,
+  "deltakv_latent_quant_group_size": 32,
+  "deltakv_checkpoint_path": null
+}
+```
+
+This retains center selection and quantizes the full-dimensional residual
+`KV - mean(reference KV)` before K normalization and RoPE. Reconstruction adds
+the dequantized residual to the reference mean; no compressor is created or
+loaded. `deltakv_latent_dim` is unused in this mode. Passing a checkpoint is an
+error. The existing full-layer selection and retention budgets still apply.
+Setting residual bits to `0` retains floating-point residuals for diagnostics.
+The full-dimensional payload generally uses more cache space than a quantized
+compressor latent; int2 residuals are unsupported.
+
+Compressor-free mode also supports the TP=1 text path for Qwen3.5/3.6 MoE.
+`full_attention_layers` must select actual KV attention layers, not GDN layers.
+Multimodal position reconstruction is unsupported.
+
+DeltaKV supports exclusive chain caching with `enable_prefix_caching=true` and
+`prefix_cache_mode="chain"` (`auto` also selects chain). Reuse the returned
+`chain_id` for an append-only continuation. Raw centers, residuals, full-layer
+KV and model recurrent state remain owned by that chain. Both raw and KIVI full
+layers use the same chain lifecycle. Radix sharing and chain CPU offload are
+unsupported. A resumed turn reads reconstructed historical KV; lossy storage
+means it need not match recomputing the entire conversation from scratch.
 
 DeltaKV knobs you may need:
 
 - `deltakv_checkpoint_path`: local path to trained compressor weights.
-- `deltakv_latent_dim`: latent dimension of compressed KV.
+- `use_compression`: use trained compressors (`true`) or direct KV residuals (`false`).
+- `deltakv_latent_dim`: latent dimension when using a compressor.
 - `deltakv_center_ratio`, `cluster_metric`: reference selection and clustering behavior.
 - `deltakv_neighbor_count`: number of selected center/reference tokens used for reconstruction.
 - `deltakv_latent_quant_bits`: `4` packs DeltaKV-style cached state as int4 where supported.
@@ -29,11 +63,12 @@ DeltaKV knobs you may need:
 
 The SparseEngine DeltaKV runtime uses the cache-manager implementation under
 `src/sparseengine/engine/cache_manager/`. It keeps full layers according to
-`full_attention_layers`, stores compressor residual state for sparse layers, and
+`full_attention_layers`, stores residual state for sparse layers, and
 uses graph-stable metadata for decode.
 
-Supported storage paths are BF16/FP16 full layers plus BF16/FP16 compressor
-latent residuals, or KIVI int4 full layers plus int4 compressor residuals.
+Raw BF16/FP16 full layers support floating-point or int4 sparse residuals.
+KIVI int4 full layers require int4 sparse residuals. Both compressor and direct
+residual modes use these storage combinations.
 
 Quick throughput smoke:
 

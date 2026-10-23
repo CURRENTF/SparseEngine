@@ -21,7 +21,7 @@ SparseEngine 围绕 cache-manager-first sparse runtime 构建。engine 支持 ph
 | `omnikv` | Logical masking，可选 offload | 跨层共享 token 选择；可将稀疏层完整历史保存在 pinned CPU 内存，decode 精确取回当前选择的 KV。 | `full_attention_layers`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `enable_omnikv_offload` |
 | `quest` | Query-aware page selection | QuEST 根据持久化的 page min/max summary 选择 token page，prefill 保持 dense。显式 KV 模型在 key 坐标中评分；GLM-4.7-Flash 使用匹配的 absorbed decode query 对融合 MLA latent/RoPE cache 评分，同时 compute payload 继续保持 latent。 | `quest_chunk_size`, `quest_skip_layers`, `sink_keep_tokens`, `decode_keep_tokens`, `recent_keep_tokens` |
 | `retroinfer` | 按 query 检索簇 | 实验性的 GPU-only RetroInfer。Dense prefill 后按 KV head 聚类；decode 精确读取排名靠前的簇，并估计随后一部分簇的贡献。完整 KV 始终保存在 GPU。 | `retroinfer_retrieval_ratio`, `retroinfer_estimation_ratio`, `retroinfer_sink_tokens`, `retroinfer_recent_tokens` |
-| `deltakv` | Hybrid compression | 依赖 compressor 的精简 DeltaKV runtime。旧配置中的 `deltakv-less-memory*` 名称会规范到此方法，但实际 benchmark run 仍需要匹配的 compressor checkpoint。 | `deltakv_checkpoint_path`, `deltakv_latent_dim`, `deltakv_center_ratio`, `deltakv_neighbor_count`, `deltakv_latent_quant_bits`, `full_layer_kv_quant_bits` |
+| `deltakv`（`residualkv`） | Hybrid compression | 使用已训练 compressor 的残差，或通过 `use_compression=false` 存储完整维度 KV 残差。只有 compressor 模式需要匹配的 checkpoint；旧 `deltakv-less-memory*` 名称仍为别名。 | `use_compression`, `deltakv_checkpoint_path`, `deltakv_latent_dim`, `deltakv_center_ratio`, `deltakv_neighbor_count`, `deltakv_latent_quant_bits`, `full_layer_kv_quant_bits` |
 
 SparseEngine 在 public command、`LLM(...)`、runtime config 与内部消费者中统一使用 `sparse_method`。
 
@@ -202,7 +202,7 @@ Prefill scheduling 是方法 contract 的一部分，由 registry 管理。唯�
 | `all_chunked` | 每个 prefill request 都受 `engine_prefill_chunk_size` 和 scheduler 常规 batch 限制约束；忽略 `long_prefill_offload_threshold`。 | `vanilla`, `streamingllm`, `attention-sink`, `snapkv`, `h2o`, `quest`, `omnikv` |
 | `long_bs1full_short_batch` | 在附加受支持的 prefix 后，residual 不超过 `long_prefill_offload_threshold` 时使用 atomic full prefill，并且可以互相 batch；更大的 residual 被隔离，并使用不超过 `engine_prefill_chunk_size` 的 RawKV offload chunk。 | `pyramidkv` 和 DeltaKV family 方法 |
 
-DeltaKV family 方法和 PyramidKV 只对外提供 `long_bs1full_short_batch` policy。threshold 默认是 `65536` token（64K）。未设置 `engine_prefill_chunk_size` 时，它默认等于 threshold；显式值必须为正数且不大于 threshold。必要时，`Config` 会提高 `max_num_batched_tokens`，使一个 threshold 大小的 full prefill 能够原子容纳。PyramidKV 根据 chain prefix attach 后的 residual 进行分类。DeltaKV 不支持 prefix caching，并会在修改 compressed 或 quantized row metadata 前拒绝 attached-prefix prefill。
+DeltaKV family 方法和 PyramidKV 只对外提供 `long_bs1full_short_batch` policy。threshold 默认是 `65536` token（64K）。未设置 `engine_prefill_chunk_size` 时，它默认等于 threshold；显式值必须为正数且不大于 threshold。必要时，`Config` 会提高 `max_num_batched_tokens`，使一个 threshold 大小的 full prefill 能够原子容纳。PyramidKV 根据 chain prefix attach 后的 residual 进行分类。DeltaKV 的 chain 续轮采用分块追加，将保留的历史重建到已有 prefill staging buffer；调度器按完整可见上下文统计 staging 容量，新请求保持上述策略。
 
 启用 full-layer KIVI 时，DeltaKV 的 decode 常驻 raw 尾部池与 `max_model_len` 大小的 prefill staging buffer 是两块独立容量。多个 short prefill 通过互不重叠的 request range 共享 staging buffer；常驻 raw 尾部的 slot 数不是 prefill batch 上限。
 

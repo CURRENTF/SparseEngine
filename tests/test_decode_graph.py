@@ -426,9 +426,19 @@ def test_decode_graph_mha_matches_reference_and_replays_new_lengths(
     kv_heads,
     head_dim,
 ) -> None:
+    # P1: exercise the production launch plan; wrapper defaults previously hid
+    # a head_dim=256 shared-memory overflow during real model graph startup.
     torch.manual_seed(11)
     batch, capacity = 2, 257
     device = torch.device("cuda")
+    plan = build_graph_stable_decode_launch_plan(
+        DecodeAttentionOpSpec(
+            num_query_heads=heads, num_kv_heads=kv_heads, head_dim=head_dim,
+            activation_dtype=dtype, softmax_scale=head_dim ** -0.5,
+            max_batch_size=batch, context_capacity=capacity,
+        ),
+        _cuda_caps(),
+    )
     q = torch.randn(batch, heads, head_dim, dtype=dtype, device=device)
     k = torch.randn(
         batch * capacity, kv_heads, head_dim, dtype=dtype, device=device
@@ -440,9 +450,9 @@ def test_decode_graph_mha_matches_reference_and_replays_new_lengths(
     req_indices = torch.arange(batch, dtype=torch.int32, device=device)
     lengths = torch.tensor([129, 257], dtype=torch.int32, device=device)
     mid_o = torch.empty(
-        batch, heads, 8, head_dim, dtype=torch.float32, device=device
+        batch, heads, plan.max_kv_splits, head_dim, dtype=torch.float32, device=device
     )
-    mid_lse = torch.empty(batch, heads, 8, dtype=torch.float32, device=device)
+    mid_lse = torch.empty(batch, heads, plan.max_kv_splits, dtype=torch.float32, device=device)
     output_lse = torch.empty(heads, batch, dtype=torch.float32, device=device)
 
     def run():
@@ -455,7 +465,12 @@ def test_decode_graph_mha_matches_reference_and_replays_new_lengths(
             lengths,
             mid_o,
             mid_lse,
-            target_tokens_per_split=64,
+            target_tokens_per_split=plan.target_tokens_per_split,
+            block_n=plan.block_n,
+            num_warps=plan.stage1_num_warps,
+            num_stages=plan.stage1_num_stages,
+            stage2_num_warps=plan.stage2_num_warps,
+            stage2_num_stages=plan.stage2_num_stages,
             return_softmax_lse=True,
             output_lse=output_lse,
         )

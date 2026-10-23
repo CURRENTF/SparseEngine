@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 
 from sparseengine.distributed.topology import ParallelTopology
@@ -26,6 +26,7 @@ METHOD_ALIASES = {
     "r_kv": "rkv",
     "skip-kv": "skipkv",
     "skip_kv": "skipkv",
+    "residualkv": "deltakv",
     # DeltaKV now has one public runtime.  The old names stay as aliases so old
     # config files still load, but all code routes through sparse_method="deltakv".
     "deltakv-less-memory": "deltakv",
@@ -187,6 +188,7 @@ def prefill_sparse_method_fingerprint(config) -> dict[str, object]:
 
 PREFIX_CACHE_SUPPORTED_METHODS = {
     "fp8_kv",
+    "deltakv",
     "deepseek_v4",
     "",
     "streamingllm",
@@ -524,17 +526,10 @@ _DEFAULT_PREFILL_POLICY_BY_METHOD = {
 
 PREFILL_POLICY_BY_METHOD = {
     **_DEFAULT_PREFILL_POLICY_BY_METHOD,
-    "vanilla": PREFILL_POLICY_ALL_CHUNKED,
-    "attention-sink": PREFILL_POLICY_ALL_CHUNKED,
-    "attention_sink": PREFILL_POLICY_ALL_CHUNKED,
-    "r-kv": PREFILL_POLICY_ALL_CHUNKED,
-    "r_kv": PREFILL_POLICY_ALL_CHUNKED,
-    "skip-kv": PREFILL_POLICY_ALL_CHUNKED,
-    "skip_kv": PREFILL_POLICY_ALL_CHUNKED,
-    "deltakv-less-memory": PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
-    "deltakv_less_memory": PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
-    "deltakv-less-memory-cudagraph": PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
-    "deltakv_less_memory_cudagraph": PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
+    **{
+        alias: _DEFAULT_PREFILL_POLICY_BY_METHOD[method]
+        for alias, method in METHOD_ALIASES.items() if alias
+    },
 }
 
 
@@ -577,6 +572,7 @@ def validate_model_runtime_compatibility(
     decode_graph: bool,
     enable_prefix_caching: bool,
     decode_sparse_method: str | None = None,
+    use_compression: bool = True,
 ) -> ModelRuntimeCompatibility:
     model_type = str(model_type or "").strip().lower()
     method = normalize_sparse_method(sparse_method)
@@ -594,6 +590,13 @@ def validate_model_runtime_compatibility(
     compatibility = MODEL_RUNTIME_COMPATIBILITY.get(model_type)
     if model_type == "qwen3_moe" and topology.attn_tp_size > 1:
         compatibility = QWEN3_MOE_TP_EP_COMPATIBILITY
+    if model_type == "qwen3_5_moe" and not use_compression and topology.attn_tp_size == 1:
+        compatibility = replace(
+            compatibility,
+            sparse_methods=compatibility.sparse_methods | {"deltakv"},
+            prefix_cache_methods=compatibility.prefix_cache_methods | {"deltakv"},
+            decode_graph_methods=compatibility.decode_graph_methods | {"deltakv"},
+        )
     if compatibility is None:
         raise NotImplementedError(
             f"Unsupported SparseEngine model_type={model_type!r}."

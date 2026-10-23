@@ -283,7 +283,10 @@ def build_graph_stable_decode_launch_plan(
             "context-stable decode requires a static context_capacity."
         )
     if spec.head_dim == 256:
-        block_n, stage1_warps, stage2_warps = 128, 4, 8
+        # A 128-token grouped tile needs 140 KiB shared memory with two
+        # stages, exceeding the 99 KiB limit on SM120. Keep the portable
+        # plan within that limit; device tuning belongs to profile overlays.
+        block_n, stage1_warps, stage2_warps = 64, 4, 8
     elif spec.head_dim in {64, 128}:
         block_n, stage1_warps, stage2_warps = 64, 2, 4
     else:

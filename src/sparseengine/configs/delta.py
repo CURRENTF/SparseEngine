@@ -172,7 +172,12 @@ def validate_deltakv_runtime(config) -> None:
             level="WARNING",
         )
         checkpoint_model_types = config.model_spec.deltakv_checkpoint_model_types
-        if checkpoint_model_types and not _checkpoint_targets_model(
+        use_compression = bool(config.use_compression)
+        if config.model_spec.mixed_attention and config.enable_multimodal:
+            raise ValueError("DeltaKV mixed-attention reconstruction currently requires text-only positions.")
+        if not use_compression and config.deltakv_checkpoint_path is not None:
+            raise ValueError("use_compression=False requires deltakv_checkpoint_path=None.")
+        if use_compression and checkpoint_model_types and not _checkpoint_targets_model(
             config.deltakv_checkpoint_path,
             checkpoint_model_types,
         ):
@@ -180,18 +185,16 @@ def validate_deltakv_runtime(config) -> None:
                 f"DeltaKV for {config.model_spec.name} requires a compatible "
                 "deltakv_checkpoint_path. Use sparse_method='' to run vanilla inference."
             )
-        if not bool(getattr(config, "use_compression", True)):
-            raise ValueError("DeltaKV runtime is compressor-only; set use_compression=True.")
         if bool(getattr(config, "enable_sparse_ref_fp8", False)):
             raise ValueError("enable_sparse_ref_fp8 was removed from the slim DeltaKV runtime.")
-        if config.deltakv_checkpoint_path is None and not config.allow_missing_deltakv_path:
+        if use_compression and config.deltakv_checkpoint_path is None and not config.allow_missing_deltakv_path:
             raise ValueError(
                 "DeltaKV requires deltakv_checkpoint_path for compressor sparse layers. "
                 "Set allow_missing_deltakv_path=True only for construction-only tests."
             )
         if config.deltakv_latent_quant_bits not in (0, 4):
             raise ValueError(
-                "DeltaKV slim runtime supports sparse compressor residual bits 0 or 4 only, "
+                "DeltaKV runtime supports sparse residual bits 0 or 4 only, "
                 f"got deltakv_latent_quant_bits={config.deltakv_latent_quant_bits}."
             )
         if config.full_layer_kv_quant_bits not in (0, 4):

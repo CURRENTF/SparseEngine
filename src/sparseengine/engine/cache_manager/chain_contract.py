@@ -13,7 +13,8 @@ if TYPE_CHECKING:
     import torch
     from .chain_offload import ChainMethodState
 
-# Layer order is kv_transformer_layer_indices(), NOT range(num_layers).
+# Default axis is kv_transformer_layer_indices(), NOT range(num_layers).
+# Multi-pool managers use chain_capacity_keys() for admission/reservation vectors.
 # Additional physical high-water mark, rows, current slot deficits, row deficit.
 ChainCapacity = tuple[tuple[int, ...], int, tuple[int, ...], int]
 
@@ -59,6 +60,18 @@ class ChainManager(Protocol):
 
         Does not choose a chain victim, mutate the chain index or publish IDLE.
         """
+        ...
+
+
+class ChainPoolManager(ChainManager, Protocol):
+    """Optional resource axis when token counts do not describe allocator pools."""
+
+    def chain_capacity_keys(self) -> tuple[str, ...]:
+        """Names shared with decode_window_budgets/costs, in stable vector order."""
+        ...
+
+    def chain_capacity_residency(self, seq_id: int) -> tuple[int, ...]:
+        """Actual reclaimable resource units; separate from physical KV lengths."""
         ...
 
 

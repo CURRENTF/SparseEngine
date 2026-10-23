@@ -2,6 +2,8 @@
 from collections import deque
 from types import SimpleNamespace
 
+import pytest
+
 from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
 from sparseengine.engine.chain_cache import ChainCacheCoordinator
 from sparseengine.engine.llm_engine import LLMEngine
@@ -152,3 +154,173 @@ def test_final_inflight_decode_does_not_evict_idle_chain():
     assert coordinator.index.stats()["chain_cache_evicted"] == 0
     assert coordinator.index.lookup("idle").physical_slots_by_layer == (14, 14)
     assert manager.num_free_slots == 1
+
+
+def test_multi_pool_reclaim_uses_resource_units_not_layer_token_counts():
+    """P1: packed residual capacity must not be credited from raw KV tokens."""
+    from sparseengine.engine.chain_cache import ChainCacheIndex
+    index = ChainCacheIndex()
+    for name, sid, pools in (("raw", 1, (9, 0)), ("packed", 2, (0, 7))):
+        plan = index.plan_admission(chain_id=name, seq_id=sid, token_ids=[1], fingerprint=b"pools")
+        index.apply_admission(plan, fingerprint=b"pools")
+        index.finish(name, token_ids=[1], processed_token_count=1,
+                     physical_slots_by_layer=(100, 100), capacity_slots=pools)
+    plan = index.plan_admission(chain_id="next", seq_id=3, token_ids=[1], fingerprint=b"pools",
+                                required_slots_by_layer=(0, 6))
+    assert plan.victim_chain_ids == ("raw", "packed")
+    assert set(index.records) == {"raw", "packed"}, "Planning must remain read-only"
+
+
+@pytest.mark.parametrize("kivi", [False, True])
+def test_deltakv_partial_chain_reserves_raw_capacity_once(kivi):
+    """P1: double charging partial chain promises causes needless decode preemption.
+
+    Existing chain tests do not combine DeltaKV partial prefill and live decode
+    at the raw-pool limit. GPU payloads are irrelevant to this CPU-owned ledger.
+    """
+    from sparseengine.engine.cache_manager.decode_reservation import DecodeReservations
+    from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
+
+    manager = object.__new__(DeltaKVCacheManager)
+    manager.config = SimpleNamespace(
+        sink_keep_tokens=4, recent_keep_tokens=32, engine_prefill_chunk_size=4,
+        full_layer_kv_quant_bits=4 if kivi else 0, enable_full_layer_kivi_quant=kivi,
+        full_layer_kivi_group_size=32, full_layer_kivi_residual_length=32,
+    )
+    manager.head_dim = 128
+    manager._num_free_slots_full = 50
+    manager._num_free_slots_deltakv_full = 8
+    manager._num_free_slots_deltakv_latent = 50
+    manager._num_free_slots_full_layer_kivi = 50
+    manager._deltakv_centers_capacity = 100
+    manager._deltakv_centers_reserved_total = 0
+    manager._deltakv_latent_reserved_by_seq = {}
+    manager._full_layer_kivi_reserved_by_seq = {}
+    manager.seq_id_to_row = {1: 0, 2: 1}
+    manager.row_seq_lens = [20, 20]
+    manager.row_deltakv_compressed_lens = [0, 0]
+    manager.row_full_layer_kivi_quantized_lens = [4, 4]
+
+    decoding = []
+    for seq_id in (1, 2):
+        seq = Sequence([1] * 20, SamplingParams(max_tokens=10))
+        seq.seq_id, seq.num_prefilled_tokens = seq_id, 20
+        seq.append_token(2)
+        decoding.append(seq)
+    partial = Sequence([1] * 104, SamplingParams(max_tokens=10))
+    partial.seq_id, partial.num_prefilled_tokens = 3, 100
+    partial.chain_id, partial.chain_status = "partial", "resumed"
+    ordinary = Sequence([1] * 22, SamplingParams(max_tokens=10))
+    ordinary.seq_id, ordinary.num_prefilled_tokens = 4, 20
+    waiting = deque([partial, ordinary])
+
+    state = object.__new__(RuntimeState)
+    state.config, state.cache_manager = manager.config, manager
+    state.prefix_cache_coordinator = None
+    # Supply the existing logical promise; budget and decode acquisition remain
+    # real implementations. Neither request has allocated this future raw KV.
+    state.chain_cache_coordinator = SimpleNamespace(
+        _outstanding_active_reservations=lambda **kwargs: ((4, 4, 0, 0), 0),
+    )
+    state.decode_reservations = DecodeReservations(manager, 1)
+
+    # Four chain slots + two ordinary-prefill slots + two decode slots exactly
+    # fit. A false rejection here reaches the IDLE reclaimer/preemption path.
+    assert state.reserve_decode_windows(deque(decoding), waiting) is None
+    assert state.decode_reservations.outstanding()["deltakv_raw"] == 2
+
+    for seq in decoding:
+        state.decode_reservations.release(seq.seq_id)
+    manager._num_free_slots_deltakv_full -= 1
+    # The ordinary partial request must still be charged: 4 + 2 + 2 > 7.
+    assert state.reserve_decode_windows(deque(decoding), waiting) is decoding[1]
+
+
+@pytest.fixture(params=[False, True], ids=["raw", "kivi"])
+def deltakv_offload_manager(request):
+    import torch
+    from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
+    from test_prefill_schedule_policy import DeltaKVFullPrefillStagingTest
+
+    original = DeltaKVFullPrefillStagingTest()._make_raw_deltakv_prefill_manager()
+    manager = object.__new__(DeltaKVCacheManager)
+    manager.__dict__.update(original.__dict__)
+    manager.config.full_layer_kv_quant_bits = 4 if request.param else 0
+    manager.config.enable_full_layer_kivi_quant = request.param
+    manager.config.full_layer_kivi_group_size = 8
+    manager.config.full_layer_kivi_residual_length = 1
+    manager.config.max_model_len = 16
+    manager.config.max_num_seqs_in_gpu = 2
+    manager.config.hf_config = SimpleNamespace(dtype=torch.float32)
+    manager.num_layers = manager.num_kv_layers = 2
+    manager.head_dim = 8
+    manager.runtime_layout = SimpleNamespace(kv_idx_to_layer_idx=(0, 1))
+    manager.free_rows = deque([0, 1])
+    for name in ("full_layer_slots_map", "sparse_layer_raw_slots_map", "sparse_layer_latent_slots_map"):
+        setattr(manager, name, getattr(manager, name).repeat(2, 1))
+    for name in ("row_seq_lens", "row_deltakv_compressed_lens", "row_deltakv_compressed_lens_gpu"):
+        setattr(manager, name, getattr(manager, name).repeat(2))
+    manager.row_deltakv_center_slots = [[None, None], [None, None]]
+    for prefix in ("_deltakv_centers", "_full_layers", "_deltakv_latent", "_full_layer_kivi"):
+        setattr(manager, prefix + "_reserved_by_seq", {})
+        setattr(manager, prefix + "_reserved_total", 0)
+    manager._deltakv_centers_capacity = 16
+    manager._full_layer_kivi_full_prefill_plans = {}
+    manager._full_layer_kivi_full_prefill_materialized_layers = set()
+    manager.full_layer_slot_to_pos = torch.full((128,), -1, dtype=torch.int32)
+    manager.full_layer_kivi_block_slots_map = torch.full((2, 16), -1, dtype=torch.int32)
+    manager.full_layer_kivi_block_start_pos = torch.full((16,), -1, dtype=torch.int32)
+    manager.free_slots_stack_full_layer_kivi = torch.arange(16, dtype=torch.int32)
+    manager._num_free_slots_full_layer_kivi = 16 if request.param else 0
+    manager.row_full_layer_kivi_quantized_lens = manager.row_seq_lens.copy()
+    manager.row_full_layer_kivi_quantized_lens_gpu = torch.zeros(2, dtype=torch.int32)
+    return manager
+
+
+def test_deltakv_offload_cancel_returns_future_allocations(deltakv_offload_manager):
+    """P1: cancellation must return every planned slot, not only computed KV.
+
+    The model E2E cancellation prompts never cross the raw-offload threshold.
+    Reuse its real CPU allocator/planning hooks and verify exact pool ownership.
+    """
+    manager = deltakv_offload_manager
+    pools = ("full", "deltakv_full", "deltakv_latent", "full_layer_kivi")
+    def free_slots():
+        return {name: sorted(getattr(manager, "free_slots_stack_" + name)[
+            :getattr(manager, "_num_free_slots_" + name)].tolist()) for name in pools}
+    baseline = free_slots()
+    for _ in range(3):
+        seq = Sequence(list(range(12)))
+        seq.chain_id = "cancel-me"
+        seq.current_chunk_size = 2
+        manager.prepare_step([seq], is_prefill=True)
+        row = manager.seq_id_to_row[seq.seq_id]
+        assert int(manager.row_seq_lens[row]) < seq.num_prompt_tokens
+        manager.free_seq(seq.seq_id)
+        manager.free_seq(seq.seq_id)
+        assert free_slots() == baseline
+        assert not manager.seq_id_to_row
+        assert not manager._deltakv_full_prefill_plans
+        assert not manager._full_layer_kivi_full_prefill_plans
+        assert manager._deltakv_long_prefill_offload_row_idx is None
+
+
+def test_deltakv_offload_admission_counts_future_allocations(deltakv_offload_manager):
+    """P1: allocated suffix payloads must discharge promises before next admission."""
+    manager = deltakv_offload_manager
+    coordinator = ChainCacheCoordinator(manager.config, manager)
+    seq = Sequence(list(range(12)))
+    seq.chain_id = "long"
+    seq.current_chunk_size = 2
+    plan = coordinator.plan_admission(chain_id=seq.chain_id, seq_id=seq.seq_id, token_ids=seq.token_ids)
+    coordinator.apply_admission(plan)
+    before = manager.decode_window_budgets()
+    manager.prepare_step([seq], is_prefill=True)
+    after = manager.decode_window_budgets()
+    allocated = tuple(before.get(key, 0) - after.get(key, 0) for key in manager.chain_capacity_keys())
+    assert manager.chain_capacity_residency(seq.seq_id) == allocated
+    remaining, _ = coordinator._outstanding_active_reservations()
+    assert remaining == tuple(max(0, promised - used)
+                              for promised, used in zip(plan.reserved_slots_by_layer, allocated))
+    next_plan = coordinator.plan_admission(chain_id="one-token", seq_id=seq.seq_id + 1, token_ids=[1])
+    assert not next_plan.victim_chain_ids

@@ -8,26 +8,57 @@ inference path 和原生 benchmark 集成。
 将 `sparse_method` 设置为以下值之一：
 
 - `"deltakv"`
+- `"residualkv"` 是 `"deltakv"` 的别名，默认配置相同。
 - `"deltakv-less-memory"` 和 `"deltakv-less-memory-cudagraph"` 等 legacy alias
   仍会被规范为 `"deltakv"`，以兼容旧配置。
 
-进行 DeltaKV 推理时，还需传入
+默认 `use_compression=true` 时，还需传入
 `deltakv_checkpoint_path="/path/to/local/trained_compressor_dir_or_file"`。
-当前 SparseEngine DeltaKV runtime 依赖 compressor；缺少 checkpoint 的情况仅用于构造测试，不能用于可报告的 benchmark run。
+compressor 模式的推理必须使用已训练的权重。
+
+只量化残差、不使用学习式 compressor 时，配置为：
+
+```json
+{
+  "sparse_method": "residualkv",
+  "use_compression": false,
+  "deltakv_latent_quant_bits": 4,
+  "deltakv_latent_quant_group_size": 32,
+  "deltakv_checkpoint_path": null
+}
+```
+
+此模式保留中心选择，对 K normalization 和 RoPE 之前的完整维度残差
+`KV - mean(reference KV)` 量化。重建时将反量化残差加回参考均值，不创建或加载
+compressor。`deltakv_latent_dim` 在此模式下不生效，同时传入 checkpoint 会报错。
+原有 full layer 选择和 token 保留预算仍然适用。将残差位宽设为 `0` 可保留浮点残差，
+用于诊断。完整维度残差通常比量化后的 compressor latent 占用更多缓存；暂不支持 int2 残差。
+
+无 compressor 模式也支持 Qwen3.5/3.6 MoE 的 TP=1 纯文本路径；
+`full_attention_layers` 必须选择模型实际的 KV attention 层，不能选择 GDN 层。
+此路径不支持多模态位置重建。
+
+DeltaKV 支持独占 chain cache：设置 `enable_prefix_caching=true` 和
+`prefix_cache_mode="chain"`（`auto` 也会选择 chain），并使用返回的 `chain_id`
+续接会话。中心、残差、full-layer KV 和模型 recurrent state 随 chain 保留。
+Raw 和 KIVI full layer 共用这一生命周期。暂不支持 radix 共享和 chain CPU offload。
+续轮读取重建后的历史 KV；有损存储意味着输出不保证与完整历史重新 prefill 一致。
 
 可能需要使用的 DeltaKV 参数：
 
 - `deltakv_checkpoint_path`：已训练 compressor 权重的本地路径。
-- `deltakv_latent_dim`：压缩 KV 的 latent dimension。
+- `use_compression`：使用已训练 compressor（`true`）或直接存储 KV 残差（`false`）。
+- `deltakv_latent_dim`：使用 compressor 时的 latent dimension。
 - `deltakv_center_ratio`、`cluster_metric`：reference selection 和 clustering 行为。
 - `deltakv_neighbor_count`：重建时使用的 center/reference token 数量。
 - `deltakv_latent_quant_bits`：在支持的路径上，设为 `4` 会以 int4 打包 DeltaKV cache state。
 
 ## 精简 Runtime
 
-SparseEngine DeltaKV runtime 使用 `src/sparseengine/engine/cache_manager/` 下的 cache-manager 实现。它按照 `full_attention_layers` 保留 full layer，为 sparse layer 存储 compressor residual state，并在 decode 中使用 graph-stable metadata。
+SparseEngine DeltaKV runtime 使用 `src/sparseengine/engine/cache_manager/` 下的 cache-manager 实现。它按照 `full_attention_layers` 保留 full layer，为 sparse layer 存储残差，并在 decode 中使用 graph-stable metadata。
 
-支持两类存储路径：BF16/FP16 full layer 加 BF16/FP16 compressor latent residual，或者 KIVI int4 full layer 加 int4 compressor residual。
+BF16/FP16 full layer 可搭配浮点或 int4 sparse residual；KIVI int4 full layer 必须搭配
+int4 sparse residual。compressor 和直接残差模式均使用这些存储组合。
 
 快速吞吐量 smoke test：
 

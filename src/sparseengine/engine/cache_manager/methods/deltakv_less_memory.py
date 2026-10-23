@@ -16,7 +16,6 @@ from sparseengine.kernels.triton.quant import (
 from sparseengine.kernels.triton.deltakv_kernels import deltakv_materialize_sparse_view
 from sparseengine.layers.rotary_embedding import apply_rotary_emb
 from sparseengine.platforms import device_runtime
-from sparseengine.utils.compressor import create_compressor
 from sparseengine.utils.context import get_context
 from sparseengine.utils.log import logger
 from sparseengine.utils.profiler import profiler
@@ -31,17 +30,15 @@ from .deltakv_base import DeltaKVCacheTritonManagerV4
 
 
 class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
-    """DeltaKV compressor-latent runtime.
+    """DeltaKV residual storage runtime.
 
-    Sparse layers store compressor latent residuals, optionally packed as int4.
-    Full layers are either raw BF16/FP16 KV or KIVI int4. Legacy direct-residual,
-    sparse int2, and full-layer non-KIVI residual-quant paths are intentionally
-    not active in the slim runtime.
+    Sparse layers store compressor latent or full-dimensional KV residuals,
+    optionally packed as int4. Full layers are raw BF16/FP16 KV or KIVI int4.
     """
 
     @classmethod
     def profiling_kv_budget_bytes(cls, config, num_slots: int, slot_bytes_per_layer: int) -> int:
-        """Profile raw full-layer storage with its fixed reconstruction pools."""
+        """Include shared fixed workspaces for raw and KIVI full-layer storage."""
         layers = int(config.runtime_layout.num_kv_layers)
         full_layers = len(config.full_attention_layers)
         sparse_layers = layers - full_layers
@@ -89,9 +86,10 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
         """Build an attention-facing view from raw sparse-layer K slots.
 
         Persistent DeltaKV sparse-layer slots keep K in the pre-RoPE space for
-        compressor/reconstruction math. Decode attention needs post-RoPE K, so
-        materialize the current sparse view into scratch slots and free it after
-        the layer attention finishes.
+        compressor/reconstruction math. Non-staged prefill needs post-RoPE K,
+        so materialize its indexed view into temporary slots and free it after
+        attention. Normal full prefill uses staging; decode uses the separate
+        fixed materialized view in get_layer_compute_view().
         """
         if active_slots.numel() == 0:
             return active_slots, torch.empty((0,), device=active_slots.device, dtype=torch.int32)
@@ -134,12 +132,10 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                 raise RuntimeError(f"DeltaKV less-memory: active sparse view slot has unknown position, layer={layer_idx}.")
 
             out_slots = self._allocate_temp_deltakv_full(int(raw_idx.numel())).to(torch.int32)
-            cos_sin = self.cos_sin_cache[pos]
-            cos, sin = cos_sin.chunk(2, dim=-1)
             k_raw = k_cache[raw_slots]
-            k_raw_rope = apply_rotary_emb(k_raw, cos, sin)
+            k_raw_rope = self._apply_sparse_key_rope(l_idx, pos, k_raw)
             k_normed = self._apply_sparse_k_norm_if_needed(l_idx, k_raw)
-            k_postrope = apply_rotary_emb(k_normed, cos, sin)
+            k_postrope = self._apply_sparse_key_rope(l_idx, pos, k_normed)
             if debug_capture:
                 debug_raw.append(k_raw.detach().float().cpu())
                 debug_norm.append(k_normed.detach().float().cpu())
@@ -212,11 +208,9 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
             raise RuntimeError(f"DeltaKV less-memory static sparse raw slot has unknown position, layer={layer_idx}.")
         safe_pos = torch.where(raw_mask, raw_pos, torch.zeros_like(raw_pos))
 
-        cos_sin = self.cos_sin_cache[safe_pos]
-        cos, sin = cos_sin.chunk(2, dim=-1)
         k_raw = k_cache[safe_raw_slots]
         k_normed = self._apply_sparse_k_norm_if_needed(l_idx, k_raw)
-        k_postrope = apply_rotary_emb(k_normed, cos, sin)
+        k_postrope = self._apply_sparse_key_rope(l_idx, safe_pos, k_normed)
 
         out_i64 = out_slots.to(torch.long)
         prev_k = k_cache[out_i64]
@@ -277,10 +271,11 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
             self._full_layer_kivi_full_prefill_materialized_layers = set()
 
     def _should_use_full_prefill_staging(self, seqs: list[Sequence]) -> bool:
+        # Sparse-layer staging is independent of full-layer storage precision.
+        # Reusing it avoids allocating the whole prompt and a rotated copy in
+        # the persistent raw pool before compression.
         if super()._should_use_full_prefill_staging(seqs):
             return True
-        if not self._full_layer_kivi_enabled():
-            return False
         if getattr(self.config, "prefill_schedule_policy", None) != "long_bs1full_short_batch":
             return False
         if not self.deltakv_layer_ids or not seqs:
@@ -298,8 +293,6 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
         return True
 
     def should_schedule_full_prefill(self, seq: Sequence) -> bool:
-        if not self._full_layer_kivi_enabled():
-            return False
         if getattr(self.config, "prefill_schedule_policy", None) != "long_bs1full_short_batch":
             return False
         if not self.deltakv_layer_ids:
@@ -335,6 +328,15 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
         if self.should_schedule_full_prefill(seq):
             return 0
         return super().prefill_step_reservation_cost(seq, scheduled_tokens)
+
+    def step_allocation_budgets(self) -> dict[str, int]:
+        return {"deltakv_prefill_staging": int(self.deltakv_prefill_staging_num_slots)}
+
+    def step_allocation_costs(self, seq: Sequence, tokens: int) -> dict[str, int]:
+        # The scheduler charges this shared buffer across all requests in a
+        # batch. Per-request capacity checks alone can overbook it.
+        is_prefill = int(seq.num_prefilled_tokens) < int(seq.num_prompt_tokens)
+        return {"deltakv_prefill_staging": int(tokens) if is_prefill else 0}
 
     def prepare_step(self, seqs: list[Sequence], is_prefill: bool):
         self._deltakv_less_memory_prepare_seqs = seqs
@@ -383,8 +385,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
         return group_size
 
     def _sparse_payload_dim(self, kv_dim: int) -> int:
-        del kv_dim
-        return int(self.config.deltakv_latent_dim)
+        return int(self.config.deltakv_latent_dim) if self.config.use_compression else int(kv_dim)
 
     @staticmethod
     def _resident_sparse_raw_overhead_slots(max_seqs: int, sink: int, recent: int) -> int:
@@ -394,10 +395,9 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
 
     @staticmethod
     def _decode_reconstruct_scratch_slots(max_seqs: int, top_decode: int, sink: int, recent: int) -> int:
-        # Decode materializes the sparse attention view into post-RoPE temp slots:
-        # selected top tokens plus a materialized raw/post-RoPE sparse view.
-        # Use a conservative 2x top-k reserve until the materialized workspace
-        # is backed by a reusable fixed buffer rather than temp full-cache slots.
+        # Conservative raw-pool headroom for reconstructed selected tokens and
+        # stable scratch slots. Dense materialization already has its own fixed
+        # buffer; this reserve does not provide whole-prompt prefill staging.
         del sink, recent
         return int(max_seqs) * (2 * int(top_decode))
 
@@ -690,12 +690,6 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
         total_top_slots = self._decode_reconstruct_scratch_slots(max_seqs, top_decode, sink, recent)
         deltakv_persistent_overhead_slots = self._resident_sparse_raw_overhead_slots(max_admission_seqs, sink, recent)
         deltakv_overhead_slots = deltakv_persistent_overhead_slots + total_top_slots
-        if not full_kivi_enabled and getattr(config, "startup_cache_phase", None) == "profiling":
-            # Reuse the startup workload definition instead of passing a
-            # method-specific capacity field through ModelRunner/Config.
-            from sparseengine.engine.startup.capacity import profiling_kv_slots
-
-            deltakv_overhead_slots += profiling_kv_slots(config)
         full_overhead_slots = self._resident_full_layer_raw_overhead_slots(max_admission_seqs, sink, recent)
 
         capacity_memory = persistent_memory
@@ -1163,15 +1157,13 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
         )
 
     def _init_compressor_modules(self, config, num_deltakv_layers: int):
-        if not bool(getattr(config, "use_compression", True)):
-            raise ValueError("DeltaKV slim runtime is compressor-only; set use_compression=True.")
+        if not config.use_compression:
+            self.compress_down = []
+            self.compress_up = []
+            return
         if not getattr(config, "deltakv_checkpoint_path", None):
             raise ValueError("DeltaKV compressor sparse layers require deltakv_checkpoint_path.")
-        self.compress_down = []
-        self.compress_up = []
-        for _ in range(num_deltakv_layers):
-            self.compress_down.append(create_compressor(is_down=True, config=config).to(device=self.device))
-            self.compress_up.append(create_compressor(is_down=False, config=config).to(device=self.device))
+        super()._init_compressor_modules(config, num_deltakv_layers)
 
     def _collect_k_norm_weights(self, layers, layer_ids: list[int]):
         weights = []
@@ -1191,9 +1183,53 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
 
     def set_model_layers(self, layers):
         self.deltakv_k_norm_weight, self.deltakv_k_norm_eps = self._collect_k_norm_weights(
-            layers,
-            self.deltakv_layer_ids,
+            layers, self.deltakv_layer_ids,
         )
+        attentions = [layers[i].self_attn for i in self.deltakv_layer_ids]
+        self._sparse_key_norms = [getattr(attn, "k_norm", None) for attn in attentions]
+        self._sparse_key_ropes = [attn.rotary_emb for attn in attentions]
+        self._model_key_transform = any(
+            int(getattr(rope, "rotary_dim", self.head_dim)) != self.head_dim
+            or bool(getattr(norm, "zero_centered_weight", False))
+            for norm, rope in zip(self._sparse_key_norms, self._sparse_key_ropes)
+        )
+
+    def _apply_sparse_k_norm_if_needed(self, l_idx: int, key: torch.Tensor) -> torch.Tensor:
+        if getattr(self, "_model_key_transform", False):
+            norm = self._sparse_key_norms[l_idx]
+            return norm(key) if norm is not None else key
+        return super()._apply_sparse_k_norm_if_needed(l_idx, key)
+
+    def _apply_sparse_key_rope(self, l_idx: int, positions: torch.Tensor, key: torch.Tensor) -> torch.Tensor:
+        if getattr(self, "_model_key_transform", False):
+            # Reuse the model's partial/text M-RoPE contract, including its tail.
+            _, key = self._sparse_key_ropes[l_idx](positions, key, key)
+            return key
+        cos, sin = self.cos_sin_cache[positions].chunk(2, dim=-1)
+        return apply_rotary_emb(key, cos, sin)
+
+    def _deltakv_reconstruct_writeback(self, *, kv_delta, father_slots, slot_to_pos,
+                                     out_slots, out_pos, cos_sin, k_cache, v_cache, l_idx=None):
+        if not getattr(self, "_model_key_transform", False):
+            return super()._deltakv_reconstruct_writeback(
+                kv_delta=kv_delta, father_slots=father_slots, slot_to_pos=slot_to_pos,
+                out_slots=out_slots, out_pos=out_pos, cos_sin=cos_sin,
+                k_cache=k_cache, v_cache=v_cache, l_idx=l_idx,
+            )
+        # The fused reconstruction assumes full-head RoPE and ordinary RMSNorm.
+        # Keep raw references and apply the prepared model operators for other contracts.
+        n = kv_delta.shape[0]
+        delta_k, delta_v = kv_delta.reshape(n, 2, self.num_kv_heads, self.head_dim).unbind(1)
+        fathers = father_slots.long().clamp_min(0)
+        raw_k = (k_cache[fathers].float().mean(1) + delta_k.float()).to(k_cache.dtype)
+        value = (v_cache[fathers].float().mean(1) + delta_v.float()).to(v_cache.dtype)
+        key = self._apply_sparse_k_norm_if_needed(l_idx, raw_k)
+        key = self._apply_sparse_key_rope(l_idx, out_pos.long().clamp_min(0), key)
+        # Padded graph rows may not overwrite a live reference slot.
+        dummy = self._ensure_deltakv_postrope_dummy_slot()[0]
+        destinations = torch.where((out_slots >= 0) & (out_pos >= 0), out_slots, dummy).long()
+        k_cache.index_copy_(0, destinations, key)
+        v_cache.index_copy_(0, destinations, value)
 
     def get_layer_store_tensors(
         self,
@@ -1345,7 +1381,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
 
         l_idx = self.deltakv_layer_to_idx[layer_idx]
         with profiler.record("deltakv_materialize_sparse_view"):
-            if active_slots.is_cuda:
+            if active_slots.is_cuda and not getattr(self, "_model_key_transform", False):
                 k_norm_weight = getattr(self, "deltakv_k_norm_weight", None)
                 if k_norm_weight is not None:
                     k_norm_weight = k_norm_weight[int(l_idx)]
@@ -1372,9 +1408,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                 raw_v = self.deltakv_full_kv_cache[1, l_idx, flat_slots]
                 pos = self.deltakv_slot_to_pos[flat_slots].to(torch.long).clamp_min(0)
                 k_normed = self._apply_sparse_k_norm_if_needed(l_idx, raw_k)
-                cos_sin = self.cos_sin_cache[pos]
-                cos, sin = cos_sin.chunk(2, dim=-1)
-                k_postrope = apply_rotary_emb(k_normed, cos, sin)
+                k_postrope = self._apply_sparse_key_rope(l_idx, pos, k_normed)
                 already_postrope = self._already_postrope_mask(layer_idx, flat_slots)
                 k_postrope = torch.where(already_postrope.view(-1, 1, 1), raw_k, k_postrope)
                 k_out.copy_(k_postrope.to(k_out.dtype))
@@ -1994,7 +2028,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
             hi = min(int(start), lo + int(block_tokens))
             pos = torch.arange(lo, hi, dtype=torch.long, device=self.device)
             k_normed = self._apply_sparse_k_norm_if_needed(l_idx, k_src[lo:hi])
-            k_postrope = self._apply_sparse_rope_to_key(pos, k_normed)
+            k_postrope = self._apply_sparse_key_rope(l_idx, pos, k_normed)
             k_dst[lo:hi] = k_postrope.to(k_dst.dtype)
             del pos, k_normed, k_postrope
 
@@ -2220,7 +2254,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
         if selected_count == 0:
             return
         chunk_size = self._deltakv_latent_store_chunk_size()
-        down = self.compress_down[l_idx]
+        down = self.compress_down[l_idx] if self.config.use_compression else None
         for start in range(0, selected_count, chunk_size):
             end = min(selected_count, start + chunk_size)
             chunk_latent_slots = latent_slots[start:end]
@@ -2233,7 +2267,10 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                 base_to_store = base_kv.index_select(1, chunk_indices)
             pair_count = int(kv_to_store.shape[1])
             # Pairing improves small eviction chunks but raises peak memory and slows large full-prefill chunks.
-            if pair_count <= 1024:
+            if down is None:
+                # Never subtract in-place from raw KV or centers: both remain live.
+                residual = kv_to_store - base_to_store
+            elif pair_count <= 1024:
                 encoded = down(torch.cat((kv_to_store, base_to_store), dim=1))
                 residual = encoded[:, :pair_count]
                 residual.sub_(encoded[:, pair_count:])
@@ -2763,7 +2800,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
             mins = self.deltakv_latent_mins[l_idx, recon_latent]
             payload_dim = self._sparse_payload_dim(kv_dim)
             residual = self._dequantize_residual(residual, scales, mins, payload_dim)
-        return self.compress_up[l_idx](residual)
+        return self.compress_up[l_idx](residual) if self.config.use_compression else residual
 
     def _deltakv_build_view_and_plan_reconstruct(
         self,
@@ -3658,8 +3695,9 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                 cur_len = int(self.row_seq_lens[row_idx])
                 if cur_len <= 0:
                     raise ValueError
+                full_len, sparse_len = self._deltakv_allocation_extents(row_idx)
 
-                full_slots = self.full_layer_slots_map[row_idx, :cur_len]
+                full_slots = self.full_layer_slots_map[row_idx, :full_len]
                 full_mask = full_slots >= 0
                 if full_mask.any():
                     slots = full_slots[full_mask].to(torch.int32)
@@ -3668,7 +3706,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                     self._num_free_slots_full += slots.numel()
                     self.full_layer_slot_to_pos[slots.to(torch.long)] = -1
 
-                kivi_blocks = self.full_layer_kivi_block_slots_map[row_idx, :cur_len]
+                kivi_blocks = self.full_layer_kivi_block_slots_map[row_idx, :full_len]
                 kivi_mask = kivi_blocks >= 0
                 if kivi_mask.any():
                     blocks = torch.unique(kivi_blocks[kivi_mask]).to(torch.int32)
@@ -3677,7 +3715,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                     self._num_free_slots_full_layer_kivi += blocks.numel()
                     self.full_layer_kivi_block_start_pos[blocks.to(torch.long)] = -1
 
-                slots = self._active_deltakv_raw_slots_for_free(row_idx, cur_len)
+                slots = self._active_deltakv_raw_slots_for_free(row_idx, sparse_len)
                 if slots.numel() > 0:
                     self._debug_track_deltakv_full_slots(slots, "free_seq_raw", seq_id=int(seq_id), row=row_idx)
                     ptr = self._num_free_slots_deltakv_full
@@ -3685,7 +3723,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                     self._num_free_slots_deltakv_full += slots.numel()
                     self.deltakv_slot_to_pos[slots.to(torch.long)] = -1
 
-                latent_slots = self.sparse_layer_latent_slots_map[row_idx, :cur_len]
+                latent_slots = self.sparse_layer_latent_slots_map[row_idx, :sparse_len]
                 mask_latent = latent_slots >= 0
                 if mask_latent.any():
                     slots = latent_slots[mask_latent].to(torch.int32)
@@ -3706,6 +3744,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                     self.row_full_layer_kivi_quantized_lens_gpu[row_idx] = 0
                 self.row_deltakv_center_slots[row_idx] = [None for _ in range(self.num_layers)]
                 self.free_rows.append(row_idx)
+                self._deltakv_release_prefill_row(row_idx)
             return
 
         if not self._full_layer_quant_enabled():
@@ -3737,6 +3776,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
             cur_len = self.row_seq_lens[row_idx]
             if cur_len <= 0:
                 raise ValueError
+            _, sparse_len = self._deltakv_allocation_extents(row_idx)
 
             full_slots = self.full_layer_slots_map[row_idx, :cur_len]
             full_mask = full_slots >= 0
@@ -3755,7 +3795,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                 self.free_slots_stack_full_layer_latent[ptr: ptr + slots.numel()] = slots
                 self._num_free_slots_full_layer_latent += slots.numel()
 
-            slots = self._active_deltakv_raw_slots_for_free(row_idx, int(cur_len))
+            slots = self._active_deltakv_raw_slots_for_free(row_idx, sparse_len)
             if slots.numel() > 0:
                 self._debug_track_deltakv_full_slots(slots, "free_seq_raw", seq_id=int(seq_id), row=row_idx)
                 ptr = self._num_free_slots_deltakv_full
@@ -3763,7 +3803,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                 self._num_free_slots_deltakv_full += slots.numel()
                 self.deltakv_slot_to_pos[slots] = -1
 
-            latent_slots = self.sparse_layer_latent_slots_map[row_idx, :cur_len]
+            latent_slots = self.sparse_layer_latent_slots_map[row_idx, :sparse_len]
             mask_latent = latent_slots >= 0
             if mask_latent.any():
                 slots = latent_slots[mask_latent].to(torch.int32)
@@ -3785,6 +3825,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheTritonManagerV4):
                 self.row_full_layer_kivi_quantized_lens_gpu[row_idx] = 0
             self.row_deltakv_center_slots[row_idx] = [None for _ in range(self.num_layers)]
             self.free_rows.append(row_idx)
+            self._deltakv_release_prefill_row(row_idx)
 
     @torch.no_grad()
     def deltakv_reconstruct(

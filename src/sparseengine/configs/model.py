@@ -279,6 +279,7 @@ def load_and_validate_model(config) -> None:
         model_type=model_type,
         sparse_method=config.resolved_cache_sparse_method,
         decode_sparse_method=config.sparse_method,
+        use_compression=config.use_compression,
         topology=config.parallel_topology,
         decode_graph=config.decode_graph,
         enable_prefix_caching=config.enable_prefix_caching,

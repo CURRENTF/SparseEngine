@@ -244,7 +244,7 @@ def profiling_kv_budget_bytes(config, num_slots: int) -> int:
         config.sparse_method,
         prefill_sparse_method=getattr(config, "prefill_sparse_method", None),
     )
-    if method == "deltakv" and int(config.full_layer_kv_quant_bits) == 0:
+    if method == "deltakv":
         from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
 
         return DeltaKVCacheManager.profiling_kv_budget_bytes(

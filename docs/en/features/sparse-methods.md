@@ -23,7 +23,7 @@ Set `sparse_method` to one of the following method names.
 | `omnikv` | Logical masking with optional offload | Cross-layer token selection; optionally keep sparse-layer history in pinned CPU memory and fetch the exact selected KV for decode. | `full_attention_layers`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `enable_omnikv_offload` |
 | `quest` | Query-aware page selection | QuEST selects token pages from persistent min/max page summaries. Prefill stays dense. Explicit-KV models score in key coordinates; GLM-4.7-Flash scores the fused MLA latent/RoPE cache with the matching absorbed decode query while keeping the compute payload latent. | `quest_chunk_size`, `quest_skip_layers`, `sink_keep_tokens`, `decode_keep_tokens`, `recent_keep_tokens` |
 | `retroinfer` | Query-aware cluster retrieval | Experimental GPU-only RetroInfer. Dense prefill builds per-KV-head key clusters; decode reads top clusters exactly and estimates the contribution of the next ranked clusters. The full KV cache remains on GPU. | `retroinfer_retrieval_ratio`, `retroinfer_estimation_ratio`, `retroinfer_sink_tokens`, `retroinfer_recent_tokens` |
-| `deltakv` | Hybrid compression | Slim compressor-backed DeltaKV runtime. Legacy `deltakv-less-memory*` names normalize here for older configs, but real benchmark runs still require a matching compressor checkpoint. | `deltakv_checkpoint_path`, `deltakv_latent_dim`, `deltakv_center_ratio`, `deltakv_neighbor_count`, `deltakv_latent_quant_bits`, `full_layer_kv_quant_bits` |
+| `deltakv` (`residualkv`) | Hybrid compression | Trained compressor residuals, or full-dimensional KV residuals with `use_compression=false`. Only compressor mode requires a matching checkpoint. Legacy `deltakv-less-memory*` names remain aliases. | `use_compression`, `deltakv_checkpoint_path`, `deltakv_latent_dim`, `deltakv_center_ratio`, `deltakv_neighbor_count`, `deltakv_latent_quant_bits`, `full_layer_kv_quant_bits` |
 
 SparseEngine uses `sparse_method` unchanged in public commands, `LLM(...)`, the
 runtime config, and internal consumers.
@@ -244,9 +244,10 @@ With full-layer KIVI enabled, DeltaKV keeps a small resident raw tail pool for
 decode and a separate `max_model_len`-sized prefill staging buffer. Batched
 short prefills share that staging buffer through disjoint per-request ranges;
 the resident raw-tail slot count is not a prefill batch limit.
-PyramidKV classifies the residual after chain-prefix attachment. DeltaKV does
-not support prefix caching and rejects attached-prefix prefill before mutating
-compressed or quantized row metadata.
+PyramidKV classifies the residual after chain-prefix attachment. DeltaKV chain
+continuations use chunked append and reconstruct resident history into the
+existing prefill staging buffer. The scheduler charges the complete visible
+contexts against staging capacity; cold prompts retain the policy above.
 
 ## Prefix cache modes
 

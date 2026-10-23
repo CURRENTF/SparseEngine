@@ -36,7 +36,56 @@ staging, full layers, delayed eviction and restore. The final sampled output has
 not yet acquired a KV entry. Async submitted-but-uncollected outputs have already
 consumed their step's physical allocation. Collection is not another allocation.
 
+### DeltaKV prefill and reconstruction workspaces
+
+Trace the selected execution mode before changing capacity. The public
+`DeltaKVCacheManager` inherits the less-memory and CUDA Graph implementations;
+the base class alone does not describe its active prefill path.
+
+| Storage | Consumer and lifetime | Capacity owner |
+| --- | --- | --- |
+| `deltakv_prefill_staging_kv_cache` and its pre-RoPE K buffer | Short full-prefill batches, long offloaded prefill, and resident chain history reconstruction; reused per layer. Sparse layers compress from staging after attention. Raw and KIVI full layers share this sparse-layer staging policy. | `max_model_len`; the scheduler charges batch tokens for cold prompts and full visible contexts for chain append through `step_allocation_budgets/costs`. |
+| `deltakv_full_kv_cache` | Persistent raw centers/windows and allocated reconstruction slots. Decode keeps static scratch addresses for Graph replay. | Persistent pool plus reconstruction reserve; not a second whole-prompt staging pool. |
+| `deltakv_materialized_kv_cache` | Dense attention-facing decode view. | Decode batch/retention capacity, with its existing configured minimum. |
+
+Prefill does not need a second copy of an already reconstructed indexed view.
+The `get_prefill_compute_view` fix in `a743f22e` preserves that view instead of
+repacking a padded `batch * width` history into the decode workspace. This is
+separate from deciding whether a fresh prompt uses staging in the first place.
+
+For a capacity failure, identify the allocator and selected staging flag in the
+trace, then check the matching scheduler budget and allocation lifetime. Do not
+infer ownership from "full", "materialized", or "decode" in a name, or increase
+raw-pool reserves before checking that existing staging is actually selected.
+Shared prefill/decode storage is valid when its capacity and lifetime cover both
+consumers and Graph-captured addresses remain stable.
+
+Raw-offload prefill plans allocate the final sparse payloads and KIVI keep/block
+slots before all prompt chunks execute. `row_seq_lens` remains the visible
+execution boundary; `_deltakv_allocation_extents()` includes the planned map
+ranges for resource accounting and release. Reclaim every allocated slot before
+discarding a row's plan, including on cancellation, then clear its staging state.
+
 ## Chain functions and call boundaries
+
+Managers with multiple allocator pools may expose `chain_capacity_keys()` and
+`chain_capacity_residency(seq_id)`. Their admission/reservation vectors use those
+resource units, while `physical_slots_by_layer` remains a separate KV-layer
+report. `ChainRecord.capacity_slots` stores the reclaimable resource vector;
+legacy managers use physical layer counts for both. Admission, ACTIVE promises,
+IDLE victim selection and decode reservations must all use the same axis.
+DeltaKV uses full raw slots, sparse raw slots, residual slots and KIVI blocks.
+It conservatively reserves resumed suffix raw allocation before compression;
+CPU offload remains disabled until all pools and references have a restore
+contract. Continuations keep existing centers and residuals and reconstruct into
+per-layer staging without replacing persistent or Graph-captured storage.
+Compressed center positions use their residual payload for attention, matching
+decode even when a raw reference copy survives. The base implementation still
+rejects attached prefixes; the public manager selects `DeltaKVChainMixin`.
+Reconstruction reads the visible history once per sparse layer, with bounded
+`block_tokens * neighbor_count * KV_dimension` intermediates and the existing
+`max_model_len` staging allocation. No new attention or quantization provider is
+introduced; this does not imply a measured throughput improvement.
 
 | Function and owner | Caller, input and result | Permitted mutation and failure residue |
 | --- | --- | --- |

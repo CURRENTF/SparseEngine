@@ -53,6 +53,8 @@ def normalize_prefix_cache(config) -> None:
                 "prefix_cache_host_size_gb must be positive when set, "
                 f"got {config.prefix_cache_host_size_gb}."
             )
+    if config.enable_prefix_cache_offload and cache_method == "deltakv":
+        raise ValueError("DeltaKV chain CPU offload is not implemented for its multi-pool payload.")
     if config.enable_prefix_cache_offload:
         if getattr(config, "prefill_sparse_method", "") == "omnikv_prefill":
             raise ValueError(
@@ -107,8 +109,8 @@ def normalize_prefix_cache(config) -> None:
     config.recurrent_state_max_bytes = recurrent_state_max_bytes
     if config.enable_prefix_caching and cache_method not in PREFIX_CACHE_SUPPORTED_METHODS:
         raise ValueError(
-            "prefix caching only supports vanilla, streamingllm, omnikv, quest, "
-            "snapkv, adakv, h2o, pyramidkv, rkv, skipkv, and fp8_kv."
+            f"prefix caching supports cache methods {sorted(PREFIX_CACHE_SUPPORTED_METHODS)}; "
+            f"got {cache_method!r}."
         )
     config.prefix_cache_salt = str(config.prefix_cache_salt or "")
 

@@ -20,7 +20,7 @@ from sparseengine.utils.log import logger
 
 
 CHAIN_PREFIX_METHODS = frozenset(
-    {"streamingllm", "snapkv", "adakv", "h2o", "pyramidkv", "rkv", "skipkv"}
+    {"streamingllm", "snapkv", "adakv", "h2o", "pyramidkv", "rkv", "skipkv", "deltakv"}
 )
 RADIX_PREFIX_METHODS = frozenset({"", "omnikv", "quest", "deepseek_v4", "fp8_kv"})
 PREFIX_CACHE_MODES = frozenset({"auto", "radix", "chain"})
@@ -104,9 +104,15 @@ class ChainRecord:
     last_input_token_count: int = 0
     last_access: int = 0
     physical_slots_by_layer: tuple[int, ...] = ()
+    capacity_slots: tuple[int, ...] | None = None
     resident_rows: int = 1
     reserved_slots_by_layer: tuple[int, ...] = ()
     reserved_rows: int = 0
+
+    @property
+    def allocated_capacity(self) -> tuple[int, ...]:
+        """Manager resource units; default managers use the KV-layer axis."""
+        return self.physical_slots_by_layer if self.capacity_slots is None else self.capacity_slots
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +232,15 @@ def build_chain_cache_fingerprint(config: Any) -> bytes:
         or ""
     )
     method_fields = {
+        "deltakv": (
+            "use_compression", "deltakv_checkpoint_path", "deltakv_latent_dim",
+            "deltakv_latent_quant_bits", "deltakv_latent_quant_group_size",
+            "sink_keep_tokens", "recent_keep_tokens", "decode_keep_tokens",
+            "deltakv_center_ratio", "deltakv_neighbor_count", "cluster_metric",
+            "full_layer_kv_quant_bits", "enable_full_layer_kivi_quant",
+            "full_layer_kivi_group_size", "full_layer_kivi_residual_length",
+            "enable_sparse_ref_fp8",
+        ),
         "omnikv": (
             "sink_keep_tokens",
             "recent_keep_tokens",
@@ -693,8 +708,8 @@ class ChainCacheIndex:
             )
             for layer_idx in range(len(slot_deficits)):
                 resident = (
-                    int(victim.physical_slots_by_layer[layer_idx])
-                    if layer_idx < len(victim.physical_slots_by_layer)
+                    int(victim.allocated_capacity[layer_idx])
+                    if layer_idx < len(victim.allocated_capacity)
                     else 0
                 )
                 slot_deficits[layer_idx] = max(
@@ -780,6 +795,7 @@ class ChainCacheIndex:
         processed_token_count: int,
         physical_slots_by_layer: tuple[int, ...],
         resident_rows: int = 1,
+        capacity_slots: tuple[int, ...] | None = None,
     ) -> ChainRecord:
         processed_token_count = int(processed_token_count)
         existing = self.lookup(chain_id)
@@ -797,6 +813,7 @@ class ChainCacheIndex:
             processed_token_count=processed_token_count,
             physical_slots_by_layer=physical_slots_by_layer,
             resident_rows=resident_rows,
+            capacity_slots=capacity_slots,
         )
         self._store_token_history(record, logical_tokens)
         return record
@@ -809,6 +826,7 @@ class ChainCacheIndex:
         processed_token_count: int,
         physical_slots_by_layer: tuple[int, ...],
         resident_rows: int = 1,
+        capacity_slots: tuple[int, ...] | None = None,
     ) -> ChainRecord:
         record = self.lookup(chain_id)
         if record.state is not ChainState.ACTIVE:
@@ -834,6 +852,7 @@ class ChainCacheIndex:
         record.physical_slots_by_layer = tuple(
             int(value) for value in physical_slots_by_layer
         )
+        record.capacity_slots = capacity_slots
         record.resident_rows = int(resident_rows)
         record.reserved_slots_by_layer = ()
         record.reserved_rows = 0
@@ -1008,7 +1027,7 @@ class ChainCacheCoordinator:
         existing_slots = (
             ()
             if record is None
-            else tuple(int(value) for value in record.physical_slots_by_layer)
+            else tuple(int(value) for value in record.allocated_capacity)
         )
         suffix_tokens = max(0, int(token_count) - reused)
         hook = getattr(self.cache_manager, "chain_capacity_deficits", None)
@@ -1068,8 +1087,8 @@ class ChainCacheCoordinator:
             self.cache_manager, "chain_has_residency", None
         )
         physical_residency = getattr(
-            self.cache_manager, "chain_physical_residency", None
-        )
+            self.cache_manager, "chain_capacity_residency", None
+        ) or getattr(self.cache_manager, "chain_physical_residency", None)
         outstanding: list[int] = []
         outstanding_rows = 0
         for record in self.index.active_records.values():
@@ -1097,11 +1116,11 @@ class ChainCacheCoordinator:
                 if resident and callable(physical_residency)
                 else tuple(
                     int(value)
-                    for value in record.physical_slots_by_layer
+                    for value in record.allocated_capacity
                 )
             )
             baseline = tuple(
-                int(value) for value in record.physical_slots_by_layer
+                int(value) for value in record.allocated_capacity
             )
             for layer_idx, reserved_slots in enumerate(reserved):
                 current_slots = (
@@ -1133,8 +1152,14 @@ class ChainCacheCoordinator:
             "sparse_method": str(getattr(self.config, "sparse_method", "")),
         }
         reserved = {} if ledger is None else ledger.outstanding()
-        decode_reserved = tuple(reserved.get(f"layer_{layer}", reserved.get("slots", 0))
-                                for layer in self.cache_manager.kv_transformer_layer_indices()) if reserved else ()
+        resource_keys = getattr(self.cache_manager, "chain_capacity_keys", None)
+        if resource_keys is not None:
+            decode_reserved = tuple(reserved.get(key, 0) for key in resource_keys())
+        else:
+            decode_reserved = tuple(
+                reserved.get(f"layer_{layer}", reserved.get("slots", 0))
+                for layer in self.cache_manager.kv_transformer_layer_indices()
+            ) if reserved else ()
         required_slots, required_rows, slots, rows = (
             self.admission_requirements(
                 chain_id=chain_id,
@@ -1297,6 +1322,8 @@ class ChainCacheCoordinator:
             token_ids=list(seq.token_ids),
             processed_token_count=processed_token_count,
             physical_slots_by_layer=physical_slots,
+            capacity_slots=(self.cache_manager.chain_capacity_residency(int(seq.seq_id))
+                            if hasattr(self.cache_manager, "chain_capacity_residency") else None),
         )
 
     def finish_values(
@@ -1327,6 +1354,8 @@ class ChainCacheCoordinator:
             processed_token_digest=bytes(processed_token_digest),
             processed_token_count=int(processed_token_count),
             physical_slots_by_layer=physical_slots,
+            capacity_slots=(self.cache_manager.chain_capacity_residency(int(seq_id))
+                            if hasattr(self.cache_manager, "chain_capacity_residency") else None),
         )
 
     def remember_processed_tokens(

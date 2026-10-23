@@ -172,12 +172,18 @@ class RuntimeState:
             chain_slots, _ = coordinator._outstanding_active_reservations(
                 exclude_seq_ids=partial_ids,
             )
-            for layer, slots in zip(self.cache_manager.kv_transformer_layer_indices(), chain_slots):
-                name = f"layer_{layer}"
-                if name in pending:
-                    pending[name] += int(slots)
-            if "slots" in pending:
-                pending["slots"] += max(chain_slots, default=0)
+            resource_keys = getattr(self.cache_manager, "chain_capacity_keys", None)
+            if resource_keys is not None:
+                for name, slots in zip(resource_keys(), chain_slots):
+                    if name in pending:
+                        pending[name] += int(slots)
+            else:
+                for layer, slots in zip(self.cache_manager.kv_transformer_layer_indices(), chain_slots):
+                    name = f"layer_{layer}"
+                    if name in pending:
+                        pending[name] += int(slots)
+                if "slots" in pending:
+                    pending["slots"] += max(chain_slots, default=0)
         extra = self._mixed_prefix_step_reclaimable_slots()
         if extra > 0:
             if "slots" not in budgets:

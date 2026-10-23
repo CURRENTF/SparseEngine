@@ -18,6 +18,7 @@ from sparseengine.engine.prefill import (
 from sparseengine.method_registry import (
     PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
 )
+from sparseengine.models.rope import resolve_rope_scaling
 from sparseengine.utils.context import get_context
 from sparseengine.utils.log import logger, log_level
 from sparseengine.utils.profiler import profiler
@@ -60,27 +61,7 @@ class DeltaKVCacheManager(CacheManager):
 
     @staticmethod
     def _normalize_rope_scaling(hf_config) -> tuple[tuple[str, object], ...] | None:
-        rope_scaling = getattr(hf_config, "rope_scaling", None)
-        if rope_scaling is None:
-            return None
-        if isinstance(rope_scaling, dict):
-            rope_type = rope_scaling.get("rope_type", rope_scaling.get("type"))
-            is_default_rope = rope_type in (None, "default")
-            allowed_default_keys = {"rope_type", "type", "rope_theta"}
-            if is_default_rope and set(rope_scaling).issubset(allowed_default_keys):
-                return None
-            if rope_type == "llama3":
-                required = {
-                    "factor",
-                    "low_freq_factor",
-                    "high_freq_factor",
-                    "original_max_position_embeddings",
-                }
-                missing = sorted(required.difference(rope_scaling))
-                if missing:
-                    raise ValueError(f"Llama3 rope_scaling missing required keys: {missing}.")
-                return tuple(sorted(rope_scaling.items()))
-        raise NotImplementedError(f"Unsupported DeltaKV cache RoPE scaling: {rope_scaling!r}.")
+        return resolve_rope_scaling(hf_config, model_name="DeltaKV")
 
     def __init__(
         self,
@@ -321,9 +302,8 @@ class DeltaKVCacheManager(CacheManager):
         return torch.tensor(rel, dtype=torch.long, device=self.device)
 
     def _should_use_full_prefill_staging(self, seqs: list[Sequence]) -> bool:
-        # Base DeltaKV has no middle full-prefill region: prompts above the
-        # chunk boundary use RawKV offload. Subclasses may stage short prefills
-        # for method-specific storage formats.
+        # The public runtime overrides this hook to stage short full prefills.
+        # Long prompts use the separate raw-offload hook at the offload threshold.
         return False
 
     def _long_prefill_offload_threshold(self) -> int:
@@ -351,10 +331,10 @@ class DeltaKVCacheManager(CacheManager):
                 int(getattr(seq, "prefix_cache_hit_len", 0) or 0),
             )
             raise RuntimeError(
-                "DeltaKV does not support attached-prefix prefill. Its compressed "
-                "and quantized row state has no chain/radix residency contract, so "
-                "routing an attached prefix through full or raw_offload staging "
-                "would overwrite resident cache metadata. "
+                "The DeltaKV base implementation does not support attached-prefix prefill. "
+                "The public DeltaKVCacheManager supplies chain residency and chunked "
+                "reconstruction through DeltaKVChainMixin. Routing an attached prefix "
+                "through the base full/raw_offload staging would overwrite resident metadata. "
                 f"seq_id={seq.seq_id} attached_prefix_tokens={attached}."
             )
         residual = int(self.remaining_prefill_tokens(seq))
@@ -1104,6 +1084,9 @@ class DeltaKVCacheManager(CacheManager):
         reserved = 0
         for seq in waiting_seqs:
             if 0 < seq.num_prefilled_tokens < seq.num_prompt_tokens:
+                # The coordinator already reserves this chain's suffix peak.
+                if self.prefill_reservation_owned_by_chain(seq):
+                    continue
                 remaining = int(seq.num_prompt_tokens - seq.num_prefilled_tokens)
                 reserved += min(remaining, int(engine_prefill_chunk_size))
         return reserved
@@ -1311,8 +1294,12 @@ class DeltaKVCacheManager(CacheManager):
             raise RuntimeError(
                 "Out of DeltaKV full cache slots (temp). "
                 f"need={size} free={self._num_free_slots_deltakv_full} "
-                f"(reserved_for_temp={int(getattr(self, '_deltakv_temp_full_reserve', 0) or 0)}). "
-                "Try reducing batch_size/decode_keep_tokens, or increase deltakv_full_pool_reserve_ratio."
+                f"reserved_for_temp={int(getattr(self, '_deltakv_temp_full_reserve', 0) or 0)} "
+                f"is_prefill={get_context().is_prefill} "
+                f"prefill_staging_active={bool(getattr(self, '_deltakv_prefill_staging_active', False))}. "
+                "This allocator uses deltakv_full_kv_cache, not the prefill staging "
+                "or materialized workspace. Check staging selection and the "
+                "matching scheduler budget before increasing pool capacity."
             )
         ptr = self._num_free_slots_deltakv_full
         # Static decode caches temp slots across steps; keep them independent
@@ -1611,6 +1598,20 @@ class DeltaKVCacheManager(CacheManager):
         is_center = (slots_i32[:, None] == centers[None, :]).any(dim=1)
         return slots_i32[~is_center]
 
+    def _deltakv_allocation_extents(self, row_idx: int) -> tuple[int, int]:
+        """Return full/sparse map extents, including uncomputed prefill payloads."""
+        visible = int(self.row_seq_lens[row_idx])
+        sparse_plan = getattr(self, "_deltakv_full_prefill_plans", {}).get(row_idx, {})
+        full_plan = getattr(self, "_full_layer_kivi_full_prefill_plans", {}).get(row_idx, {})
+        return (max(visible, int(full_plan.get("total_len", 0))),
+                max(visible, int(sparse_plan.get("total_len", 0))))
+
+    def _deltakv_release_prefill_row(self, row_idx: int) -> None:
+        getattr(self, "_deltakv_full_prefill_plans", {}).pop(row_idx, None)
+        getattr(self, "_full_layer_kivi_full_prefill_plans", {}).pop(row_idx, None)
+        if getattr(self, "_deltakv_long_prefill_offload_row_idx", None) == row_idx:
+            self._deltakv_reset_full_prefill_staging(clear_plans=False)
+
     def free_seq(self, seq_id: int):
         with profiler.record("cache_free_seq"):
             self.reset_prefill_execution_state(seq_id)
@@ -1622,6 +1623,7 @@ class DeltaKVCacheManager(CacheManager):
 
             cur_len = self.row_seq_lens[row_idx]
             assert cur_len > 0
+            _, sparse_len = self._deltakv_allocation_extents(row_idx)
 
             # 清空 full layers
             full_slots = self.full_layer_slots_map[row_idx, :cur_len]
@@ -1630,14 +1632,14 @@ class DeltaKVCacheManager(CacheManager):
             self._num_free_slots_full += cur_len
 
             # 清空 deltakv layers
-            slots = self._active_deltakv_raw_slots_for_free(row_idx, int(cur_len))
+            slots = self._active_deltakv_raw_slots_for_free(row_idx, sparse_len)
             ptr = self._num_free_slots_deltakv_full
             # 未压缩释放
             self.free_slots_stack_deltakv_full[ptr: ptr + slots.numel()] = slots
             self._num_free_slots_deltakv_full += slots.numel()
             self.deltakv_slot_to_pos[slots] = -1
 
-            latent_slots = self.sparse_layer_latent_slots_map[row_idx, :cur_len]
+            latent_slots = self.sparse_layer_latent_slots_map[row_idx, :sparse_len]
             mask_latent = latent_slots >= 0
             if mask_latent.any():
                 slots = latent_slots[mask_latent]
@@ -1653,6 +1655,7 @@ class DeltaKVCacheManager(CacheManager):
             self.row_deltakv_compressed_lens_gpu[row_idx] = 0
             self.row_deltakv_center_slots[row_idx] = [None for _ in range(self.num_layers)]
             self.free_rows.append(row_idx)
+            self._deltakv_release_prefill_row(row_idx)
 
     def free_slot_stats(self) -> dict[str, int]:
         full_free = int(getattr(self, "_num_free_slots_full", 0) or 0)

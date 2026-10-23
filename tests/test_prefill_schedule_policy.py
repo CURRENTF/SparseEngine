@@ -1529,7 +1529,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
                     {},
                 )
 
-    def test_deltakv_resumed_raw_offload_fails_before_row_mutation(self):
+    def test_deltakv_base_resumed_raw_offload_fails_before_row_mutation(self):
         manager = object.__new__(DeltaKVLessMemoryCacheManager)
         manager.config = SimpleNamespace(
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
@@ -1545,7 +1545,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
 
         with self.assertRaisesRegex(
             RuntimeError,
-            "DeltaKV does not support attached-prefix prefill",
+            "DeltaKV base implementation does not support attached-prefix prefill",
         ):
             manager.prefill_execution_mode(seq)
 
@@ -3301,6 +3301,9 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
             scheduler.schedule()
 
     def test_full_prefill_staging_candidate_uses_candidate_budget(self):
+        # P1: two individually fitting prompts must not overbook shared staging.
+        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager.deltakv_prefill_staging_num_slots = 32768
         class StagingOracle(FakeMemoryOracle):
             def __init__(self):
                 super().__init__(
@@ -3316,6 +3319,12 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
             def prefill_step_reservation_cost(self, seq, scheduled_tokens):
                 return 0
 
+            def step_allocation_budgets(self, *, is_prefill):
+                return manager.step_allocation_budgets()
+
+            def step_allocation_costs(self, seq, tokens):
+                return manager.step_allocation_costs(seq, tokens)
+
             def prompt_admission_costs(self, seq):
                 return {"slots": 0}
 
@@ -3330,6 +3339,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
             max_tokens=65536,
         )
         scheduler.add(seq_with_len(16000))
+        scheduler.add(seq_with_len(20000))
 
         scheduled, is_prefill, preempted = scheduler.schedule()
 
@@ -3337,6 +3347,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         self.assertEqual(preempted, [])
         self.assertEqual(len(scheduled), 1)
         self.assertEqual(scheduled[0].current_chunk_size, 16000)
+        self.assertEqual(len(scheduler.waiting), 1)
 
     def test_sequence_setstate_round_trips_prefix_cache_block_metadata(self):
         seq = seq_with_len(4)
@@ -4129,6 +4140,11 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
 
         tiny = seq_with_len(16)
         self.assertTrue(DeltaKVLessMemoryCacheManager.should_schedule_full_prefill(manager, tiny))
+        # Raw full layers need the same sparse-layer staging contract.
+        manager.config.full_layer_kv_quant_bits = 0
+        seq.current_chunk_size = seq.num_prompt_tokens
+        self.assertTrue(manager.should_schedule_full_prefill(seq))
+        self.assertTrue(manager._should_use_full_prefill_staging([seq]))
 
     def test_delta_quant_full_kivi_does_not_force_full_prefill_for_offload_candidate(self):
         from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
