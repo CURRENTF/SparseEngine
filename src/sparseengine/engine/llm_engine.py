@@ -1055,6 +1055,12 @@ class LLMEngine:
                 "beyond the processed boundary.",
                 chain_id=normalized_chain_id,
             )
+        max_token_counts = {
+            str(active.chain_id): int(active.num_prompt_tokens) + int(active.max_tokens)
+            for active in self._active_chain_sequences.values()
+        }
+        max_token_counts[normalized_chain_id] = prompt_len + max_tokens
+        coordinator.index.validate_token_history_admission(plan, max_token_counts)
         self.model_runner.call(
             "chain_validate_admission_plan",
             plan,

@@ -498,6 +498,26 @@ class ChainCacheIndex:
         record.token_ids = logical_tokens
         self._token_history_tokens += len(logical_tokens)
 
+    def validate_token_history_admission(
+        self, plan: ChainAdmissionPlan, max_token_counts: dict[str, int],
+    ) -> None:
+        """Account for admitted completions before changing any chain ownership."""
+        if self.max_token_history_tokens is None:
+            return
+        total = self._token_history_tokens - sum(
+            len(self.records[chain_id].token_ids) for chain_id in plan.victim_chain_ids
+        )
+        for chain_id, count in max_token_counts.items():
+            record = self.records.get(chain_id)
+            total += int(count) - (len(record.token_ids) if record is not None else 0)
+        if total > self.max_token_history_tokens:
+            raise ChainCapacityError(
+                "Chain logical token history exceeds its configured resident capacity "
+                "including admitted generation budgets: "
+                f"needed_tokens={total}, capacity_tokens={self.max_token_history_tokens}.",
+                chain_id=plan.chain_id,
+            )
+
     def _drop_token_history(self, record: ChainRecord) -> None:
         self._token_history_tokens -= len(record.token_ids)
         record.token_ids = array("I")

@@ -1411,3 +1411,100 @@ def test_prepared_chain_history_is_owned_validated_and_immutable():
         coordinator.remember_prepared_tokens(prepared)
     assert list(record.token_ids) == [1, 2, 3, 9]
     assert coordinator.index._token_history_tokens == 4
+
+
+@pytest.fixture
+def history_admission_engine():
+    """Real public admission/index path with transport-only cache/scheduler stubs."""
+    config = _h2o_fingerprint_config(resolved_prefix_cache_mode="chain")
+    freed = []
+    manager = SimpleNamespace(
+        free_seq=freed.append,
+        kv_transformer_layer_indices=lambda: [0],
+        chain_capacity_deficits=lambda **kwargs: ((), 0, (), 0),
+    )
+    coordinator = ChainCacheCoordinator(config, manager)
+    runtime = RuntimeState(config, manager, chain_cache_coordinator=coordinator)
+    calls = []
+
+    def call(method, *args):
+        calls.append(method)
+        if method == "chain_invalidate":
+            return runtime.chain_invalidate(args[0], expected_seq_id=args[1])
+        return getattr(runtime, method)(*args)
+
+    engine = object.__new__(LLMEngine)
+    engine.config = config
+    engine.model_runner = SimpleNamespace(runtime_state=runtime, call=call)
+    engine.scheduler = SimpleNamespace(added=[], abort=lambda seq_id: False)
+    engine.scheduler.add = engine.scheduler.added.append
+    engine._active_chain_sequences = {}
+    return engine, coordinator.index, calls, freed
+
+
+def test_history_overflow_is_rejected_before_resuming_or_changing_cache(history_admission_engine):
+    """P1: late history overflow left a completed remapped chain ACTIVE.
+
+    Existing history coverage checks finish(), after the unsafe admission.
+    """
+    engine, index, calls, freed = history_admission_engine
+    index.max_token_history_tokens = 8
+    first = engine.admit_request([1, 2, 3], SamplingParams(max_tokens=1))
+    index.finish(first.chain_id, token_ids=[1, 2, 3, 9], processed_token_count=3,
+                 physical_slots_by_layer=(2,))
+    engine._active_chain_sequences.clear()
+    engine.scheduler.added.clear()
+    calls.clear()
+    before = pickle.dumps(index)
+
+    with pytest.raises(ChainCapacityError, match="token history"):
+        engine.admit_request([1, 2, 3, 9, 4, 5, 6], SamplingParams(max_tokens=2),
+                             chain_id=first.chain_id)
+    assert pickle.dumps(index) == before
+    assert not calls and not freed and not engine.scheduler.added
+    assert not engine._active_chain_sequences
+    assert index.lookup(first.chain_id).state is ChainState.IDLE
+
+    resumed = engine.admit_request([1, 2, 3, 9, 4, 5], SamplingParams(max_tokens=2),
+                                   chain_id=first.chain_id)
+    index.finish(resumed.chain_id, token_ids=[1, 2, 3, 9, 4, 5, 6, 7],
+                 processed_token_count=7, physical_slots_by_layer=(6,))
+    assert index.lookup(first.chain_id).state is ChainState.IDLE
+    assert index.stats()["chain_cache_token_history_tokens"] == 8
+
+
+def test_active_generation_budgets_cannot_overcommit_history(history_admission_engine):
+    """P1: unfinished requests have not stored history but already own its capacity.
+
+    Existing tests count only persisted token_ids and miss concurrent promises.
+    """
+    engine, index, calls, freed = history_admission_engine
+    index.max_token_history_tokens = 12
+    first = engine.admit_request([1, 2], SamplingParams(max_tokens=8))
+    calls.clear()
+    before = pickle.dumps(index)
+    with pytest.raises(ChainCapacityError, match="token history"):
+        engine.admit_request([3], SamplingParams(max_tokens=3))
+    assert pickle.dumps(index) == before and not calls and not freed
+    assert set(engine._active_chain_sequences) == {first.seq_id}
+    engine.abort_request(first.seq_id)
+    admitted = engine.admit_request([3], SamplingParams(max_tokens=3))
+    assert set(engine._active_chain_sequences) == {admitted.seq_id}
+
+
+@pytest.mark.parametrize("demote", [False, True])
+def test_history_admission_credits_evictions_but_not_offload_demotions(demote):
+    """P1: demotion retains logical history and cannot fund another admission."""
+    index = ChainCacheIndex(max_token_history_tokens=8)
+    _create_and_finish(index, "first", 1, [1, 2, 3, 4])
+    _create_and_finish(index, "second", 2, [5, 6, 7, 8])
+    plan = ChainAdmissionPlan("new", 3, "created", 0,
+        victim_chain_ids=() if demote else ("first",),
+        demote_chain_ids=("first",) if demote else ())
+    before = pickle.dumps(index)
+    if demote:
+        with pytest.raises(ChainCapacityError, match="token history"):
+            index.validate_token_history_admission(plan, {"new": 4})
+    else:
+        index.validate_token_history_admission(plan, {"new": 4})
+    assert pickle.dumps(index) == before
