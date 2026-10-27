@@ -456,6 +456,24 @@ class ResearchFailFastTest(unittest.TestCase):
                 )
                 self.assertEqual(cfg.sparse_method, "deltakv")
 
+                # P1: never run a residual-only experiment with compressor
+                # weights or accidentally require untrained compressor state.
+                cfg = Config(
+                    model=tmp,
+                    sparse_method="residualkv",
+                    full_attention_layers=[0],
+                    use_compression=False,
+                    deltakv_sparse_decode_backend="custom",
+                )
+                self.assertEqual(cfg.sparse_method, "deltakv")
+                with self.assertRaisesRegex(ValueError, "use_compression=False requires"):
+                    Config(
+                        model=tmp,
+                        sparse_method="residualkv",
+                        use_compression=False,
+                        deltakv_checkpoint_path=tmp,
+                    )
+
     def test_sparseengine_missing_model_dir_has_clear_error(self):
         missing = "/tmp/sparseengine-definitely-missing-model-dir"
         with self.assertRaisesRegex(FileNotFoundError, "Model directory does not exist"):

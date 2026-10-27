@@ -1565,6 +1565,7 @@ class LLMEngine:
             "quest_token_budget",
             "quest_skip_layers",
             "deltakv_checkpoint_path",
+            "use_compression",
             "deltakv_center_ratio",
             "deltakv_latent_dim",
             "deltakv_latent_quant_bits",
