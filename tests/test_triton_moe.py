@@ -205,6 +205,44 @@ def test_append_shared_expert_route_matches_cat_and_replays_graph():
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for Triton MoE tests.")
+def test_expert_block_publication_reuses_compilation_across_ragged_prefills():
+    """SWE's changing route counts previously compiled an unrolled kernel per bucket."""
+    from itertools import accumulate
+    from sparseengine.kernels.triton.moe import _fill_expert_blocks_kernel
+    from sparseengine.utils.compilation_guard import RuntimeCompilationGuard
+
+    offsets = torch.zeros(7, dtype=torch.int32, device="cuda")
+    output = torch.full((6000,), -1, dtype=torch.int32, device="cuda")
+
+    def run(counts):
+        offsets.copy_(torch.tensor([0, *accumulate(c * 16 for c in counts)], dtype=torch.int32))
+        output.fill_(-1)
+        _fill_expert_blocks_kernel[(6,)](offsets, output, block_size=16, BLOCK=128, num_warps=4)
+        expected = torch.repeat_interleave(torch.arange(6, dtype=torch.int32), torch.tensor(counts))
+        torch.testing.assert_close(output[:len(expected)].cpu(), expected, atol=0, rtol=0)
+        assert torch.all(output[len(expected):] == -1)
+
+    run([0, 1, 127, 128, 129, 513])
+    guard = RuntimeCompilationGuard(limit=0, rank=0)
+    guard.arm()
+    try:
+        run([0, 0, 0, 0, 0, 0])
+        run([1, 2, 3, 4, 5, 6])
+        run([1, 129, 4097, 1, 0, 128])
+        assert guard.count == 0
+    finally:
+        guard.close()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        _fill_expert_blocks_kernel[(6,)](offsets, output, block_size=16, BLOCK=128, num_warps=4)
+    offsets.copy_(torch.tensor([0, 0, 16, 16, 48, 48, 64], dtype=torch.int32))
+    output.fill_(-1)
+    graph.replay()
+    torch.testing.assert_close(output[:4].cpu(), torch.tensor([1, 3, 3, 5], dtype=torch.int32), atol=0, rtol=0)
+    assert torch.all(output[4:] == -1)
+
+
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for Triton MoE tests.")
 def test_moe_align_block_size_filters_ep_experts_and_pads_blocks():
     topk_ids = torch.tensor(
         [[2, 0], [3, 2], [5, 2], [0, 1]],

@@ -322,14 +322,15 @@ def _fill_expert_blocks_kernel(
     expert_offsets_ptr,
     expert_ids_ptr,
     block_size: tl.constexpr,
-    MAX_BLOCKS_PER_EXPERT: tl.constexpr,
+    BLOCK: tl.constexpr,
 ):
     expert_id = tl.program_id(0)
-    block_offsets = tl.arange(0, MAX_BLOCKS_PER_EXPERT)
     first_block = tl.load(expert_offsets_ptr + expert_id) // block_size
     end_block = tl.load(expert_offsets_ptr + expert_id + 1) // block_size
-    blocks = first_block + block_offsets
-    tl.store(expert_ids_ptr + blocks, expert_id, mask=blocks < end_block)
+    # Ragged prefill sizes must not create a new unrolled specialization.
+    for block_start in range(first_block, end_block, BLOCK):
+        blocks = block_start + tl.arange(0, BLOCK)
+        tl.store(expert_ids_ptr + blocks, expert_id, mask=blocks < end_block)
 
 
 def moe_align_block_size(
@@ -398,9 +399,7 @@ def moe_align_block_size(
         expert_offsets,
         expert_ids,
         block_size=block_size,
-        MAX_BLOCKS_PER_EXPERT=triton.next_power_of_2(
-            max(1, triton.cdiv(num_assignments, block_size))
-        ),
+        BLOCK=128,
         num_warps=4,
     )
     _fill_local_assignments_kernel[(triton.cdiv(num_assignments, assignment_block),)](
