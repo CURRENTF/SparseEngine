@@ -63,6 +63,25 @@ def test_largest_retained_head_limits_metadata_append_capacity():
     a.assert_invariants()
 
 
+def test_compacted_chain_can_outlive_physical_width_without_position_overflow():
+    """RoPE remapping permits large logical indices, not oversized physical rows."""
+    a = HeadSlotAllocator((32,), heads=2, width=8, rows=1)
+    a.apply_append(a.plan_append([(1, list(range(8)))]))
+    a.compact(1, [[np.array([0, 7]), np.array([0, 3, 7])]])
+    a.apply_append(a.plan_append([(1, [10000, 10001])]))
+    np.testing.assert_array_equal(a.positions[0, 0, 0, :4], [0, 7, 10000, 10001])
+    np.testing.assert_array_equal(a.positions[0, 0, 1, :5], [0, 3, 7, 10000, 10001])
+    before = a.positions.copy(), a.free_counts.copy(), a.generation
+    with pytest.raises(RuntimeError, match="index capacity"):
+        a.plan_append([(1, [10002, 10003, 10004, 10005])])
+    with pytest.raises(ValueError, match="logical positions"):
+        a.plan_append([(1, [2**31])])
+    np.testing.assert_array_equal(a.positions, before[0])
+    np.testing.assert_array_equal(a.free_counts, before[1])
+    assert a.generation == before[2]
+    a.assert_invariants()
+
+
 def test_chain_reservations_share_units_with_append_and_cancel_once():
     from collections import deque
     from types import SimpleNamespace

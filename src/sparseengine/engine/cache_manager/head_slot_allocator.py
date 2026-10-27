@@ -41,7 +41,10 @@ class HeadSlotAllocator:
         ids = tuple(int(sid) for sid, _ in requests)
         if not ids or len(set(ids)) != len(ids):
             raise ValueError("A batch must contain distinct sequence owners.")
-        if any(not pos or any(p < 0 or p >= self.width for p in pos)
+        # Width bounds retained entries, not the original logical coordinates.
+        # Remapped chains may outlive that width while retaining fewer KV pairs.
+        position_limit = np.iinfo(self.positions.dtype).max
+        if any(not pos or any(p < 0 or p > position_limit for p in pos)
                or any(b != a + 1 for a, b in zip(pos, pos[1:]))
                for _, pos in requests):
             raise ValueError("Append positions must be nonempty consecutive logical positions.")
@@ -55,10 +58,10 @@ class HeadSlotAllocator:
             lens = self.lengths[:, row]
             if np.any(lens + len(pos) > self.width):
                 raise RuntimeError("Head-slot index capacity exhausted before batch append.")
-            for l, h in np.ndindex(lens.shape):
-                n = int(lens[l, h])
-                if n and pos[0] <= self.positions[l, row, h, n - 1]:
-                    raise ValueError("Append must follow retained original logical positions.")
+            previous = self.positions[np.arange(len(self.capacities))[:, None], row,
+                                      np.arange(self.heads)[None, :], np.maximum(lens - 1, 0)]
+            if np.any((lens > 0) & (pos[0] <= previous)):
+                raise ValueError("Append must follow retained original logical positions.")
         return HeadAppendPlan(self.generation, ids, rows,
                               tuple(tuple(pos) for _, pos in requests))
 
@@ -68,22 +71,26 @@ class HeadSlotAllocator:
         total = sum(map(len, plan.positions))
         writes = np.empty((len(self.capacities), total, self.heads), dtype=np.int32)
         columns = np.empty_like(writes)
+        layers = np.arange(len(self.capacities))[:, None, None]
+        heads = np.arange(self.heads)[None, None, :]
         offset = 0
         for sid, row, pos in zip(plan.seq_ids, plan.rows, plan.positions):
             if sid not in self.seq_rows:
                 assert self.free_rows.pop() == row
                 self.seq_rows[sid] = row
             count = len(pos)
+            batch_writes = writes[:, offset:offset + count]
             for l in range(len(self.capacities)):
                 end = int(self.free_counts[l])
                 selected = self.free[l][end - count * self.heads:end].reshape(count, self.heads)
-                cols = self.lengths[l, row][None, :] + np.arange(count)[:, None]
-                self.slots[l, row, np.arange(self.heads)[None, :], cols] = selected
-                self.positions[l, row, np.arange(self.heads)[None, :], cols] = np.asarray(pos)[:, None]
-                writes[l, offset:offset + count] = selected
-                columns[l, offset:offset + count] = cols
-                self.free_counts[l] -= count * self.heads
-                self.lengths[l, row] += count
+                batch_writes[l] = selected
+            cols = self.lengths[:, row, None, :] + np.arange(count, dtype=np.int32)[None, :, None]
+            # Indices broadcast to [KV layer, appended token, KV head].
+            self.slots[layers, row, heads, cols] = batch_writes
+            self.positions[layers, row, heads, cols] = np.asarray(pos, dtype=np.int32)[None, :, None]
+            columns[:, offset:offset + count] = cols
+            self.free_counts -= count * self.heads
+            self.lengths[:, row] += count
             offset += count
         self.generation += 1
         return writes, columns
