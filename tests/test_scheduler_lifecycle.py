@@ -396,3 +396,102 @@ def test_finished_sequence_keeps_release_owner_until_cleanup_succeeds():
     assert scheduler.is_finished()
     assert not engine._pending_slot_releases
     assert manager.num_free_slots == 16
+
+
+def test_decode_step_reclaims_idle_capacity_even_with_an_existing_window():
+    """P1: a held decode window must not bypass physical IDLE-cache reclaim."""
+    oracle = FakeMemoryOracle(free_slots=0)
+    scheduler = make_scheduler("all_chunked", oracle=oracle)
+    seq = request(4)
+    seq.num_prefilled_tokens = 4
+    seq.append_token(7)
+    scheduler.decoding.append(seq)
+    calls = []
+
+    def reclaim(candidate):
+        assert candidate is seq and seq in scheduler.decoding
+        calls.append(candidate.seq_id)
+        oracle._free_slots = oracle._step_free_slots = 8
+        return None
+
+    scheduler.decode_capacity_reclaimer = reclaim
+    selected, prefill, preempted = scheduler.schedule()
+    assert selected == [seq] and not prefill and not preempted
+    assert calls == [seq.seq_id] and scheduler.total_preemptions == 0
+
+
+@pytest.mark.parametrize("scratch,inflight", [(0, 0), (8, 0), (0, 1)])
+def test_head_slot_recompute_decode_reclaims_idle_before_repeating_preemption(scratch, inflight):
+    # P1: replay does not acquire windows. Exhausting the real head-slot pool
+    # must reclaim completed chains rather than kill the sole replay request.
+    from sparseengine.engine.async_scheduling.execution import AsyncDrainRequired
+    from sparseengine.engine.cache_manager.head_slot_allocator import HeadSlotAllocator
+    from test_kvzip_method import _manager
+    from test_prefill_schedule_policy import make_scheduler_with_oracle
+
+    hf = SimpleNamespace(num_hidden_layers=2, num_key_value_heads=4,
+                         num_attention_heads=8, hidden_size=128, head_dim=16, dtype=torch.float32)
+    manager = _manager(head_slots=True, hf_config=hf,
+                       engine_prefill_chunk_size=8, kvzip_score_chunk_size=4,
+                       kvzip_token_budget=128 if scratch == 0 else 4)
+    manager.allocator = HeadSlotAllocator((64, 64), 4, 128, 3)
+    manager.config.decode_reservation_tokens = 4
+    coordinator = ChainCacheCoordinator(manager.config, manager)
+    runtime = RuntimeState(manager.config, manager, chain_cache_coordinator=coordinator)
+    scheduler = make_scheduler_with_oracle("all_chunked", runtime, method="kvzip")
+    seqs = []
+    for name, length in (("old", 5), ("keep", 7), ("active", 4)):
+        seq = request(length)
+        seq.chain_id = name
+        runtime.chain_apply_admission(runtime.chain_admission_plan(name, seq.seq_id, seq.token_ids))
+        manager.allocator.apply_append(manager.allocator.plan_append([(seq.seq_id, list(range(length)))]))
+        runtime._resident_seq_ids.add(seq.seq_id)
+        record = coordinator.index.lookup(name)
+        record.reserved_slots_by_layer = ()
+        record.reserved_rows = 0
+        if name != "active":
+            coordinator.index.finish(name, token_ids=seq.token_ids,
+                                     processed_token_count=length,
+                                     physical_slots_by_layer=(4 * length, 4 * length))
+        seqs.append(seq)
+    old, keep, active = seqs
+    active.append_token(7)
+    active.append_token(8)
+    active.start_recompute_replay()
+    active.num_prefilled_tokens = active.num_prompt_tokens
+    scheduler.decoding.append(active)
+    calls = []
+
+    def call(method, *args):
+        calls.append((method, args))
+        return getattr(runtime, method)(*args)
+
+    engine = object.__new__(LLMEngine)
+    engine.scheduler = scheduler
+    engine.model_runner = SimpleNamespace(runtime_state=runtime, call=call)
+    scheduler.decode_capacity_reclaimer = engine._reclaim_idle_chains_for_decode
+    assert runtime.reserve_decode_windows(scheduler.decoding, scheduler.waiting) is None
+    assert manager.decode_step_free_slots_for(active) == 0
+    scheduler._async_inflight = inflight
+    if inflight:
+        with pytest.raises(AsyncDrainRequired):
+            scheduler.schedule()
+        assert not calls and list(scheduler.decoding) == [active]
+        assert manager.chain_has_residency(old.seq_id)
+        return
+
+    selected, prefill, preempted = scheduler.schedule()
+    assert selected == [active] and not prefill and not preempted
+    expected = [("chain_reclaim_idle", ("old", old.seq_id, False))]
+    if scratch:
+        expected.append(("chain_reclaim_idle", ("keep", keep.seq_id, False)))
+    assert calls == expected
+    assert manager.chain_has_residency(keep.seq_id) is (scratch == 0)
+    assert manager.allocator.free_counts.min() >= 4 * (1 + scratch)
+    manager.allocator.apply_append(manager.allocator.plan_append([(active.seq_id, [4])]))
+    assert manager.allocator.free_counts.min() >= 4 * scratch
+    scheduler.postprocess(selected, [99], is_prefill=False)
+    assert not active.is_recompute_replay
+    assert active.completion_token_ids == [7, 8]
+    assert scheduler.total_preemptions == 0
+    manager.allocator.assert_invariants()

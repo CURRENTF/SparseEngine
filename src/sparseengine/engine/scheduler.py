@@ -525,7 +525,15 @@ class Scheduler:
             logger.debug("scheduler_phase {}", self.last_phase_decision)
         return result
 
-    def _schedule_impl(self, *, allow_prefill_reclaim: bool = True) -> tuple[list[Sequence], bool, list[Sequence]]:
+    def _reclaim_decode_capacity(self, failure: Sequence) -> Sequence | None:
+        if getattr(self, "_async_inflight", 0):
+            from sparseengine.engine.async_scheduling.execution import AsyncDrainRequired
+            raise AsyncDrainRequired("Decode capacity reclaim requires completed in-flight KV users")
+        return self.decode_capacity_reclaimer(failure)
+
+    def _schedule_impl(
+        self, *, allow_prefill_reclaim: bool = True, allow_decode_reclaim: bool = True,
+    ) -> tuple[list[Sequence], bool, list[Sequence]]:
         """
         核心调度逻辑。
         返回：(本次要运行的序列列表, 是否是 Prefill 阶段, 本次被抢占的序列列表)
@@ -537,8 +545,10 @@ class Scheduler:
         num_batched_seqs = 0
         num_batched_tokens = 0
         decode_reservation_failure = self.memory_oracle.reserve_decode_windows(self.decoding, self.waiting)
-        if decode_reservation_failure is not None and self.decode_capacity_reclaimer is not None:
-            decode_reservation_failure = self.decode_capacity_reclaimer(decode_reservation_failure)
+        if (decode_reservation_failure is not None and allow_decode_reclaim
+                and self.decode_capacity_reclaimer is not None):
+            decode_reservation_failure = self._reclaim_decode_capacity(decode_reservation_failure)
+            allow_decode_reclaim = False
         if decode_reservation_failure is not None and len(self.decoding) > 1:
             self.decoding.remove(decode_reservation_failure)
             return self._preempt_decode_victim(
@@ -920,16 +930,9 @@ class Scheduler:
                         blocked_decode_victim = seq
                     self.decoding.append(seq)
                     break
-                # 显存耗尽，触发驱逐/抢占逻辑
-                # 策略：牺牲当前 seq，并立刻返回，让上层先释放槽位再进入下一轮调度。
-                # 这样可以避免在一次 schedule() 调用中反复驱逐多个请求造成抖动。
-                return self._preempt_decode_victim(
-                    seq,
-                    scheduled_seqs,
-                    preempted_seqs,
-                    physical_free_count=physical_free_count,
-                    reserved_prefill=reserved_prefill,
-                )
+                blocked_decode_victim = seq
+                self.decoding.appendleft(seq)
+                break
             else:
                 # Reserve the cache-manager-specific decode capacity for this step.
                 decode_logical_free_count -= decode_reservation_cost
@@ -940,6 +943,14 @@ class Scheduler:
 
         if not scheduled_seqs:
             if blocked_decode_victim is not None:
+                # Held windows and replay tokens need no renewal, but can still
+                # lack writable KV. Reclaim IDLE chains before active owners.
+                if (allow_decode_reclaim and self.decode_capacity_reclaimer is not None
+                        and self._reclaim_decode_capacity(blocked_decode_victim) is None):
+                    return self._schedule_impl(
+                        allow_prefill_reclaim=allow_prefill_reclaim,
+                        allow_decode_reclaim=False,
+                    )
                 try:
                     self.decoding.remove(blocked_decode_victim)
                 except ValueError:
@@ -965,7 +976,10 @@ class Scheduler:
                 failure = deferred_prompt_failure or blocked_prefill_capacity_failure
                 seq = failure[0] if failure else self.waiting[0]
                 if self.prefill_capacity_reclaimer(seq):
-                    return self._schedule_impl(allow_prefill_reclaim=False)
+                    return self._schedule_impl(
+                        allow_prefill_reclaim=False,
+                        allow_decode_reclaim=allow_decode_reclaim,
+                    )
             if blocked_prefill_step_failure is not None and not self.decoding:
                 seq, need, free = blocked_prefill_step_failure
                 raise RuntimeError(

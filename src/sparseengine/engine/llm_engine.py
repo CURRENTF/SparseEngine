@@ -409,6 +409,7 @@ class LLMEngine:
         coordinator = runtime.chain_cache_coordinator
         if coordinator is None:
             return failure
+        blocked = failure
         # Only the driver chooses victims. Complete the same physical release
         # on every rank before retrying the scheduler's reservation decision.
         for record in coordinator.index.idle_resident_lru():
@@ -420,7 +421,14 @@ class LLMEngine:
             )
             failure = runtime.reserve_decode_windows(self.scheduler.decoding, self.scheduler.waiting)
             if failure is None:
-                break
+                # A held window or a replay token skips acquisition entirely.
+                # Verify the physical append before stopping IDLE reclamation.
+                free = min(runtime.decode_step_free_slots(), runtime.decode_step_free_slots_for(blocked))
+                budgets = self.scheduler._step_allocation_budgets(is_prefill=False)
+                if (free >= runtime.decode_step_reservation_cost(blocked)
+                        and self.scheduler._max_step_allocation_tokens(blocked, 1, budgets) > 0):
+                    return None
+                failure = blocked
         return failure
 
     def _reclaim_idle_chains_for_prefill(self, seq: Sequence) -> bool:
