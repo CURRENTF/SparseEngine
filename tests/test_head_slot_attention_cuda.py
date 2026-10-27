@@ -17,6 +17,44 @@ pytestmark = pytest.mark.skipif(os.environ.get("SPARSEENGINE_TEST_CUDA") != "1",
                                 reason="Set SPARSEENGINE_TEST_CUDA=1 on an idle reserved GPU")
 
 
+def test_ragged_head_writes_and_metadata_do_not_recompile_per_token_count():
+    """SWE requests previously exhausted the guard with hundreds of length variants."""
+    from sparseengine.kernels.triton.head_slots import publish_head_slots, store_head_slots, record_head_queries
+    from sparseengine.utils.compilation_guard import RuntimeCompilationGuard
+    h,d,width=2,256,512
+    kp,vp=[torch.full((width*h,d),-7.,dtype=torch.bfloat16,device='cuda') for _ in range(2)]
+    table=torch.zeros((1,2,h,width),dtype=torch.int32,device='cuda')
+    positions=torch.full_like(table,-1)
+    ring=torch.zeros((2,64,h*8,d),dtype=torch.bfloat16,device='cuda')
+    def run(n):
+        slots=torch.arange(n*h,dtype=torch.int32,device='cuda').reshape(n,h)
+        columns=torch.arange(n,dtype=torch.int32,device='cuda')[None,:,None].expand(1,n,h).contiguous()
+        rows=torch.zeros(n,dtype=torch.int32,device='cuda')
+        pos=torch.arange(n,dtype=torch.int64,device='cuda')
+        k,v=[torch.randn(n,h,d,dtype=kp.dtype,device='cuda') for _ in range(2)]
+        q=torch.randn(n,h*8,d,dtype=kp.dtype,device='cuda')
+        keep=torch.arange(n,device='cuda')>=max(0,n-64)
+        publish_head_slots(table,positions,slots[None],columns,rows,pos)
+        store_head_slots(k,v,kp,vp,slots)
+        record_head_queries(q,ring,rows,pos,keep)
+        torch.testing.assert_close(kp[:n*h].reshape_as(k),k,atol=0,rtol=0)
+        torch.testing.assert_close(vp[:n*h].reshape_as(v),v,atol=0,rtol=0)
+        for head in range(h):
+            torch.testing.assert_close(table[0,0,head,:n],slots[:,head],atol=0,rtol=0)
+            torch.testing.assert_close(positions[0,0,head,:n],pos.int(),atol=0,rtol=0)
+        for position in range(max(0,n-64),n):
+            torch.testing.assert_close(ring[0,position%64],q[position],atol=0,rtol=0)
+    run(32)
+    guard=RuntimeCompilationGuard(limit=0,rank=0)
+    guard.arm()
+    try:
+        for n in (1,3,17,65,129,257):
+            run(n)
+        assert guard.count==0
+    finally:
+        guard.close()
+
+
 def test_head_slot_writes_preserve_kv_pairs_and_ignore_padding():
     """Strided projection outputs must reach the same independent K/V address."""
     from sparseengine.kernels.triton.head_slots import store_head_slots

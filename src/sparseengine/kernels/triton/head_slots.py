@@ -5,9 +5,9 @@ import triton
 import triton.language as tl
 
 
-@triton.jit
+@triton.jit(do_not_specialize=["N"])
 def _publish(Table, PosTable, Writes, Columns, Rows, Positions,
-             N: tl.constexpr, H: tl.constexpr, R: tl.constexpr, T: tl.constexpr,
+             N, H: tl.constexpr, R: tl.constexpr, T: tl.constexpr,
              BLOCK: tl.constexpr):
     l = tl.program_id(0)
     i = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
@@ -29,8 +29,8 @@ def publish_head_slots(table, positions_table, writes, columns, rows, positions)
         n, heads, table.shape[1], table.shape[3], 256)
 
 
-@triton.jit
-def _store(K, V, KP, VP, Slots, N: tl.constexpr, H: tl.constexpr, D: tl.constexpr,
+@triton.jit(do_not_specialize=["N"])
+def _store(K, V, KP, VP, Slots, N, H: tl.constexpr, D: tl.constexpr,
            KT: tl.constexpr, KH: tl.constexpr, KD: tl.constexpr,
            VT: tl.constexpr, VH: tl.constexpr, VD: tl.constexpr, BLOCK: tl.constexpr):
     i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
@@ -49,8 +49,8 @@ def store_head_slots(k, v, kp, vp, slots):
         k, v, kp, vp, slots, n, h, d, *k.stride(), *v.stride(), 256)
 
 
-@triton.jit
-def _queries(Q, Ring, Rows, Positions, Keep, N: tl.constexpr, QH: tl.constexpr,
+@triton.jit(do_not_specialize=["N"])
+def _queries(Q, Ring, Rows, Positions, Keep, N, QH: tl.constexpr,
              D: tl.constexpr, W: tl.constexpr, QT: tl.constexpr,
              QHS: tl.constexpr, QD: tl.constexpr, BLOCK: tl.constexpr):
     i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
