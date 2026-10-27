@@ -261,6 +261,40 @@ def test_checkpoint_state_precision_survives_prefill_storage_and_decode_pool(mod
     assert manager.pool_bytes == sum(tensor.numel() * tensor.element_size() for tensor in buffers.values())
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_prefill_state_flags_remain_ordered_on_a_nondefault_stream():
+    """Mixed fresh/resumed rows must consume each asynchronous flag upload correctly.
+
+    CPU dtype tests do not exercise H2D ordering or short-lived source buffers.
+    """
+    attention = Qwen35LinearAttention.__new__(Qwen35LinearAttention)
+    torch.nn.Module.__init__(attention)
+    attention.conv_dim, attention.conv_kernel_dim = 4, 3
+    attention.num_v_heads, attention.head_k_dim, attention.head_v_dim = 2, 4, 8
+    attention.recurrent_state_dtype = torch.float32
+    context = SimpleNamespace(seqs=[SimpleNamespace(seq_id=i) for i in range(3)], now_layer_idx=0)
+    observed, expected = [], []
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream):
+        for step in range(16):
+            present = [(i + step) % 3 != 0 for i in range(3)]
+            states = {i: dict(conv_state=torch.full((4, 2), i + 1., device="cuda", dtype=torch.bfloat16),
+                              recurrent_state=torch.full((2, 4, 8), i + 1., device="cuda"))
+                      for i in range(3) if present[i]}
+            manager = SimpleNamespace(get_layer_state=lambda seq_id, layer: states.get(seq_id))
+            conv, recurrent, flags = attention._load_batch_states(
+                context, manager, require_existing=False,
+                activation_dtype=torch.bfloat16, device=torch.device("cuda"))
+            observed.append((conv, recurrent, torch.where(flags, step + 1, -step - 1)))
+            expected.append((present, step))
+    stream.synchronize()
+    for (conv, recurrent, flags), (present, step) in zip(observed, expected):
+        for row, exists in enumerate(present):
+            torch.testing.assert_close(conv[row], torch.full_like(conv[row], row + 1 if exists else 0))
+            torch.testing.assert_close(recurrent[row], torch.full_like(recurrent[row], row + 1 if exists else 0))
+        assert flags.tolist() == [step + 1 if exists else -step - 1 for exists in present]
+
+
 def test_invalid_checkpoint_state_dtype_fails_before_provider_preparation():
     config = _qwen35_outer_config().text_config
     config.mamba_ssm_dtype = "float64"

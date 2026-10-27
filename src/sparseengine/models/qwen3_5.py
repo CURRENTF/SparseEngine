@@ -670,7 +670,9 @@ class Qwen35LinearAttention(nn.Module):
         return (
             torch.stack(conv_states, dim=0).contiguous(),
             torch.stack(recurrent_states, dim=0).contiguous(),
-            torch.tensor(has_initial, dtype=torch.bool, device=device),
+            # A blocking H2D here waits for preceding projections in every GDN
+            # layer. The copy and its consumer stay ordered on the same stream.
+            torch.tensor(has_initial, dtype=torch.bool, device="cpu").to(device=device, non_blocking=True),
         )
 
     def _store_batch_states(self, context, recurrent_state_manager, conv_states: torch.Tensor, recurrent_states: torch.Tensor):
