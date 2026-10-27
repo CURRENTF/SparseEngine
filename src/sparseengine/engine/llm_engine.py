@@ -439,7 +439,9 @@ class LLMEngine:
             budgets = runtime.prompt_admission_budgets(
                 self.scheduler.waiting, self.scheduler.engine_prefill_chunk_size,
             )
-            if all(int(need) <= int(budgets.get(name, 0)) for name, need in costs.items()):
+            if (all(int(need) <= int(budgets.get(name, 0)) for name, need in costs.items())
+                    and runtime.prefill_step_free_slots() > 0
+                    and runtime.prefill_step_free_slots_for(seq) > 0):
                 return True
         return False
 

@@ -129,6 +129,31 @@ def test_decode_limit_allows_partial_prefill_but_keeps_fresh_prompt_queued():
     assert list(scheduler.waiting) == [fresh]
 
 
+def test_candidate_capacity_reclaims_idle_ownership_with_free_global_slots():
+    # P1: an admitted chain blocked by row/reservation ownership must reclaim
+    # IDLE state before the scheduler declares the whole serving engine dead.
+    # Existing reclaim tests exhaust global capacity and miss this branch.
+    oracle = FakeMemoryOracle(free_slots=32)
+    available = [0]
+    oracle.prefill_step_free_slots_for = lambda seq: available[0]
+    scheduler = make_scheduler("all_chunked", oracle=oracle, chunk=4, max_tokens=8)
+    seq = request(4)
+    scheduler.add(seq)
+    reclaimed = []
+
+    def reclaim(candidate):
+        assert candidate is seq
+        reclaimed.append(candidate.seq_id)
+        available[0] = 4
+        return True
+
+    scheduler.prefill_capacity_reclaimer = reclaim
+    selected, is_prefill, preempted = scheduler.schedule()
+    assert selected == [seq] and is_prefill and not preempted
+    assert reclaimed == [seq.seq_id]
+    assert not scheduler.waiting and not scheduler.decoding
+
+
 @pytest.mark.parametrize("window", [1, 1024])
 def test_pyramidkv_last_decode_reclaims_idle_chain_before_capacity_failure(window):
     # The final output needs one append even when the row is above its retained

@@ -954,14 +954,16 @@ class Scheduler:
             if (
                 not self.decoding and self.waiting and allow_prefill_reclaim
                 and self.prefill_capacity_reclaimer is not None
-                and (deferred_prompt_failure is not None or step_free_count <= 0)
+                and (deferred_prompt_failure is not None or step_free_count <= 0
+                     or blocked_prefill_capacity_failure is not None)
             ):
                 if getattr(self, "_async_inflight", 0):
                     from sparseengine.engine.async_scheduling.execution import AsyncDrainRequired
                     raise AsyncDrainRequired("Prefill capacity reclaim requires completed in-flight KV users")
-                # Zero capacity skips the prefill scan, so no admission failure
-                # is recorded even when IDLE chains can make the prompt fit.
-                seq = deferred_prompt_failure[0] if deferred_prompt_failure else self.waiting[0]
+                # A row/reservation can block one admitted chain even while
+                # global append capacity remains available.
+                failure = deferred_prompt_failure or blocked_prefill_capacity_failure
+                seq = failure[0] if failure else self.waiting[0]
                 if self.prefill_capacity_reclaimer(seq):
                     return self._schedule_impl(allow_prefill_reclaim=False)
             if blocked_prefill_step_failure is not None and not self.decoding:
