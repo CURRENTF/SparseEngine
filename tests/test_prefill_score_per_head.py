@@ -64,15 +64,16 @@ def test_token_layout_3d_and_legacy_2d_match_independent_oracle(mode, window):
     torch.testing.assert_close(packed, output[1:], atol=2e-5, rtol=3e-4)
 
 
-@pytest.mark.parametrize('mode,window,width', [
-    ('probability', 32, 99), ('probability', 160, 227), ('logits', 160, 227),
-    ('probability', 32, 4096), ('probability', 32, 32768),
+@pytest.mark.parametrize('mode,window,width,d', [
+    ('probability', 32, 99, 128), ('probability', 160, 227, 128), ('logits', 160, 227, 128),
+    ('probability', 32, 4096, 128), ('probability', 32, 32768, 128),
+    ('probability', 32, 99, 256), ('probability', 32, 32768, 256),
 ])
 @pytest.mark.parametrize('head_output', ['query', 'kv'])
-def test_ragged_head_slots_and_graph_replay_match_independent_oracle(mode, window, width, head_output):
+def test_ragged_head_slots_and_graph_replay_match_independent_oracle(mode, window, width, d, head_output):
     """Catch cross-head slot/length reads, stale replay metadata and accumulated output."""
     torch.manual_seed(61)
-    hkv, groups, d = 2, 7, 128
+    hkv, groups = 2, 7
     ints = lambda v: torch.tensor(v, device='cuda', dtype=torch.int32)
     q = torch.randn((window * 2, hkv * groups, d), device='cuda', dtype=torch.bfloat16)
     k = torch.randn((2 * hkv * width, 1, d), device='cuda', dtype=q.dtype)

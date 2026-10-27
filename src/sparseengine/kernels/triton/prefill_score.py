@@ -856,6 +856,14 @@ def prefill_score_fwd(
     # Keep the dot tile bounded. Common GQA (7 heads per KV, W=32) fits in one
     # head block; larger query windows or MQA split heads across multiple blocks.
     max_rows = 256
+    if head_dim == 256:
+        from .context_flashattention_nopad import _device_max_shared_memory
+
+        # The 256x256 Q tile plus 64x256 K tile needs 160 KiB. Keep the
+        # reduction/selection semantics while splitting head groups on devices
+        # whose per-block shared memory cannot hold that specialization.
+        if _device_max_shared_memory(q.device.index or 0) < 163840:
+            max_rows = 128
     block_h_limit = max(1, min(8, max_rows // block_m))
     block_h = min(triton.next_power_of_2(kv_group_num), block_h_limit)
     head_blocks = triton.cdiv(kv_group_num, block_h)

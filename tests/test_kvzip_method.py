@@ -329,13 +329,14 @@ def test_head_slot_replay_failure_rolls_back_only_owned_suffix():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
-def test_head_slot_reconstruction_scorer_matches_independent_head_oracle():
+@pytest.mark.parametrize("dim,groups", [(128, 7), (256, 8)])
+def test_head_slot_reconstruction_scorer_matches_independent_head_oracle(dim, groups):
     """Virtual MQA packing must retain the original head identity and denominator."""
     from sparseengine.engine.cache_manager.methods.kvzip import ReconstructionChunk
     from sparseengine.kernels.triton.prefill_score import PrefillScoreWorkspace
 
     torch.manual_seed(47)
-    length, replay, heads, groups, dim = 19, 137, 2, 7, 128
+    length, replay, heads = 19, 137, 2
     sink, start, end = 3, 6, 15
     device = torch.device('cuda')
     manager = object.__new__(KVzipHeadSlotCacheManager)
@@ -594,6 +595,10 @@ def test_invalid_reconstruction_config_fails_before_execution(field, value):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize("replay,heads,dim,dtype,length,sink,chunk_start,chunk_end", [
+    # Qwen3.6: GQA8, partial-RoPE/full QK dim 256. The old score tile
+    # exceeded Blackwell's shared-memory limit before producing any scores.
+    (65, 16, 256, torch.bfloat16, 301, 8, 65, 97),
+    (137, 16, 256, torch.bfloat16, 301, 8, 65, 201),
     (17, 6, 32, torch.float16, 19, 3, 6, 15),
     (137, 14, 128, torch.bfloat16, 19, 3, 6, 15),
     (137, 26, 32, torch.float16, 19, 3, 6, 15),
