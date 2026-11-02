@@ -207,7 +207,7 @@ PREFILL_ATTENTION_REGISTRY: OpRegistry[
             "sgl_fa3_paged_prefill_sm90",
             "flashinfer_paged_prefill_fa3_sm90",
             "flashinfer_paged_prefill_fa2_sm120",
-            "flashinfer_head_slot_prefill_fa2_sm120",
+            "flashinfer_head_slot_prefill_fa2",
         ),
         repo_portable=("triton_paged_prefill",),
         repo_nonstandard=(
@@ -547,16 +547,19 @@ class FlashInferFa2Sm120PagedPrefillAttentionProvider(
 
 @PREFILL_ATTENTION_REGISTRY.register_atomic(ProviderRole.UPSTREAM_STANDARD)
 class FlashInferHeadSlotPrefillAttentionProvider(FlashInferFa2Sm120PagedPrefillAttentionProvider):
-    """SM120 virtual MQA prefill, with a plan for each independent layer view."""
+    """FA2 virtual MQA prefill, with a plan for each independent layer view."""
 
-    name = "flashinfer_head_slot_prefill_fa2_sm120"
+    name = "flashinfer_head_slot_prefill_fa2"
     capabilities = replace(FlashInferFa2Sm120PagedPrefillAttentionProvider.capabilities,
+                           compute_capabilities=None,
                            head_slots=True, layer_varying_page_table=True)
 
     @classmethod
     def supports(cls, spec, caps):
         if spec.kv_cache_layout != "head_slots":
             return SupportResult.unsupported("requires independent head slots")
+        if caps.compute_capability is None or caps.compute_capability < (8, 0):
+            return SupportResult.unsupported("FA2 BF16 attention requires SM80 or newer")
         return super().supports(spec, caps)
 
     def __init__(self):

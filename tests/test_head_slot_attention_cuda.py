@@ -97,8 +97,8 @@ def oracle(q, k, v, table, positions, lens, rows, cu, query_positions):
                                                     (65, 7, [5, 1]), (2048, 4, [4, 3])])
 def test_head_attention_matches_position_oracle(history, groups, chunks):
     capability = torch.cuda.get_device_capability()
-    if capability not in {(9, 0), (12, 0)}:
-        pytest.skip('Current head-slot prefill providers require SM90 or SM120')
+    if capability < (8, 0):
+        pytest.skip('Head-slot BF16 attention requires SM80 or newer')
     torch.manual_seed(17)
     device, h, d, b = torch.device("cuda"), 2, 128, 2
     width = history + max(chunks)
@@ -189,8 +189,8 @@ def test_head_graph_replays_layer_ragged_lengths_and_request_churn(groups, dim, 
     """
     torch.manual_seed(82)
     capability = torch.cuda.get_device_capability()
-    if capability not in {(9, 0), (12, 0)} or (capability == (9, 0) and dim == 64):
-        pytest.skip("Current head-slot providers require SM90 D128/256 or SM120 D64/128/256")
+    if capability < (8, 0) or (capability == (9, 0) and dim == 64):
+        pytest.skip("Head-slot BF16 attention requires SM80+; SM90 provider requires D128/256")
     device, batch, heads = torch.device("cuda"), 2, 2
     spec = DecodeAttentionOpSpec(
         num_query_heads=heads * groups, num_kv_heads=heads, head_dim=dim,
