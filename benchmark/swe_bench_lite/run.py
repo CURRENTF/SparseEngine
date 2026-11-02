@@ -116,14 +116,11 @@ def _package_version(name: str) -> str | None:
         return None
 
 
-def _git_state(repo: Path, *, source_roots: Sequence[str]) -> dict[str, Any]:
+def _git_state(repo: Path) -> dict[str, Any]:
     if not (repo / ".git").exists():
         return {
             "path": str(repo),
             "commit": None,
-            "source_dirty": None,
-            "tracked_diff_sha256": None,
-            "untracked_source_files": [],
         }
 
     def run(*args: str) -> str:
@@ -135,30 +132,9 @@ def _git_state(repo: Path, *, source_roots: Sequence[str]) -> dict[str, Any]:
         )
         return proc.stdout.strip()
 
-    diff_proc = subprocess.run(
-        ["git", "-C", str(repo), "diff", "--binary", "HEAD", "--"],
-        check=True,
-        capture_output=True,
-    )
-    untracked_output = run(
-        "ls-files", "--others", "--exclude-standard", "--", *source_roots
-    )
-    untracked_files = []
-    for relative in untracked_output.splitlines():
-        path = repo / relative
-        if path.is_file():
-            untracked_files.append(
-                {"path": relative, "sha256": _sha256_file(path)}
-            )
-
-    tracked_diff_sha256 = _sha256_bytes(diff_proc.stdout)
-    source_dirty = bool(diff_proc.stdout or untracked_files)
     return {
         "path": str(repo.resolve()),
         "commit": run("rev-parse", "HEAD"),
-        "source_dirty": source_dirty,
-        "tracked_diff_sha256": tracked_diff_sha256,
-        "untracked_source_files": untracked_files,
     }
 
 
@@ -168,7 +144,7 @@ def assert_runtime_provenance_matches(
     if expected != current:
         raise RunnerError(
             "Runtime provenance drift detected between stages. Use a new --run-dir "
-            "after changing adapter code, SWE-bench code, Python, or package versions."
+            "after changing recorded Git commits, Python, or package versions."
         )
 
 
@@ -298,7 +274,7 @@ def _instance_image_names(rows: Sequence[dict[str, Any]]) -> list[str]:
     return names
 
 
-def _require_local_images(image_names: Sequence[str]) -> None:
+def _require_local_images(image_names: Sequence[str], *, timeout: float = 10.0) -> None:
     if not image_names:
         raise RunnerError("No Docker images were derived for the selected instances")
     try:
@@ -306,7 +282,7 @@ def _require_local_images(image_names: Sequence[str]) -> None:
             ["docker", "info"],
             text=True,
             capture_output=True,
-            timeout=10,
+            timeout=timeout,
         )
         if daemon.returncode != 0:
             detail = (daemon.stderr or daemon.stdout).strip()
@@ -322,7 +298,7 @@ def _require_local_images(image_names: Sequence[str]) -> None:
     except FileNotFoundError as exc:
         raise RunnerError("docker is not installed or is not on PATH") from exc
     except subprocess.TimeoutExpired as exc:
-        raise RunnerError("Docker daemon check timed out after 10 seconds") from exc
+        raise RunnerError(f"Docker daemon check timed out after {timeout:g} seconds") from exc
     if proc.returncode == 0:
         return
 
@@ -443,6 +419,7 @@ def render_mini_config(
     enable_thinking: bool,
     preserve_thinking: bool,
     api_base: str | None,
+    pull_timeout: float = 30.0,
 ) -> str:
     # MiniSWE checks its wall-time limit only between agent steps.  Leave room
     # for an in-flight model/tool call and cleanup so Docker's sleep process
@@ -477,7 +454,7 @@ def render_mini_config(
     lines.extend(
         [
             "environment:",
-            "  pull_timeout: 30",
+            f"  pull_timeout: {pull_timeout:g}",
             f'  container_timeout: "{container_timeout_seconds}s"',
             "",
         ]
@@ -896,7 +873,8 @@ class SweBenchLiteRunner:
         elif args.prefix_prune_target != "range":
             raise RunnerError("--prefix-prune-target requires --prefix-prune-policy")
         _reject_secrets(
-            {"api_base": args.api_base, "mini_command": args.mini_command},
+            {"api_base": args.api_base, "mini_command": args.mini_command,
+             "scorer_proxy": args.scorer_proxy},
             source=Path("<command-line arguments>"),
         )
 
@@ -917,14 +895,8 @@ class SweBenchLiteRunner:
         if self.swe_bench_dir is None:
             raise RunnerError("SWE-bench checkout is unavailable for provenance validation")
         return {
-            "adapter_git": _git_state(
-                self.repo_root,
-                source_roots=("benchmark", "scripts/benchmarks"),
-            ),
-            "swe_bench_git": _git_state(
-                self.swe_bench_dir,
-                source_roots=("swebench",),
-            ),
+            "adapter_git": _git_state(self.repo_root),
+            "swe_bench_git": _git_state(self.swe_bench_dir),
             "python": {"executable": sys.executable, "version": sys.version},
             "packages": {
                 name: _package_version(name)
@@ -965,7 +937,7 @@ class SweBenchLiteRunner:
         writable_limit_gib = getattr(
             self.args, "docker_writable_layer_limit_gib", 0.0
         )
-        if writable_limit_gib > 0:
+        if writable_limit_gib > 0 or env.get("SPARSEENGINE_SWE_PODMAN_ROOTLESS") == "1":
             python_path.append(
                 str(
                     self.repo_root
@@ -1202,7 +1174,7 @@ class SweBenchLiteRunner:
             )
         requires_images = self.args.stage in {"prepare", "generate", "evaluate", "all"}
         if requires_images and not self.args.allow_image_pulls:
-            _require_local_images(self.image_names)
+            _require_local_images(self.image_names, timeout=self.args.health_timeout)
 
         semantic_config = self._semantic_config(server_manifest)
         if self.run_config_path.exists():
@@ -1226,6 +1198,7 @@ class SweBenchLiteRunner:
             enable_thinking=self.args.enable_thinking,
             preserve_thinking=self.args.preserve_thinking,
             api_base=self.args.api_base,
+            pull_timeout=max(30.0, self.args.health_timeout),
         )
         if (
             self.mini_config_path.exists()
@@ -1643,10 +1616,20 @@ class SweBenchLiteRunner:
                 "--instance_ids",
                 *self.instance_ids,
             ]
+            if self.args.retain_eval_images:
+                command.extend(["--cache_level", "instance"])
+            scoring_env = self._model_env()
+            if self.args.scorer_ipv4:
+                bootstrap = str(self.repo_root / "benchmark/swe_bench_lite/docker_guard_bootstrap")
+                scoring_env["PYTHONPATH"] = bootstrap + os.pathsep + scoring_env["PYTHONPATH"]
+                scoring_env["SPARSEENGINE_SWE_SCORER_IPV4"] = "1"
+            if self.args.scorer_proxy:
+                for key in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+                    scoring_env[key] = self.args.scorer_proxy
             _run_logged(
                 command,
                 cwd=self.official_dir,
-                env=self._model_env(),
+                env=scoring_env,
                 log_path=self.run_dir / "logs" / "official_eval.log",
             )
             report_path = self._official_report_path()
@@ -1773,7 +1756,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--served-model-name", default=None)
     parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
     parser.add_argument("--server-manifest", type=Path, default=None)
-    parser.add_argument("--health-timeout", type=float, default=10.0)
+    parser.add_argument("--health-timeout", type=float, default=10.0,
+                        help="Timeout in seconds for model API and Docker preparation; container startup keeps a 30-second minimum.")
     parser.add_argument(
         "--api-proxy-from-environment",
         action="store_true",
@@ -1803,6 +1787,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Per-agent wall-clock limit in seconds; 0 disables the limit.",
     )
     parser.add_argument("--eval-timeout", type=int, default=1800)
+    parser.add_argument("--retain-eval-images", action="store_true",
+                        help="Keep instance images for repeated evaluations.")
+    parser.add_argument("--scorer-ipv4", action="store_true",
+                        help="Use IPv4 and bounded GitHub metadata requests in the official scorer.")
+    parser.add_argument("--scorer-proxy", default=None,
+                        help="HTTP proxy for official scorer metadata requests.")
     parser.add_argument("--cost-tracking", choices=("default", "ignore_errors"), default=None)
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--temperature", type=float, default=0.0)
