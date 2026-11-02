@@ -204,4 +204,6 @@ run without a GPU.
 
 # Docs Rules
 
-Keep official documentation focused on stable user-visible behavior and operational constraints; place internal implementation details, provider/kernel selection rationale, benchmark methodology and results, and transient engineering plans in development documentation unless users need them to use or troubleshoot the feature.
+无用户要求，不将实验结果加入 public repo。
+
+Keep official documentation focused on stable user-visible behavior and operational constraints; place internal implementation details, provider/kernel selection rationale, benchmark methodology, and transient engineering plans in development documentation unless users need them to use or troubleshoot the feature.
