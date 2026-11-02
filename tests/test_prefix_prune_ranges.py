@@ -85,6 +85,7 @@ def _runner(fail_at=None):
     events = []
     def validate(*args, **kwargs):
         events.append(("validate", kwargs))
+        return [block]
     def forward(**kwargs):
         events.append(("score", kwargs))
         if fail_at is not None and sum(kind == "score" for kind, _ in events) == fail_at:
@@ -106,9 +107,24 @@ def _runner(fail_at=None):
         if protected_suffix_tokens:
             selected = torch.cat((selected, torch.arange(candidate_count, scores.numel())))
         return selected
+    from contextlib import contextmanager
+    @contextmanager
+    def reserve(requests, *, prefix_blocks):
+        yield len(requests)
+    block = SimpleNamespace(ref_count=0)
+    cache = SimpleNamespace(
+        block_ids_for_tokens=lambda ids, **kwargs: ids,
+        match_longest_block_ids=lambda ids: (len(ids), 1, len(ids)),
+        get_chain=lambda last, count: [block] * count,
+        acquire_block_ref=lambda item: setattr(item, "ref_count", item.ref_count + 1),
+        release_block_ref=lambda item: setattr(item, "ref_count", item.ref_count - 1),
+    )
     runner = SimpleNamespace(
-        config=SimpleNamespace(prefix_cache_block_size=1), device=torch.device("cpu"),
+        config=SimpleNamespace(prefix_cache_block_size=1, max_model_len=100,
+                               max_num_batched_tokens=100, engine_prefill_chunk_size=100,
+                               max_num_seqs_in_batch=1), device=torch.device("cpu"),
         cache_manager=SimpleNamespace(
+            prefix_cache=cache, reserve_prefill_slots=reserve,
             validate_prefix_cache_prune_target=validate,
             validate_prefix_prune_keep_tokens=lambda _: None,
             select_prefix_prune_keep_indices=select,
@@ -116,6 +132,7 @@ def _runner(fail_at=None):
         ),
         parallel_context=SimpleNamespace(world=SimpleNamespace(all_reduce=reduce)),
         _prefix_prune_score_forward=forward,
+        _prefix_prune_score_forward_batch=lambda requests: [forward(**r) for r in requests],
     )
     return runner, events
 
@@ -151,8 +168,8 @@ def test_kvzip_scores_all_ranges_before_one_shared_selection_and_commit():
     # Packed union [0,1,4,5,8,9], global oracle selects logical [1,4,8].
     assert result["keep_indices"].tolist() == [1, 2, 4]
     forwards = [kwargs for kind, kwargs in events if kind == "score"]
-    assert [kwargs["token_ids"][11:] for kwargs in forwards] == [[0], [0, 1], [4], [4, 5], [8], [8, 9]]
-    assert all(kwargs["token_ids"][:11] == list(range(10)) + [99] for kwargs in forwards)
+    assert [kwargs["token_ids"][1:] for kwargs in forwards] == [[0], [0, 1], [4], [4, 5], [8], [8, 9]]
+    assert all(kwargs["token_ids"][0] == 99 and kwargs["prefix"].logical_length == 10 for kwargs in forwards)
     assert all(kwargs["prefix_hit_len"] == 10 for kwargs in forwards)
     assert [kind for kind, _ in events].count("reduce") == 1
     assert events[-1][0] == "commit"
@@ -191,11 +208,14 @@ def test_snapkv_shared_budget_preserves_observation_tokens_only_in_union():
 def test_engine_job_round_trip_preserves_ranges_and_budget():
     runner, events = _runner()
     def call(method, *args):
-        assert method == "prefix_cache_prune_batch"
-        jobs, replay = args
-        return [{"result": ModelRunner.prefix_cache_prune(
-            runner, **job, policy="kvzip_global", kvzip_replay_prefix_ids=replay,
-        )} for job in jobs]
+        if method == "prefix_cache_prune_batch_start":
+            jobs, replay = args
+            call.outcomes = [{"result": ModelRunner.prefix_cache_prune(
+                runner, **job, policy="kvzip_global", kvzip_replay_prefix_ids=replay,
+            )} for job in jobs]
+            return
+        assert method == "prefix_cache_prune_batch_step"
+        return call.outcomes
     engine = SimpleNamespace(
         config=SimpleNamespace(sparse_method="omnikv", prefix_cache_block_size=1, enable_prefix_caching=True),
         _prefix_prune_jobs={}, _pending_prefix_prune_ids=deque(),
@@ -261,7 +281,7 @@ def test_batched_reconstruction_round_robin_preserves_independent_budgets(rows, 
     def validate(tokens, **kwargs):
         return cache.get_chain(tokens[0], len(tokens))
     def forward(requests):
-        batches.append([r['token_ids'][0] for r in requests])
+        batches.append([0 if r['prefix'].blocks[0] is cache.blocks[0] else 20 for r in requests])
         assert all(b.ref_count == 1 for b in cache.blocks)
         return [torch.tensor([1., 8., 100., 100., 7., 6., 100., 100., 8., 2.]) for _ in requests]
     def commit(tokens, **kwargs):
@@ -302,6 +322,19 @@ def test_batched_reconstruction_round_robin_preserves_independent_budgets(rows, 
     assert batches == expected_batches
     assert commits == [[1,2,4], [1]]
     assert all('result' in result for result in results)
+    # P1: a serving turn must not drain the whole reconstruction or leave
+    # pinned blocks behind when shutdown interrupts a suspended task.
+    batches.clear()
+    commits.clear()
+    runner._prefix_cache_prune_batch_iter = lambda *args: ModelRunner._prefix_cache_prune_batch_iter(runner, *args)
+    runner.prefix_cache_prune_batch_abort = lambda: ModelRunner.prefix_cache_prune_batch_abort(runner)
+    ModelRunner.prefix_cache_prune_batch_start(runner, jobs, [99])
+    assert ModelRunner.prefix_cache_prune_batch_step(runner) is None
+    assert len(batches) == 1 and not commits
+    assert all(b.ref_count == 1 for b in cache.blocks)
+    ModelRunner.prefix_cache_prune_batch_abort(runner)
+    assert all(b.ref_count == 0 for b in cache.blocks)
+    assert not commits
     batches.clear()
     commits.clear()
     def fail(requests):
@@ -313,29 +346,104 @@ def test_batched_reconstruction_round_robin_preserves_independent_budgets(rows, 
     assert all(b.ref_count == 0 for b in cache.blocks)
 
 
+@pytest.mark.parametrize("outcome", [{"result": {}}, {"error": "scoring failed"}])
+def test_terminal_jobs_release_inputs_and_bound_history(outcome, monkeypatch):
+    # P1: repeated maintenance must not retain every historical prompt.
+    import sparseengine.engine.llm_engine as engine_module
+    monkeypatch.setattr(engine_module, "PREFIX_PRUNE_HISTORY_LIMIT", 2)
+    engine = SimpleNamespace(
+        config=SimpleNamespace(sparse_method="", prefix_cache_block_size=1,
+                               enable_prefix_caching=True),
+        _prefix_prune_jobs={}, _pending_prefix_prune_ids=deque(),
+        tokenizer=SimpleNamespace(encode=lambda *args, **kwargs: [99]),
+    )
+    def call(method, *args):
+        if method == "prefix_cache_prune_batch_start":
+            call.steps = 0
+            return
+        assert method == "prefix_cache_prune_batch_step"
+        call.steps += 1
+        return None if call.steps == 1 else [outcome]
+    engine.model_runner = SimpleNamespace(call=call)
+    ids = []
+    for _ in range(4):
+        queued = LLMEngine.prefix_cache_prune_start(
+            engine, list(range(100)), ranges=[(0, 100)],
+            keep_tokens=1, policy="kvzip_global",
+        )
+        prune_id = queued["prune_id"]
+        ids.append(prune_id)
+        assert LLMEngine.run_pending_prefix_prune(engine)
+        assert LLMEngine.prefix_cache_prune_status(engine, prune_id)["status"] == "running"
+        assert LLMEngine.run_pending_prefix_prune(engine)
+        job = engine._prefix_prune_jobs[prune_id]
+        assert job.status == ("failed" if "error" in outcome else "completed")
+        assert not job.token_ids
+        assert not LLMEngine.run_pending_prefix_prune(engine)
+    assert list(engine._prefix_prune_jobs) == ids[-2:]
+
+
+def test_partitioned_query_scores_preserve_mean_before_head_maximum(monkeypatch):
+    # P0: reducing heads before accumulating query partitions changes the mask.
+    from sparseengine.engine.cache_manager.standard import StandardCacheManager
+    from sparseengine.engine.cache_manager.base import AttentionViewMeta, ExplicitKVPayload, PrefillComputeView
+    import sparseengine.engine.cache_manager.prefix_prune_scoring as scoring
+    torch.manual_seed(19)
+    q = torch.randn(259, 4, 16)
+    keys = torch.randn(20, 2, 16)
+    slots = torch.randperm(20, dtype=torch.int32).reshape(2, 10)
+    manager = object.__new__(StandardCacheManager)
+    state = dict(score=None, physical_window=(6, 265, 1))
+    manager._prefix_prune_scoring = dict(batch=[state])
+    calls = []
+    def oracle(queries, k, output, rows, b_start, lengths, cached, max_query,
+               table, q_start, q_end, **kwargs):
+        assert int(q_end[0] - q_start[0]) == len(queries)
+        assert int(cached[0]) == int(q_start[0])
+        lo, hi = kwargs["candidate_start"], int(lengths[0]) - kwargs["recent_keep_tokens"]
+        selected = k[table[int(rows[0]), lo:hi].long()].repeat_interleave(2, dim=1)
+        probabilities = torch.einsum("qhd,khd->hqk", queries, selected).div(4).softmax(-1)
+        output[0, :, lo:hi] = probabilities.mean(1)
+        calls.append(len(queries))
+    monkeypatch.setattr(scoring, "prefill_score_fwd", oracle)
+    view = PrefillComputeView(
+        meta=AttentionViewMeta(active_slots=slots, req_indices=torch.tensor([1]),
+                               context_lens=torch.tensor([265])),
+        payload=ExplicitKVPayload(k_cache=keys, v_cache=keys),
+    )
+    manager.collect_prefill_attention_score(
+        0, q, view, b_start_loc=torch.tensor([0]), chunk_lens=torch.tensor([259]),
+    )
+    selected = keys[slots[1, 1:6].long()].repeat_interleave(2, dim=1)
+    expected = torch.einsum("qhd,khd->hqk", q, selected).div(4).softmax(-1).mean(1).amax(0)
+    torch.testing.assert_close(state["score"][1:6], expected)
+    assert sum(calls) == len(q) and len(calls) > 1
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
-def test_explicit_kv_batched_scores_keep_row_normalizers_and_layer_maxima():
+@pytest.mark.parametrize("query_length", [3, 259])
+def test_explicit_kv_batched_scores_keep_row_normalizers_and_layer_maxima(query_length):
     from sparseengine.engine.cache_manager.standard import StandardCacheManager
     from sparseengine.engine.cache_manager.base import AttentionViewMeta, ExplicitKVPayload, PrefillComputeView
     torch.manual_seed(27)
-    q = torch.randn(5, 4, 64, device='cuda', dtype=torch.float16)
-    keys = torch.randn(20, 2, 64, device='cuda', dtype=torch.float16)
-    slots = torch.randperm(20, device='cuda', dtype=torch.int32).reshape(2,10)
+    q = torch.randn(query_length + 2, 4, 64, device='cuda', dtype=torch.float16)
+    keys = torch.randn(540, 2, 64, device='cuda', dtype=torch.float16)
+    slots = torch.randperm(540, device='cuda', dtype=torch.int32).reshape(2,270)
     rows = torch.tensor([1,0], device='cuda', dtype=torch.int32)
-    lengths = torch.tensor([7,9], device='cuda', dtype=torch.int32)
+    lengths = torch.tensor([4 + query_length,9], device='cuda', dtype=torch.int32)
     manager = object.__new__(StandardCacheManager)
-    states = [dict(score=None, physical_window=(4,7,1)), dict(score=None, physical_window=(7,9,3))]
+    states = [dict(score=None, physical_window=(4,4 + query_length,1)), dict(score=None, physical_window=(7,9,3))]
     manager._prefix_prune_scoring = dict(batch=states)
     view = PrefillComputeView(
         meta=AttentionViewMeta(active_slots=slots, req_indices=rows, context_lens=lengths),
         payload=ExplicitKVPayload(k_cache=keys, v_cache=keys),
     )
-    expected = [torch.zeros(7,device='cuda'), torch.zeros(9,device='cuda')]
+    expected = [torch.zeros(4 + query_length,device='cuda'), torch.zeros(9,device='cuda')]
     for query in (q, -q):
         manager.collect_prefill_attention_score(0, query, view,
-            b_start_loc=torch.tensor([0,3], device='cuda', dtype=torch.int32),
-            chunk_lens=torch.tensor([3,2], device='cuda', dtype=torch.int32))
-        for i, (a,b,lo,hi) in enumerate([(0,3,1,4),(3,5,3,7)]):
+            b_start_loc=torch.tensor([0,query_length], device='cuda', dtype=torch.int32),
+            chunk_lens=torch.tensor([query_length,2], device='cuda', dtype=torch.int32))
+        for i, (a,b,lo,hi) in enumerate([(0,query_length,1,4),(query_length,query_length+2,3,7)]):
             k = keys[slots[1-i,lo:hi].long()].float().repeat_interleave(2,dim=1)
             logits = torch.einsum('qhd,khd->hqk',query[a:b].float(),k) / 8
             score = logits.softmax(-1).mean(1).amax(0)

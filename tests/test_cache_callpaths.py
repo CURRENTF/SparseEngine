@@ -11,6 +11,105 @@ from sparseengine.platforms import device_runtime
 from test_radix_cache_contract import materialize, request
 
 
+@pytest.mark.parametrize("method", ["", "quest"], ids=["vanilla", "quest"])
+def test_prune_prefix_snapshot_releases_only_private_query_storage(method, monkeypatch):
+    """P0/P1: reusing a compacted prefix must not free shared KV or leak rows."""
+    from sparseengine.engine.cache_manager.prefix_prune_scoring import PrefixPrunePrefix
+    m = make_radix(method)
+    producer = materialize(m, [1, 2, 3, 4])
+    m.free_seq(producer.seq_id)
+    m.prefix_cache_prune([1, 2, 3, 4], ranges=[(0, 2)],
+                         keep_indices=torch.empty(0, dtype=torch.long),
+                         policy="kvzip_global", prune_id="ancestor")
+    cache = m.prefix_cache
+    blocks = cache.get_chain(cache.block_ids_for_tokens([1, 2, 3, 4])[-1], 2)
+    for block in blocks:
+        cache.acquire_block_ref(block)
+    prefix = PrefixPrunePrefix(blocks, logical_length=4, candidate_start=2)
+    def free_ids():
+        if method == "quest":
+            return set(m.free_pages_stack[:m._num_free_pages].tolist())
+        return set(m.free_slots_stack[:m._num_free_slots].tolist())
+    before = free_ids()
+    for _ in range(3):
+        seq = request([5, 6])
+        seq.num_tokens = seq.num_prompt_tokens = 6
+        seq.num_prefilled_tokens = 4
+        seq.current_chunk_size = 2
+        seq.prefix_cache_hit_len = 4
+        seq.prefix_cache_hit_block_count = 2
+        seq.prefix_cache_hit_last_block_id = blocks[-1].stable_block_id
+        seq.prefix_prune_prefix = prefix
+        inputs, positions, _ = m._prepare_prefill([seq])
+        if prefix.token_slots is None:
+            m.attach_prefix_prune_prefix(seq, prefix)
+            # Subsequent chunks must use the pinned snapshot without routing.
+            monkeypatch.setattr(cache, "get_chain", lambda *_: pytest.fail("repeated prefix traversal"))
+        assert inputs.tolist() == [5, 6] and positions.tolist() == [4, 5]
+        assert prefix.token_slots.numel() == 2
+        assert prefix.logical_positions.tolist() == [2, 3]
+        assert prefix.candidate_start == 0
+        row = m.seq_id_to_row[seq.seq_id]
+        torch.testing.assert_close(m.buffer_req_to_token_slots[row, :2], prefix.token_slots)
+        m.free_seq(seq.seq_id)
+        assert all(block.ref_count == 1 for block in blocks)
+        assert free_ids() == before
+        assert not m.seq_id_to_row
+    for block in blocks:
+        cache.release_block_ref(block)
+    m.reset_prefix_cache()
+    h = RadixHarness(m, paged=method == "quest")
+    assert len(h.observe().free) == h.observe().capacity
+
+
+@pytest.mark.parametrize("method", ["", "quest"], ids=["vanilla", "quest"])
+def test_prune_worker_reuses_prefix_and_commits_only_after_all_steps(method):
+    """P0/P1: the actual worker/allocator path must keep logical score positions."""
+    from sparseengine.engine.model_runner import ModelRunner
+    m = make_radix(method)
+    producer = materialize(m, [1, 2, 3, 4])
+    m.free_seq(producer.seq_id)
+    m._prefix_prune_scoring = None
+    m.config.max_model_len = 16
+    m.config.max_num_batched_tokens = m.config.engine_prefill_chunk_size = 4
+    m.config.max_num_seqs_in_batch = 1
+    def prepare(seqs, is_prefill):
+        assert is_prefill
+        ids, positions, _ = m._prepare_prefill(seqs)
+        assert len(ids) == len(positions) == 3
+        assert positions.tolist() == [4, 5, 6]
+        return ids, positions
+    observed = []
+    def model(ids, positions):
+        observed.append(ids.tolist())
+        for state in m._prefix_prune_scoring["batch"]:
+            state["score"] = torch.tensor([1., 3., 4., 2., 0., 0., 0.])
+    runner = object.__new__(ModelRunner)
+    runner.cache_manager = m
+    runner.config = m.config
+    runner.device = m.device
+    runner.prepare_step = prepare
+    runner.sparse_controller = SimpleNamespace(prepare_forward=lambda *args: None,
+                                              post_forward=lambda *args: None)
+    runner.runtime_state = SimpleNamespace(free_seq=m.free_seq)
+    runner.parallel_context = SimpleNamespace(world=SimpleNamespace(all_reduce=lambda *args, **kwargs: None))
+    runner.model = model
+    jobs = [dict(token_ids=[1, 2, 3, 4], ranges=[(0, 4)], keep_tokens=2,
+                 allow_recompress=False, score_chunk_size=2, prev_postfix_size=0, prune_id="worker")]
+    runner.prefix_cache_prune_batch_start(jobs, [99])
+    assert runner.prefix_cache_prune_batch_step() is None
+    assert not m.seq_id_to_row
+    assert all(block.payload.retained_offsets is None for block in m.prefix_cache.blocks.values())
+    assert runner.prefix_cache_prune_batch_step() is None
+    outcomes = runner.prefix_cache_prune_batch_step()
+    assert observed == [[99, 1, 2], [99, 3, 4]]
+    assert outcomes[0]["result"]["retained_tokens"] == 2
+    slots = [block.payload.retained_offsets for block in m.prefix_cache.blocks.values()]
+    assert slots == ([(), (0, 1)] if method == "quest" else [(1,), (0,)])
+    assert not m.seq_id_to_row
+    assert all(block.ref_count == 0 for block in m.prefix_cache.blocks.values())
+
+
 @pytest.mark.parametrize('method', RADIX_CASES, ids=lambda m: m or 'vanilla')
 def test_async_slot_snapshot_survives_allocator_reuse_and_discards_cancelled_records(method, monkeypatch):
     """Deferred publication owns frozen IDs even after the borrowed stack changes."""

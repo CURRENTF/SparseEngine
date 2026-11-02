@@ -1458,6 +1458,10 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
             return
         if seq.seq_id in self.seq_id_to_prefix_blocks:
             return
+        prepared = getattr(seq, "prefix_prune_prefix", None)
+        if prepared is not None and prepared.token_slots is not None:
+            self.attach_prefix_prune_prefix(seq, prepared)
+            return
         self._poll_prefix_offload()
         with profiler.record("prefix_cache_attach"):
             if seq.prefix_cache_hit_last_block_id is None:
@@ -2045,8 +2049,10 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
 
     def _attach_prefill_prefixes(self, seqs):
         # A promotion for an earlier request must not evict a later admitted hit.
+        # Maintenance snapshots already have their complete chains pinned.
         protected = {block.stable_block_id: block for seq in seqs
                      if seq.seq_id not in self.seq_id_to_prefix_blocks
+                     and getattr(seq, "prefix_prune_prefix", None) is None
                      for block in self._prefix_hit_chain(seq)}
         for block in protected.values():
             self.prefix_cache.acquire_block_ref(block)

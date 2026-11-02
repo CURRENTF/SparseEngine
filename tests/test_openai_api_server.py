@@ -2023,6 +2023,66 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(engine.kwargs["range_start"])
         self.assertIsNone(engine.kwargs["range_end"])
 
+    async def test_prefix_prune_yields_to_status_queries_and_finishes_without_new_requests(self):
+        """P1: maintenance must neither block controls nor wait for another wakeup."""
+        from collections import deque
+        from types import SimpleNamespace
+        from sparseengine.engine.llm_engine import LLMEngine
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
+
+        class Engine:
+            prefix_cache_prune_start = LLMEngine.prefix_cache_prune_start
+            prefix_cache_prune_status = LLMEngine.prefix_cache_prune_status
+            run_pending_prefix_prune = LLMEngine.run_pending_prefix_prune
+
+            def __init__(self):
+                self.config = SimpleNamespace(sparse_method="", prefix_cache_block_size=1,
+                                              enable_prefix_caching=True, max_num_seqs_in_batch=1,
+                                              attn_tp_size=1)
+                self.tokenizer = SimpleNamespace(encode=lambda *args, **kwargs: [99])
+                self._prefix_prune_jobs = {}
+                self._pending_prefix_prune_ids = deque()
+                self.model_runner = SimpleNamespace(call=self.call)
+                self.allow_finish = threading.Event()
+                self.finished = threading.Event()
+                self.steps = 0
+
+            def call(self, method, *args):
+                if method == "prefix_cache_prune_batch_start":
+                    return
+                if method == "prefix_cache_prune_batch_abort":
+                    return
+                assert method == "prefix_cache_prune_batch_step"
+                self.steps += 1
+                if not self.allow_finish.wait(.002):
+                    if self.steps > 1000:
+                        raise RuntimeError("Maintenance did not yield to status query.")
+                    return None
+                self.finished.set()
+                return [{"result": {"retained_tokens": 1}}]
+
+            def exit(self):
+                self.allow_finish.set()
+
+        engine = Engine()
+        dispatcher = AsyncEngineDispatcher(engine)
+        try:
+            queued = await asyncio.wait_for(dispatcher.control(
+                "prefix_cache_prune_start", token_ids=[1, 2, 3, 4], ranges=[(0, 4)],
+                keep_tokens=1, policy="kvzip_global",
+            ), timeout=2)
+            status = await asyncio.wait_for(dispatcher.control(
+                "prefix_cache_prune_status", prune_id=queued["prune_id"],
+            ), timeout=2)
+            self.assertEqual(status["status"], "running")
+            engine.allow_finish.set()
+            self.assertTrue(await asyncio.to_thread(engine.finished.wait, 2))
+            status = await dispatcher.control("prefix_cache_prune_status", prune_id=queued["prune_id"])
+            self.assertEqual(status["status"], "completed")
+        finally:
+            engine.allow_finish.set()
+            dispatcher.close()
+
     async def test_prefix_cache_match_accepts_chat_messages(self):
         from sparseengine.entrypoints.openai import api_server
 

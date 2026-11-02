@@ -194,6 +194,9 @@ PREFIX_CACHE_CONTROL_RPC_METHODS = {
     "prefix_cache_set_eviction_priority",
     "prefix_cache_prune",
     "prefix_cache_prune_batch",
+    "prefix_cache_prune_batch_start",
+    "prefix_cache_prune_batch_step",
+    "prefix_cache_prune_batch_abort",
 }
 DECODE_GRAPH_HOST_STATUS_SYNC_METHODS = {
     "begin_decode_cuda_graph_capture",
@@ -790,6 +793,7 @@ class ModelRunner:
 
     def exit(self):
         """释放资源并注销分布式进程组"""
+        self.prefix_cache_prune_batch_abort()
         guard = getattr(self, "_compilation_guard", None)
         if guard is not None:
             guard.close()
@@ -1476,11 +1480,12 @@ class ModelRunner:
         seqs, scoring, protected = [], [], {}
         for request in requests:
             token_ids = request["token_ids"]
+            prepared = request.get("prefix")
             prefix_hit_len = request["prefix_hit_len"]
             protected_prefix_len = request["protected_prefix_len"]
             candidate_start = request["candidate_start"]
             temp_seq_id = request["temp_seq_id"]
-            query_end = len(token_ids)
+            query_end = len(token_ids) + (prefix_hit_len if prepared is not None else 0)
             if query_end > int(self.config.max_model_len):
                 raise ValueError(
                     "prefix-prune scoring context exceeds max_model_len: "
@@ -1492,44 +1497,53 @@ class ModelRunner:
                     "prefix-prune score forward requires candidate tokens followed by queries: "
                     f"candidate_start={candidate_start} hit={prefix_hit_len} end={query_end}."
                 )
-            block_ids = prefix_cache.block_ids_for_tokens(
-                token_ids[:prefix_hit_len], max_tokens=prefix_hit_len
-            )
-            hit_len, last_block_id, hit_blocks = prefix_cache.match_longest_block_ids(
-                block_ids
-            )
-            if hit_len != prefix_hit_len or last_block_id is None:
-                raise RuntimeError(
-                    "prefix-prune score forward cannot attach the requested cached prefix: "
-                    f"requested={prefix_hit_len} matched={hit_len}."
-                )
-            protection_tokens = request.get("protected_token_ids")
-            if protection_tokens is not None:
-                protected_block_ids = prefix_cache.block_ids_for_tokens(
-                    protection_tokens, max_tokens=len(protection_tokens),
-                )
-                protected_hit, protected_last, protected_count = (
-                    prefix_cache.match_longest_block_ids(protected_block_ids)
-                )
-            elif protected_prefix_len == prefix_hit_len:
-                protected_hit, protected_last, protected_count = hit_len, last_block_id, hit_blocks
+            if prepared is not None:
+                hit_len = prefix_hit_len
+                hit_blocks = len(prepared.blocks)
+                last_block_id = prepared.blocks[-1].stable_block_id
+                protected_blocks = ()  # Already pinned by the maintenance iterator.
             else:
-                protected_block_ids = prefix_cache.block_ids_for_tokens(
-                    token_ids[:protected_prefix_len], max_tokens=protected_prefix_len
+                block_ids = prefix_cache.block_ids_for_tokens(
+                    token_ids[:prefix_hit_len], max_tokens=prefix_hit_len
                 )
-                protected_hit, protected_last, protected_count = (
-                    prefix_cache.match_longest_block_ids(protected_block_ids)
+                hit_len, last_block_id, hit_blocks = prefix_cache.match_longest_block_ids(
+                    block_ids
                 )
-            if protected_hit < protected_prefix_len or protected_last is None:
-                raise RuntimeError(
-                    "prefix-prune target changed before its scoring forward: "
-                    f"protected={protected_prefix_len} matched={protected_hit}."
+                if hit_len != prefix_hit_len or last_block_id is None:
+                    raise RuntimeError(
+                        "prefix-prune score forward cannot attach the requested cached prefix: "
+                        f"requested={prefix_hit_len} matched={hit_len}."
+                    )
+                protection_tokens = request.get("protected_token_ids")
+                if protection_tokens is not None:
+                    protected_block_ids = prefix_cache.block_ids_for_tokens(
+                        protection_tokens, max_tokens=len(protection_tokens),
+                    )
+                    protected_hit, protected_last, protected_count = (
+                        prefix_cache.match_longest_block_ids(protected_block_ids)
+                    )
+                elif protected_prefix_len == prefix_hit_len:
+                    protected_hit, protected_last, protected_count = hit_len, last_block_id, hit_blocks
+                else:
+                    protected_block_ids = prefix_cache.block_ids_for_tokens(
+                        token_ids[:protected_prefix_len], max_tokens=protected_prefix_len
+                    )
+                    protected_hit, protected_last, protected_count = (
+                        prefix_cache.match_longest_block_ids(protected_block_ids)
+                    )
+                if protected_hit < protected_prefix_len or protected_last is None:
+                    raise RuntimeError(
+                        "prefix-prune target changed before its scoring forward: "
+                        f"protected={protected_prefix_len} matched={protected_hit}."
+                    )
+                protected_blocks = prefix_cache.get_chain(
+                    protected_last, protected_count
                 )
-            protected_blocks = prefix_cache.get_chain(
-                protected_last, protected_count
-            )
             seq = Sequence([int(token_id) for token_id in token_ids])
             seq.seq_id = int(temp_seq_id)
+            if prepared is not None:
+                seq.num_tokens = seq.num_prompt_tokens = query_end
+                seq.prefix_prune_prefix = prepared
             seq.num_prefilled_tokens = int(prefix_hit_len)
             seq.current_chunk_size = query_end - prefix_hit_len
             seq.prefix_cache_enabled = True
@@ -1550,6 +1564,21 @@ class ModelRunner:
                 acquired.append(block)
             manager.begin_prefix_prune_scoring_batch(scoring)
             input_ids, positions = self.prepare_step(seqs, True)
+            for seq, request, state in zip(seqs, requests, manager._prefix_prune_scoring["batch"], strict=True):
+                prefix = request.get("prefix")
+                if prefix is None:
+                    continue
+                if prefix.token_slots is None:
+                    manager.attach_prefix_prune_prefix(seq, prefix)
+                start = int(prefix.token_slots.numel())
+                length = int(seq.current_chunk_size)
+                state["physical_window"] = (start, start + length, prefix.candidate_start)
+                if prefix.logical_positions is not None:
+                    state["logical_positions"] = torch.cat((
+                        prefix.logical_positions,
+                        torch.arange(prefix.logical_length, prefix.logical_length + length,
+                                     dtype=torch.long, device=self.device),
+                    ))
             ctx = get_context()
             ctx.sparse_controller = self.sparse_controller
             self.sparse_controller.prepare_forward(seqs, True)
@@ -1631,32 +1660,14 @@ class ModelRunner:
                 # The mask is known without reconstruction when everything is dropped.
                 keep_indices = torch.empty(0, dtype=torch.long, device=self.device)
             else:
-                replay_prefix = [int(token_id) for token_id in (kvzip_replay_prefix_ids or [])]
-                if not replay_prefix:
-                    raise ValueError("KVzip prefix pruning requires non-empty replay prompt token ids.")
-                score_chunk_size = max(1, int(score_chunk_size))
-                prev_postfix_size = max(0, int(prev_postfix_size))
-                aggregate = torch.zeros((width,), dtype=torch.float32, device=self.device)
-                chunk_number = 0
-                cached_prefix = token_ids[:range_end]
-                for left, right in intervals:
-                    for start in range(left, right, score_chunk_size):
-                        end = min(right, start + score_chunk_size)
-                        previous = token_ids[max(left, start - prev_postfix_size) : start]
-                        replay_ids = replay_prefix + previous + token_ids[start:end]
-                        step_score = self._prefix_prune_score_forward(
-                            token_ids=cached_prefix + replay_ids,
-                            prefix_hit_len=range_end, protected_prefix_len=range_end,
-                            candidate_start=range_start, temp_seq_id=temp_seq_id - chunk_number,
-                            protected_token_ids=token_ids,
-                        )
-                        packed = torch.cat([step_score[l:r] for l, r in intervals])
-                        torch.maximum(aggregate, packed, out=aggregate)
-                        chunk_number += 1
-                self.parallel_context.world.all_reduce(aggregate, op=dist.ReduceOp.MAX)
-                keep_indices = self.cache_manager.select_prefix_prune_keep_indices(
-                    aggregate, keep_tokens=keep_tokens,
-                )
+                outcomes = ModelRunner.prefix_cache_prune_batch(self, [dict(
+                    token_ids=token_ids, ranges=intervals, keep_tokens=keep_tokens,
+                    allow_recompress=allow_recompress, score_chunk_size=max(1, int(score_chunk_size)),
+                    prev_postfix_size=max(0, int(prev_postfix_size)), prune_id=prune_id,
+                )], list(kvzip_replay_prefix_ids or []))
+                if "error" in outcomes[0]:
+                    raise RuntimeError(outcomes[0]["error"])
+                return outcomes[0]["result"]
         else:
             raise ValueError(f"unsupported prefix prune policy: {policy!r}.")
 
@@ -1668,8 +1679,45 @@ class ModelRunner:
     @torch.no_grad()
     @cpu_timing.timed
     def prefix_cache_prune_batch(self, jobs, replay_prefix):
-        """Score independent jobs round-robin, filling spare rows with more chunks."""
+        iterator = ModelRunner._prefix_cache_prune_batch_iter(self, jobs, replay_prefix)
+        try:
+            while True:
+                next(iterator)
+        except StopIteration as done:
+            return done.value
+        finally:
+            iterator.close()
+
+    def prefix_cache_prune_batch_start(self, jobs, replay_prefix):
+        if getattr(self, "_prefix_prune_iterator", None) is not None:
+            raise RuntimeError("Another prefix-prune batch is already running.")
+        self._prefix_prune_iterator = self._prefix_cache_prune_batch_iter(jobs, replay_prefix)
+
+    @torch.no_grad()
+    def prefix_cache_prune_batch_step(self):
+        iterator = getattr(self, "_prefix_prune_iterator", None)
+        if iterator is None:
+            raise RuntimeError("No prefix-prune batch is running.")
+        try:
+            next(iterator)
+        except StopIteration as done:
+            self._prefix_prune_iterator = None
+            return done.value
+        except BaseException:
+            self.prefix_cache_prune_batch_abort()
+            raise
+        return None
+
+    def prefix_cache_prune_batch_abort(self):
+        iterator = getattr(self, "_prefix_prune_iterator", None)
+        self._prefix_prune_iterator = None
+        if iterator is not None:
+            iterator.close()
+
+    def _prefix_cache_prune_batch_iter(self, jobs, replay_prefix):
+        """Yield only after a complete forward has released its temporary rows."""
         from collections import deque
+        from sparseengine.engine.cache_manager.prefix_prune_scoring import PrefixPrunePrefix
 
         manager = self.cache_manager
         cache = manager.prefix_cache
@@ -1695,7 +1743,6 @@ class ModelRunner:
                 if affected_ids.intersection(ids):
                     raise RuntimeError("Overlapping prune targets cannot share a scoring batch.")
                 end = intervals[-1][1]
-                prefix = job["token_ids"][:end]
                 # Preserve the complete cached route, including non-candidate
                 # tails which the caller will reuse after pruning.
                 block_ids = cache.block_ids_for_tokens(
@@ -1715,8 +1762,10 @@ class ModelRunner:
                     max_query = max(len(replay_prefix) + stop - prev for prev, stop in chunks)
                     if end + max_query > self.config.max_model_len:
                         raise ValueError("Prefix-prune scoring context exceeds max_model_len.")
-                state = dict(index=index, job=job, intervals=intervals, prefix=prefix,
-                             prefix_blocks=chain[:end // block_size],
+                prefix_blocks = chain[:end // block_size]
+                state = dict(index=index, job=job, intervals=intervals,
+                             prefix=PrefixPrunePrefix(prefix_blocks, end, intervals[0][0]),
+                             prefix_blocks=prefix_blocks,
                              chunks=chunks, forwards=0, max_batch=0,
                              aggregate=torch.zeros(sum(r-l for l,r in intervals),
                                                    dtype=torch.float32, device=self.device))
@@ -1746,8 +1795,8 @@ class ModelRunner:
                         break
                     pending.popleft()
                     owner["chunks"].popleft()
-                    end = len(owner["prefix"])
-                    requests.append(dict(token_ids=owner["prefix"] + replay,
+                    end = owner["prefix"].logical_length
+                    requests.append(dict(token_ids=replay, prefix=owner["prefix"],
                                          prefix_hit_len=end, protected_prefix_len=end,
                                          candidate_start=owner["intervals"][0][0],
                                          temp_seq_id=next_seq_id))
@@ -1756,9 +1805,10 @@ class ModelRunner:
                     query_tokens += len(replay)
                     if owner["chunks"]:
                         pending.append(owner)
-                reservation = [(r["temp_seq_id"], len(r["token_ids"]) - r["prefix_hit_len"])
+                reservation = [(r["temp_seq_id"], len(r["token_ids"]))
                                for r in requests]
-                prefix_blocks = {r["temp_seq_id"]: owner["prefix_blocks"]
+                prefix_blocks = {r["temp_seq_id"]: (owner["prefix_blocks"]
+                                                  if owner["prefix"].token_slots is None else ())
                                  for r, (owner, _) in zip(requests, owners, strict=True)}
                 with manager.reserve_prefill_slots(reservation, prefix_blocks=prefix_blocks) as admitted:
                     # Return unadmitted chunks in their original per-task order.
@@ -1774,6 +1824,8 @@ class ModelRunner:
                     torch.maximum(owner["aggregate"], packed, out=owner["aggregate"])
                     owner["forwards"] += 1
                     owner["max_batch"] = max(owner["max_batch"], len(requests))
+                del requests, scores, owners, score, packed
+                yield
         finally:
             for block in acquired:
                 cache.release_block_ref(block)

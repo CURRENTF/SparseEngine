@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 from bisect import bisect_left
+from dataclasses import dataclass
 
 import torch
 
-from sparseengine.kernels.triton.prefill_score import prefill_score_fwd
+from sparseengine.engine.prefix_cache import PrefixCacheBlock
+from sparseengine.kernels.triton.prefill_score import PrefillScoreWorkspace, prefill_score_fwd
 
 from .base import ExplicitKVPayload, PrefillComputeView, PrefillScoreRequest
+
+
+@dataclass
+class PrefixPrunePrefix:
+    # The maintenance iterator owns block refs until every scoring step ends.
+    blocks: list[PrefixCacheBlock]
+    logical_length: int
+    candidate_start: int
+    token_slots: torch.Tensor | None = None
+    page_slots: torch.Tensor | None = None
+    cached_pages: frozenset[int] = frozenset()
+    logical_positions: torch.Tensor | None = None
 
 
 class PrefixPruneScoringMixin:
@@ -14,6 +28,38 @@ class PrefixPruneScoringMixin:
 
     def _prefix_prune_prefix_logical_positions(self, seq_id: int) -> list[int]:
         raise NotImplementedError
+
+    def attach_prefix_prune_prefix(self, seq, prefix: PrefixPrunePrefix) -> None:
+        if prefix.token_slots is None:
+            self._attach_prefix_cache_if_needed(seq)
+            row = self.seq_id_to_row[seq.seq_id]
+            size = int(self.row_seq_lens[row]) - int(seq.current_chunk_size)
+            prefix.token_slots = self.buffer_req_to_token_slots[row, :size].clone()
+            if hasattr(self, "seq_id_to_cached_pages"):
+                prefix.cached_pages = frozenset(self.seq_id_to_cached_pages[seq.seq_id])
+                prefix.page_slots = self.buffer_req_to_page_slots[row, :len(prefix.cached_pages)].clone()
+            if size != prefix.logical_length:
+                positions = self._prefix_prune_prefix_logical_positions(seq.seq_id)
+                prefix.candidate_start = bisect_left(positions, prefix.candidate_start)
+                prefix.logical_positions = torch.tensor(positions, dtype=torch.long, device=self.device)
+            return
+        row = self._get_free_row(seq.seq_id)
+        if int(self.row_seq_lens[row]) != 0:
+            raise RuntimeError("Prefix-prune attachment requires an empty cache row.")
+        size = int(prefix.token_slots.numel())
+        self.buffer_req_to_token_slots[row, :size].copy_(prefix.token_slots)
+        if prefix.page_slots is None:
+            self.seq_id_to_cached_ranges[seq.seq_id] = [(0, size)] if size else []
+        else:
+            self.buffer_req_to_page_slots[row, :prefix.page_slots.numel()].copy_(prefix.page_slots)
+            self.seq_id_to_cached_pages[seq.seq_id] = prefix.cached_pages
+        self.row_seq_lens[row] = size
+        self.row_logical_lens[row] = prefix.logical_length
+        self.seq_id_to_prefix_blocks[seq.seq_id] = prefix.blocks
+        borrowed = getattr(self, "_prefix_prune_borrowed_seqs", None)
+        if borrowed is None:
+            borrowed = self._prefix_prune_borrowed_seqs = set()
+        borrowed.add(seq.seq_id)
 
     def begin_prefix_prune_scoring(
         self,
@@ -150,18 +196,34 @@ class PrefixPruneScoringMixin:
                     raise RuntimeError("Prefix-prune score shape does not match physical context.")
                 score = view.token_scores[i, :end]
             else:
-                step_score = torch.zeros((1, end), dtype=torch.float32, device=q.device)
-                starts = torch.tensor([start], dtype=torch.int32, device=q.device)
-                prefill_score_fwd(
-                    q[offset:offset + length], view.payload.k_cache, step_score,
-                    view.meta.req_indices[i:i + 1], torch.zeros_like(starts),
-                    view.meta.context_lens[i:i + 1], starts, length,
-                    view.meta.active_slots, starts,
-                    torch.tensor([end], dtype=torch.int32, device=q.device),
-                    candidate_start=candidate, recent_keep_tokens=length,
-                    score_mode="probability",
-                )
-                score = step_score[0]
+                workspace = getattr(self, "_prefix_prune_score_workspace", None)
+                if workspace is None:
+                    workspace = self._prefix_prune_score_workspace = PrefillScoreWorkspace()
+                # Sum query means per head before taking the head maximum.
+                # Splitting after that maximum would change the shared mask.
+                heads = q.shape[1]
+                total = (torch.zeros((1, heads, end), dtype=torch.float32, device=q.device)
+                         if length > 128 else None)
+                part = torch.empty((1, end) if total is None else total.shape,
+                                   dtype=torch.float32, device=q.device)
+                for query_offset in range(0, length, 128):
+                    count = min(128, length - query_offset)
+                    query_start = start + query_offset
+                    starts = torch.tensor([query_start], dtype=torch.int32, device=q.device)
+                    part.zero_()
+                    prefill_score_fwd(
+                        q[offset + query_offset:offset + query_offset + count],
+                        view.payload.k_cache, part,
+                        view.meta.req_indices[i:i + 1], torch.zeros_like(starts),
+                        view.meta.context_lens[i:i + 1], starts, count,
+                        view.meta.active_slots, starts,
+                        torch.tensor([query_start + count], dtype=torch.int32, device=q.device),
+                        candidate_start=candidate, recent_keep_tokens=length,
+                        score_mode="probability", workspace=workspace,
+                    )
+                    if total is not None:
+                        total.add_(part, alpha=count / length)
+                score = total.amax(dim=1)[0] if total is not None else part[0]
             accumulated = item.get("score")
             if accumulated is None:
                 item["score"] = score.clone()

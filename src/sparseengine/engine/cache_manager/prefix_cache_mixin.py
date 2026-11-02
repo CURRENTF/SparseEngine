@@ -555,6 +555,10 @@ class PrefixCacheMixin:
         return their private slots/pages first; the index keeps shared payloads.
         """
         released = self.seq_id_to_prefix_blocks.pop(seq_id, [])
+        borrowed = getattr(self, "_prefix_prune_borrowed_seqs", None)
+        if borrowed is not None and seq_id in borrowed:
+            borrowed.remove(seq_id)
+            released = []
         materialized = self.seq_id_to_materialized_blocks.pop(seq_id, None)
         if materialized:
             released.extend(materialized.values())

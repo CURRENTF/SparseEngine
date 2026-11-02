@@ -49,6 +49,7 @@ from sparseengine.multimodal.inputs import (
 )
 from sparseengine.engine.prefix_cache import PrefixCacheRoutingSnapshot
 from sparseengine.engine.prefix_prune import (
+    PREFIX_PRUNE_HISTORY_LIMIT,
     PrefixPruneJob,
     normalize_prefix_prune_ranges,
     validate_prefix_prune_request,
@@ -324,6 +325,8 @@ class LLMEngine:
         self._pending_slot_releases: set[int] = set()
         self._prefix_prune_jobs: dict[str, PrefixPruneJob] = {}
         self._pending_prefix_prune_ids: deque[str] = deque()
+        self._running_prefix_prune_jobs: list[PrefixPruneJob] = []
+        self._finished_prefix_prune_ids: deque[str] = deque()
         # 注册退出钩子，确保程序崩溃或结束时能正确释放多进程资源
         self._atexit_callback = self.exit
         atexit.register(self._atexit_callback)
@@ -1388,47 +1391,55 @@ class LLMEngine:
 
     @cpu_timing.timed
     def run_pending_prefix_prune(self) -> bool:
-        if not self._pending_prefix_prune_ids:
+        jobs = getattr(self, "_running_prefix_prune_jobs", [])
+        if not jobs and not self._pending_prefix_prune_ids:
             return False
         asynchronous = getattr(self, "_async_scheduler", None)
         if asynchronous is not None and asynchronous.pending:
-            # Dispatcher keeps publishing retired outputs while the async
-            # scheduler drains; maintenance must not discard device feedback.
             return False
-        first = self._prefix_prune_jobs[self._pending_prefix_prune_ids[0]]
-        jobs = [self._prefix_prune_jobs[self._pending_prefix_prune_ids.popleft()]]
-        replay_prefix_ids = None
-        payloads = []
-        if first.policy == "kvzip_global":
-            replay_prefix_ids = list(self.tokenizer.encode(
-                "\nReconstruct the following context span exactly:\n", add_special_tokens=False,
-            ))
-            def payload(job):
-                return dict(token_ids=job.token_ids, ranges=job.ranges or [(job.range_start, job.range_end)],
-                            keep_tokens=job.keep_tokens, allow_recompress=job.allow_recompress,
-                            score_chunk_size=job.score_chunk_size, prev_postfix_size=job.prev_postfix_size,
-                            prune_id=job.prune_id)
-            payloads.append(payload(first))
-            # Bound the actual serialized TP command, not an estimate by token count.
-            from sparseengine.engine.model_runner import TP_SHM_SIZE
-            while self._pending_prefix_prune_ids and len(jobs) < self.config.max_num_seqs_in_batch:
-                candidate = self._prefix_prune_jobs[self._pending_prefix_prune_ids[0]]
-                if candidate.policy != "kvzip_global":
-                    break
-                item = payload(candidate)
-                encoded = pickle.dumps(["prefix_cache_prune_batch", payloads + [item], replay_prefix_ids])
-                if len(encoded) + 4 + self.config.attn_tp_size > TP_SHM_SIZE:
-                    break
-                self._pending_prefix_prune_ids.popleft()
-                jobs.append(candidate)
-                payloads.append(item)
-        for job in jobs:
-            job.status = "running"
-            job.started_at = time.time()
+        continuing = bool(jobs)
+        if continuing:
+            first = jobs[0]
+        else:
+            first = self._prefix_prune_jobs[self._pending_prefix_prune_ids[0]]
+            jobs = [self._prefix_prune_jobs[self._pending_prefix_prune_ids.popleft()]]
+            replay_prefix_ids = None
+            payloads = []
+            if first.policy == "kvzip_global":
+                replay_prefix_ids = list(self.tokenizer.encode(
+                    "\nReconstruct the following context span exactly:\n", add_special_tokens=False,
+                ))
+                def payload(job):
+                    return dict(token_ids=job.token_ids, ranges=job.ranges or [(job.range_start, job.range_end)],
+                                keep_tokens=job.keep_tokens, allow_recompress=job.allow_recompress,
+                                score_chunk_size=job.score_chunk_size, prev_postfix_size=job.prev_postfix_size,
+                                prune_id=job.prune_id)
+                payloads.append(payload(first))
+                # Bound the actual serialized TP command, not an estimate by token count.
+                from sparseengine.engine.model_runner import TP_SHM_SIZE
+                while self._pending_prefix_prune_ids and len(jobs) < self.config.max_num_seqs_in_batch:
+                    candidate = self._prefix_prune_jobs[self._pending_prefix_prune_ids[0]]
+                    if candidate.policy != "kvzip_global":
+                        break
+                    item = payload(candidate)
+                    encoded = pickle.dumps(["prefix_cache_prune_batch_start", payloads + [item], replay_prefix_ids])
+                    if len(encoded) + 4 + self.config.attn_tp_size > TP_SHM_SIZE:
+                        break
+                    self._pending_prefix_prune_ids.popleft()
+                    jobs.append(candidate)
+                    payloads.append(item)
+            for job in jobs:
+                job.status = "running"
+                job.started_at = time.time()
+            self._running_prefix_prune_jobs = jobs
         diagnostic_start = perf_counter() if cpu_timing.interval_ns else None
         try:
             if first.policy == "kvzip_global":
-                outcomes = self.model_runner.call("prefix_cache_prune_batch", payloads, replay_prefix_ids)
+                if not continuing:
+                    self.model_runner.call("prefix_cache_prune_batch_start", payloads, replay_prefix_ids)
+                outcomes = self.model_runner.call("prefix_cache_prune_batch_step")
+                if outcomes is None:
+                    return True
             else:
                 result = self.model_runner.call(
                     "prefix_cache_prune", first.token_ids,
@@ -1446,29 +1457,44 @@ class LLMEngine:
                 job.error = outcome.get("error")
                 job.status = "failed" if job.error else "completed"
         except Exception as exc:
+            if first.policy == "kvzip_global":
+                # A TP peer can fail after this rank yielded; close on every rank.
+                self.model_runner.call("prefix_cache_prune_batch_abort")
             for job in jobs:
                 job.error = f"{type(exc).__name__}: {exc}"
                 job.status = "failed"
         finally:
-            for job in jobs:
-                if job.error:
-                    message = job.error.lower()
-                    if any(word in message for word in ("idle", "referenced", "in-flight")):
-                        job.status = "blocked"
-                    logger.error("Prefix prune job {} {}: {}", job.prune_id, job.status, job.error)
-                job.finished_at = time.time()
-                if diagnostic_start is not None:
-                    logger.info("prefix_prune_timing {}", json.dumps({
-                        "prune_id": job.prune_id, "status": job.status,
-                        "queue_s": job.started_at - job.created_at,
-                        "execution_wall_s": perf_counter() - diagnostic_start,
-                        "logical_tokens": len(job.token_ids),
-                        "candidate_tokens": sum(r - l for l, r in (
-                            job.ranges or [(job.range_start, job.range_end)])),
-                        "keep_tokens": job.keep_tokens, "batch_jobs": len(jobs),
-                        "pending_prunes": len(self._pending_prefix_prune_ids),
-                        **self.worker_routing_load(),
-                    }, separators=(",", ":")))
+            if diagnostic_start is not None:
+                elapsed = perf_counter() - diagnostic_start
+                for job in jobs:
+                    job.execution_wall_s += elapsed
+        self._running_prefix_prune_jobs = []
+        finished = getattr(self, "_finished_prefix_prune_ids", None)
+        if finished is None:
+            finished = self._finished_prefix_prune_ids = deque()
+        for job in jobs:
+            if job.error:
+                message = job.error.lower()
+                if any(word in message for word in ("idle", "referenced", "in-flight")):
+                    job.status = "blocked"
+                logger.error("Prefix prune job {} {}: {}", job.prune_id, job.status, job.error)
+            job.finished_at = time.time()
+            if diagnostic_start is not None:
+                logger.info("prefix_prune_timing {}", json.dumps({
+                    "prune_id": job.prune_id, "status": job.status,
+                    "queue_s": job.started_at - job.created_at,
+                    "execution_wall_s": job.execution_wall_s,
+                    "logical_tokens": len(job.token_ids),
+                    "candidate_tokens": sum(r - l for l, r in (
+                        job.ranges or [(job.range_start, job.range_end)])),
+                    "keep_tokens": job.keep_tokens, "batch_jobs": len(jobs),
+                    "pending_prunes": len(self._pending_prefix_prune_ids),
+                    **self.worker_routing_load(),
+                }, separators=(",", ":")))
+            job.token_ids = []
+            finished.append(job.prune_id)
+            while len(finished) > PREFIX_PRUNE_HISTORY_LIMIT:
+                del self._prefix_prune_jobs[finished.popleft()]
         return True
 
     def debug_sparse_state_summaries(self, synchronize: bool = False) -> list[dict[str, object]]:

@@ -27,6 +27,10 @@ Content-Type: application/json
 跨 TP rank 汇总分数，得到一个确定性的统一 mask。QuEST 会先完成 rank 间归并，
 再聚合 page 分数并选择 page。
 
+KVzip 重建在评分 batch 之间归还调度器，允许其他请求和控制操作继续执行。
+单个评分 batch 仍会占用执行时间；分块不会消除完整前缀重建的总 attention 开销。
+服务只保留最近 128 个终态任务的查询记录，较早的任务 ID 会过期。
+
 `kvzip_global` 是旧的 token 共享 prefix 维护策略，使用 query 平均分并跨层汇总；
 它与原生 `kvzip` 的 query-agnostic、layer 独立重建语义不同。
 

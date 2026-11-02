@@ -28,6 +28,12 @@ The endpoint returns HTTP 202 with a `prune_id`. Query
 layers, heads, and tensor-parallel ranks into one deterministic mask. For
 QuEST, rank reduction happens before page scores are summed and selected.
 
+KVzip reconstruction returns control to the scheduler between scoring batches,
+allowing other requests and control operations to progress. Each scoring batch
+still occupies execution time; chunking does not remove the total attention
+cost of reconstructing the full prefix. Status queries retain the latest 128
+terminal jobs; older job IDs expire.
+
 `kvzip_global` is a legacy token-shared prefix-maintenance policy with
 query-averaged scores reduced across layers. It does not implement native
 `kvzip`'s query-agnostic, layer-specific reconstruction contract.

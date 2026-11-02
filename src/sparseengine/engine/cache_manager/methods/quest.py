@@ -1741,6 +1741,10 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             return
         if seq.seq_id in self.seq_id_to_prefix_blocks:
             return
+        prepared = getattr(seq, "prefix_prune_prefix", None)
+        if prepared is not None and prepared.token_slots is not None:
+            self.attach_prefix_prune_prefix(seq, prepared)
+            return
         self._poll_prefix_offload()
         with profiler.record("quest_prefix_cache_attach"):
             if seq.prefix_cache_hit_last_block_id is None:
@@ -2256,9 +2260,11 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             num_pages = (cur_len + self.page_size - 1) // self.page_size
             cached_pages = self.seq_id_to_cached_pages.pop(seq_id, set())
             if num_pages > 0:
+                # Maintenance snapshots always cover a contiguous page prefix.
+                borrowed = seq_id in getattr(self, "_prefix_prune_borrowed_seqs", ())
                 private_pages = [
                     page_idx
-                    for page_idx in range(num_pages)
+                    for page_idx in range(len(cached_pages) if borrowed else 0, num_pages)
                     if page_idx not in cached_pages
                 ]
                 if private_pages:

@@ -9,6 +9,7 @@ import torch
 
 PrefixPrunePolicy = Literal["snapkv_global", "kvzip_global"]
 PrefixPruneStatus = Literal["queued", "running", "completed", "blocked", "failed"]
+PREFIX_PRUNE_HISTORY_LIMIT = 128
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class PrefixPruneJob:
     created_at: float = 0.0
     started_at: float | None = None
     finished_at: float | None = None
+    execution_wall_s: float = 0.0
     result: dict[str, object] | None = None
     error: str | None = None
     ranges: list[tuple[int, int]] | None = None

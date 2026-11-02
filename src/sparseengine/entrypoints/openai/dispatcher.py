@@ -514,12 +514,14 @@ class AsyncEngineDispatcher:
                 run_prefix_prune = getattr(
                     self.engine, "run_pending_prefix_prune", None
                 )
-                if callable(run_prefix_prune):
-                    run_prefix_prune()
+                prune_progress = callable(run_prefix_prune) and run_prefix_prune()
                 if self._drain_aborts(active):
                     self._refresh_routing_snapshots()
                 if not active:
-                    item = self._pending.get()
+                    try:
+                        item = self._pending.get_nowait() if prune_progress else self._pending.get()
+                    except queue.Empty:
+                        continue
                     if item is None:
                         break
                     if item is _WAKEUP:
