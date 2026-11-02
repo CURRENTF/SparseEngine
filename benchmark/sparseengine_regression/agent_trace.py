@@ -17,7 +17,7 @@ from pathlib import Path
 import re
 import time
 
-from benchmark.efficiency.metrics import http_trace_summary
+from benchmark.efficiency.metrics import http_trace_summary, request_metrics, request_summary
 from benchmark.swe_bench_lite.agent_trace import SCHEMA
 
 
@@ -304,6 +304,59 @@ def post_with_chain_recovery(client, url, body):
     return response.json(), recovered
 
 
+def post_streamed_replay(client, url, body):
+    """Time client-visible output, ignoring the initial role-only SSE chunk.
+
+    The first content/reasoning/tool delta includes the server parser's buffering;
+    this HTTP observation boundary is distinct from an engine token timestamp.
+    """
+    body = {**body, "stream": True, "stream_options": {"include_usage": True}}
+    started = time.perf_counter()
+    first_token = None
+    usage = None
+    done = False
+    finish_reason = None
+    text = []
+    result = {}
+    with client.stream("POST", url, json=body) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            if not line or line.startswith(":"):
+                continue
+            if not line.startswith("data: "):
+                raise ValueError(f"Unexpected replay SSE line: {line[:200]}")
+            payload = line[6:]
+            if payload == "[DONE]":
+                done = True
+                break
+            chunk = json.loads(payload)
+            if chunk.get("object") == "error" or "error" in chunk:
+                raise RuntimeError(f"Replay stream failed: {chunk}")
+            for key in ("id", "chain_id", "chain_status"):
+                if chunk.get(key) is not None:
+                    result[key] = chunk[key]
+            if chunk.get("usage") is not None:
+                usage = chunk["usage"]
+            for choice in chunk.get("choices", []):
+                delta = choice.get("delta") or {}
+                if any(value for key, value in delta.items() if key != "role") and first_token is None:
+                    first_token = time.perf_counter()
+                if delta.get("content"):
+                    text.append(delta["content"])
+                if choice.get("finish_reason"):
+                    finish_reason = choice["finish_reason"]
+    finished = time.perf_counter()
+    if not done or usage is None or first_token is None or finish_reason is None:
+        raise ValueError("Incomplete replay stream: need token publication, usage, finish and DONE")
+    result.update(usage=usage, choices=[{"index": 0, "message": {
+        "role": "assistant", "content": "".join(text)}, "finish_reason": finish_reason}],
+        benchmark_request_metrics={
+            **request_metrics(first_token - started, finished - first_token,
+                              positive_count(usage["completion_tokens"])),
+            "timing_source": "client_http_first_output_delta_to_done_v1"})
+    return result
+
+
 def prepare_forced_agent(agent, tokenizer, model):
     """Derive exact target-model output tokens from adjacent recorded prompts."""
     from sparseengine.engine.input_processor import tokenize_text_prompt
@@ -376,9 +429,13 @@ def replay_agent(agent, send, *, sleep=time.sleep, clock=time.perf_counter,
             if not response.get("choices") or tokens != turn["completion_tokens"]:
                 raise ValueError(f"Response/token work mismatch: expected {turn['completion_tokens']}, got {tokens}")
             row.update(status="success", latency_s=elapsed, completion_tokens=tokens, response=response)
+            if "benchmark_request_metrics" in response:
+                row.update(response.pop("benchmark_request_metrics"))
             if after_turn is not None:
                 prune_start = clock()
-                after_turn(turn)
+                maintenance = after_turn(turn)
+                if maintenance is not None:
+                    row["prefix_cache_residency"] = maintenance
                 row["prefix_prune_elapsed_s"] = clock() - prune_start
         except Exception as exc:
             error_response = getattr(exc, "response", None)
@@ -424,6 +481,11 @@ def run_replay(args):
     keep_ratio = getattr(args, "agent_prefix_prune_keep_ratio", None)
     tokenizer_path = getattr(args, "agent_prefix_prune_tokenizer", None)
     trigger_tokens = getattr(args, "agent_prefix_prune_trigger_tokens", 8192)
+    prune_lag = getattr(args, "agent_prefix_prune_tool_result_lag", 0)
+    stream = getattr(args, "agent_stream", False)
+    measure_residency = getattr(args, "agent_measure_prefix_residency", False)
+    if prune_lag < 0:
+        raise ValueError("Prefix-prune tool-result lag must be nonnegative")
     if trigger_tokens <= 0:
         raise ValueError("agent_prefix_prune_trigger_tokens must be positive")
     if not math.isfinite(think_scale) or think_scale < 0:
@@ -499,12 +561,18 @@ def run_replay(args):
                 "model_config": server.get("model_config"), "concurrency": args.agent_concurrency,
                 "gpu_uuids": gpu_ids, "engine_kwargs": server["engine_kwargs"], "backend": server.get("backend"),
                 "protocol": protocol,
-                "timing_boundary": "client_http_nonstreaming", "request_timeout_s": args.agent_request_timeout}
+                "timing_boundary": ("client_http_first_output_delta_to_done_v1" if stream
+                                    else "client_http_nonstreaming"),
+                "request_timeout_s": args.agent_request_timeout}
+    contract["measure_post_turn_prefix_residency"] = measure_residency
     if force_recorded:
         contract.update(forced_workload_sha256=forced_digest.hexdigest(),
                         expected_completion_tokens=expected_tokens,
-                        forced_response_scope="all_nonterminal_agent_turns",
-                        chain_gone_policy="one_full_prompt_retry_on_410")
+                        forced_response_scope=("all_agent_turns" if all(
+                            spec["token_ids"] is not None
+                            for prepared in prepared_agents.values() for spec in prepared)
+                            else "all_nonterminal_agent_turns"),
+                        chain_gone_policy=("fail_on_410" if stream else "one_full_prompt_retry_on_410"))
     if synthetic_wait_max is not None:
         contract.update(think_time_policy="deterministic_uniform",
                         synthetic_think_time_min_s=0.0,
@@ -515,9 +583,11 @@ def run_replay(args):
         contract.update(think_time_scale=think_scale,
                         prefix_prune=({"policy": "kvzip_global", "target": "tool_results",
                                        "schedule": "accumulated_tool_tokens", "trigger_tokens": trigger_tokens,
-                                       "keep_ratio": keep_ratio}
+                                       "keep_ratio": keep_ratio, "tool_result_lag": prune_lag}
                                       if keep_ratio is not None else None),
                         elapsed_boundary="all_requests_plus_pruning_and_scaled_think_time")
+    if measure_residency:
+        contract["elapsed_boundary"] = "all_requests_plus_pruning_residency_validation_and_scaled_think_time"
     write(out / "resolved_manifest.json", {"trace": manifest, "server": server, "comparison_contract": contract})
     if args.dry_run:
         write(out / "grade_summary.json", {"status": "skipped_by_policy", "reason": "dry_run", "layer": "agent_trace"})
@@ -545,10 +615,12 @@ def run_replay(args):
                     turn["completion_tokens"] = len(spec["token_ids"])
                 turn["chain_append_start"] = prepared[index - 1]["chain_append_start"] if index else None
         prune = None
-        if keep_ratio is not None:
+        if keep_ratio is not None or measure_residency:
             from benchmark.swe_bench_lite.prefix_prune_client import PrefixPruneClient
             prune = PrefixPruneClient(api_base=args.agent_api_base, tokenizer_path=tokenizer_path,
-                                      keep_ratio=keep_ratio, trigger_tokens=trigger_tokens,
+                                      keep_ratio=keep_ratio if keep_ratio is not None else 0.0,
+                                      trigger_tokens=trigger_tokens,
+                                      tool_result_lag=prune_lag,
                                       events_path=out / (entry["file"] + ".prune.jsonl"))
         with httpx.Client(timeout=args.agent_request_timeout, trust_env=False, headers=headers) as client:
             chain_id = None
@@ -560,7 +632,11 @@ def run_replay(args):
                         body["chain_id"] = chain_id
                         body["chain_append_start"] = turn["chain_append_start"]
                 url = args.agent_api_base.rstrip("/") + "/chat/completions"
-                if cache_mode == "chain":
+                if stream:
+                    # A chain miss is an explicit failed sample in the ablation;
+                    # silently retrying would mix reuse with full-prefill timing.
+                    result, recovered = post_streamed_replay(client, url, body), False
+                elif cache_mode == "chain":
                     result, recovered = post_with_chain_recovery(client, url, body)
                 else:
                     response = client.post(url, json=body)
@@ -579,7 +655,14 @@ def run_replay(args):
             def after_turn(turn):
                 # Prune the recorded input that was actually prefetched; never the
                 # generated response, which is not substituted into later inputs.
-                prune._maybe_prune(replay_body(turn, server["served_model_name"]))
+                chat = replay_body(turn, server["served_model_name"])
+                before = prune._match_prefix(chat) if measure_residency else None
+                if keep_ratio is not None:
+                    prune._maybe_prune(chat)
+                if measure_residency:
+                    after = prune._match_prefix(chat) if keep_ratio is not None else before
+                    return {"before_maintenance": before, "after_maintenance": after,
+                            "scope": "completed_request_prompt_path_excluding_generated_suffix"}
             delay_fn = (lambda iid, turn: synthetic_think_time(
                 iid, turn, synthetic_wait_seed, synthetic_wait_max)) if synthetic_wait_max is not None else None
             rows = replay_agent(agent, send, think_time_scale=think_scale, delay_fn=delay_fn,
@@ -601,6 +684,8 @@ def run_replay(args):
     summary = {**http_trace_summary(all_rows, elapsed), "comparison_contract": contract,
                "layer": "agent_trace", "server_manifest": server,
                "source_timing_quality": manifest["timing_quality"]}
+    if stream and summary["status"] == "success":
+        summary["request_metrics"] = request_summary(all_rows)
     cached_counts = [int((row.get("response", {}).get("usage", {}).get("prompt_tokens_details") or {}).get(
         "cached_tokens", row.get("response", {}).get("usage", {}).get("reused_tokens", 0)))
         for row in all_rows if row["status"] == "success"]

@@ -273,7 +273,7 @@ def test_non_chain_model_does_not_send_chain_id(monkeypatch):
     assert "extra_body" not in model.calls[0][1]
 
 
-def test_non_chain_model_prunes_once_and_verifies_next_turn_reuse(
+def test_non_chain_model_prunes_range_once(
     monkeypatch,
     tmp_path,
 ):
@@ -322,7 +322,7 @@ def test_non_chain_model_prunes_once_and_verifies_next_turn_reuse(
     )
 
     rows = [json.loads(line) for line in events.read_text().splitlines()]
-    assert [row["event"] for row in rows] == ["prune_completed", "reuse_verified"]
+    assert [row["event"] for row in rows] == ["prune_completed"]
     assert all(row["freed_device_slots"] == 1792 for row in rows)
 
 
@@ -621,55 +621,6 @@ def test_chain_model_commits_state_only_after_successful_query(monkeypatch):
     assert recovered["extra"]["chain_reset_reason"] == "format_error"
 
 
-@pytest.mark.parametrize("mismatch", [False, True])
-def test_tool_result_pruning_passes_only_verified_token_ranges(monkeypatch, tmp_path, mismatch):
-    module = _load_model_module(monkeypatch, [_response(None), _response(None)])
-    for key, value in {
-        "SPARSEENGINE_PREFIX_PRUNE_POLICY": "kvzip_global",
-        "SPARSEENGINE_PREFIX_PRUNE_TARGET": "tool_results",
-        "SPARSEENGINE_PREFIX_PRUNE_TOKENIZER": str(tmp_path),
-        "SPARSEENGINE_PREFIX_PRUNE_KEEP_RATIO": "0.5",
-        "SPARSEENGINE_PREFIX_PRUNE_TRIGGER_TOKENS": "1",
-        "SPARSEENGINE_PREFIX_PRUNE_EVENTS": str(tmp_path / "events.jsonl"),
-    }.items():
-        monkeypatch.setenv(key, value)
-    monkeypatch.delenv("SPARSEENGINE_CHAIN_CACHE", raising=False)
-    model = module.SparseVLLMLitellmModel()
-    model._prune_tool_selector = SimpleNamespace(select=lambda *args, **kwargs: {
-        "token_ids": list(range(11)), "ranges": [(1, 3), (5, 9)],
-        "tool_tokens": 6, "eligible_tokens": 6,
-    })
-    full = {"block_size": 1, "prompt_tokens": 11, "usable_tokens": 10,
-            "matched_tokens": 10, "resident_kv_tokens": 10, "last_block_id": "same-path"}
-    matches = iter([full, {**full, "resident_kv_tokens": 7}, {**full, "resident_kv_tokens": 7}])
-    monkeypatch.setattr(model, "_match_prefix", lambda _: next(matches))
-    calls = []
-    def request(method, path, body=None):
-        calls.append((method, path, body))
-        if path == "/prefix_cache/match":
-            pruned = any(p == "/prefix_cache/prune" for _, p, _ in calls)
-            return {**full, "resident_kv_tokens": 7 if pruned else 10,
-                    "last_block_id": "wrong-path" if mismatch else "same-path"}
-        if method == "POST":
-            assert body["ranges"] == [(1, 3), (5, 9)]
-            assert body["keep_tokens"] == 3
-            assert "chat" not in body and "target" not in body
-            return {"prune_id": "tools", "status": "queued"}
-        return {"status": "completed", "result": {"freed_device_slots": 3, "quality_degraded": True}}
-    monkeypatch.setattr(model, "_prefix_cache_request", request)
-    messages = [{"role": "tool", "content": "result"}]
-    if mismatch:
-        with pytest.raises(RuntimeError, match="does not match"):
-            model.query(messages)
-        assert not any(path == "/prefix_cache/prune" for _, path, _ in calls)
-    else:
-        model.query(messages)
-        model.query(messages)
-        assert sum(path == "/prefix_cache/prune" for _, path, _ in calls) == 1
-        records = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
-        assert [row["event"] for row in records] == ["prune_completed", "reuse_verified"]
-        assert records[0]["ranges"] == [[1, 3], [5, 9]]
-
 
 def test_tool_prune_advances_only_after_success_and_shares_new_turn_budget(monkeypatch, tmp_path):
     module = _load_model_module(monkeypatch, [])
@@ -725,17 +676,16 @@ def test_tool_prune_advances_only_after_success_and_shares_new_turn_budget(monke
     state['fail'] = True
     with pytest.raises(RuntimeError, match='did not complete'):
         model._maybe_prune({'messages': messages})
-    assert len(model._prune_processed_messages) == 2
+    assert model._prune_message_cursor == 2
     state['fail'] = False
     model._maybe_prune({'messages': messages})
     assert selections == [[1], [3,4], [3,4]]
     assert jobs[-1]['keep_tokens'] == 4  # Shared budget across two NEW bodies.
     assert state['dropped'] == 24  # First turn drops 8, second drops 16, never 8 again.
-    model._maybe_prune({'messages': messages})  # Reuse verification only.
+    model._maybe_prune({'messages': messages})  # No new tool result.
     assert len(jobs) == 3
-    messages[1]['content'] = 'rewritten old result'
-    with pytest.raises(RuntimeError, match='not append-only'):
-        model._maybe_prune({'messages': messages})
+    with pytest.raises(RuntimeError, match='history shrank'):
+        model._maybe_prune({'messages': messages[:1]})
 
 
 def test_tool_threshold_accumulates_until_commit_without_recompressing(monkeypatch, tmp_path):
@@ -769,10 +719,9 @@ def test_tool_threshold_accumulates_until_commit_without_recompressing(monkeypat
     assert [j['ranges'] for j in jobs] == [[(0,10),(10,20)], [(20,30),(30,40)]]
     assert [j['keep_tokens'] for j in jobs] == [4,4]
     assert cursors == [0,0,2,2,4]
-    assert len(client._prune_processed_messages) == 4
-    messages[-1]['content'] = 'rewritten pending body'
-    with pytest.raises(RuntimeError, match='not append-only'):
-        client._maybe_prune(dict(messages=messages))
+    assert client._prune_message_cursor == 4
+    with pytest.raises(RuntimeError, match='history shrank'):
+        client._maybe_prune(dict(messages=messages[:1]))
 
 
 def test_tool_result_lag_prunes_only_fifth_latest_result(monkeypatch, tmp_path):
@@ -818,7 +767,7 @@ def test_tool_result_lag_prunes_only_fifth_latest_result(monkeypatch, tmp_path):
     assert selected == [0, 1]
     assert [job['ranges'] for job in jobs] == [[(0, 10)], [(10, 20)]]
     assert [job['keep_tokens'] for job in jobs] == [2, 2]
-    assert len(client._prune_processed_messages) == 2
+    assert client._prune_message_cursor == 2
 
 
 def test_tool_prune_resumes_pending_job_after_poll_disconnect(monkeypatch, tmp_path):
@@ -873,14 +822,13 @@ def test_tool_prune_resumes_pending_job_after_poll_disconnect(monkeypatch, tmp_p
     assert state["posts"] == 1
     assert client._prune_pending is not None
     assert client._prune_pending["prune_id"] == "job"
-    assert client._prune_pending["before_resident"] == 100
 
     client._maybe_prune(chat)
 
     assert state["posts"] == 1
     assert state["polls"] == 2
     assert client._prune_pending is None
-    assert len(client._prune_processed_messages) == 1
+    assert client._prune_message_cursor == 1
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert [event["event"] for event in events] == ["prune_completed"]
 

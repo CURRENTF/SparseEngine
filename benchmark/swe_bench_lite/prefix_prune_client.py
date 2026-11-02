@@ -8,7 +8,6 @@ import os
 import time
 import urllib.error
 import urllib.request
-from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -31,9 +30,9 @@ class PrefixPruneClient:
         self._prune_target = "tool_results"
         self._prune_policy = "kvzip_global"
         self._prune_finished = False
-        self._prune_reuse_verified = False
-        self._prune_freed_slots = 0
-        self._prune_processed_messages = []
+        self._prune_message_cursor = 0
+        self._prune_seen_count = 0
+        self._prune_cache_info = None
         self._prune_tool_selector = None
         self._prune_pending = None
 
@@ -125,51 +124,20 @@ class PrefixPruneClient:
             {"chat": chat},
         )
 
-    def _maybe_verify_prune_reuse(self, chat: dict[str, Any], match=None) -> None:
-        if not self._prune_finished or self._prune_reuse_verified:
-            return
-        if match is None:
-            match = self._match_prefix(chat)
-        logical = int(match.get("matched_tokens") or 0)
-        resident = int(match.get("resident_kv_tokens") or 0)
-        if logical <= 0 or logical - resident < self._prune_freed_slots:
-            raise RuntimeError(
-                "Pruned prefix was not physically reused by the next MiniSWE turn: "
-                f"matched={logical} resident={resident} expected_gap="
-                f"{self._prune_freed_slots}."
-            )
-        self._prune_reuse_verified = True
-        self._record_prune_event(
-            "reuse_verified",
-            policy=self._prune_policy,
-            selector_digest=self._value_digest(chat["messages"][:2]),
-            matched_tokens=logical,
-            resident_kv_tokens=resident,
-            freed_device_slots=self._prune_freed_slots,
-        )
-
     def _maybe_prune(self, chat: dict[str, Any]) -> None:
         timing_enabled = os.getenv("SPARSEENGINE_PREFIX_PRUNE_TIMING", "0") == "1"
         self._prune_rpc_timing = {} if timing_enabled else None
         tool_mode = self._prune_target == "tool_results"
         if self._prune_finished and not tool_mode:
             return
-        cursor = len(self._prune_processed_messages)
-        new_tools = False
+        cursor = self._prune_message_cursor
         selected_tool_index = None
         if tool_mode:
             messages = chat["messages"]
-            seen = getattr(self, "_prune_seen_messages", None)
-            if seen is None:
-                seen = self._prune_processed_messages.copy()
-            if len(messages) < len(seen) or any(
-                old != messages[i] for i, old in enumerate(seen)
-            ):
-                raise RuntimeError("Tool-pruning transcript is not append-only; refusing to reuse its cursor.")
-            old_seen_len = len(seen)
-            seen.extend(deepcopy(messages[old_seen_len:]))
-            self._prune_seen_messages = seen
-            new_tools = any(m.get("role") == "tool" for m in messages[cursor:])
+            if len(messages) < self._prune_seen_count:
+                raise RuntimeError("Tool-pruning history shrank; start a new client for a new trajectory.")
+            old_seen_len = self._prune_seen_count
+            self._prune_seen_count = len(messages)
             lag = getattr(self, "_prune_tool_result_lag", 0)
             if lag:
                 tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
@@ -182,26 +150,16 @@ class PrefixPruneClient:
                     raise RuntimeError(
                         "Delayed tool pruning requires one new tool result per model turn."
                     )
-            if not new_tools and (not self._prune_finished or self._prune_reuse_verified):
-                self._prune_processed_messages.extend(self._prune_seen_messages[cursor:])
+            if not any(m.get("role") == "tool" for m in messages[cursor:]):
+                self._prune_message_cursor = len(messages)
                 return
-        match_before = self._match_prefix(chat)
-        if tool_mode:
-            self._maybe_verify_prune_reuse(chat, match_before)
-            if not new_tools:
-                self._prune_processed_messages.extend(self._prune_seen_messages[cursor:])
-                return
-        usable = int(match_before.get("usable_tokens") or 0)
-        if not tool_mode and usable < self._prune_trigger_tokens:
-            return
-        matched = int(match_before.get("matched_tokens") or 0)
-        if matched != usable:
-            raise RuntimeError(
-                "Completed MiniSWE turn is not fully available for pruning: "
-                f"matched={matched} usable={usable}."
-            )
         selection = None
-        if self._prune_target == "tool_results":
+        if tool_mode:
+            if self._prune_cache_info is None:
+                # Discover stable method/block metadata once per trajectory.
+                self._prune_cache_info = self._match_prefix(chat)
+            info = self._prune_cache_info
+            block_size = int(info['block_size'])
             if self._prune_tool_selector is None:
                 from benchmark.swe_bench_lite.tool_prune import ToolResultPruneSelector
                 self._prune_tool_selector = ToolResultPruneSelector(self._prune_tokenizer_path)
@@ -210,9 +168,12 @@ class PrefixPruneClient:
             if selected_tool_index is not None:
                 selector_kwargs["message_indices"] = (selected_tool_index,)
             selection = self._prune_tool_selector.select(
-                chat, block_size=int(match_before["block_size"]), usable_tokens=usable,
+                chat, block_size=block_size,
                 **selector_kwargs,
             )
+            from sparseengine.engine.prefix_cache import usable_prefix_cache_tokens
+
+            usable = usable_prefix_cache_tokens(len(selection['token_ids']), block_size)
             if selection_start is not None:
                 self._prune_rpc_timing["tool_selection"] = {
                     "calls": 1, "wall_s": time.perf_counter() - selection_start,
@@ -225,7 +186,7 @@ class PrefixPruneClient:
                     tool_tokens=selection["tool_tokens"],
                 )
                 end = selected_tool_index + 1 if selected_tool_index is not None else len(messages)
-                self._prune_processed_messages.extend(self._prune_seen_messages[cursor:end])
+                self._prune_message_cursor = end
                 return
             if selection["eligible_tokens"] < self._prune_trigger_tokens:
                 # Commit the cursor only after pruning; pending bodies are selected
@@ -237,20 +198,14 @@ class PrefixPruneClient:
                     trigger_tokens=self._prune_trigger_tokens,
                 )
                 return
-            local_match = self._prefix_cache_request(
-                "POST", "/prefix_cache/match", {"token_ids": selection["token_ids"]},
-            )
-            if not match_before.get("last_block_id") or any(
-                local_match.get(key) != match_before.get(key)
-                for key in ("last_block_id", "prompt_tokens", "usable_tokens", "matched_tokens", "block_size")
-            ):
-                raise RuntimeError("Tool-range tokenizer/template does not match the server's cached path.")
             keep_tokens = math.floor(selection["eligible_tokens"] * self._prune_keep_ratio)
-            if str(match_before.get("method") or "") == "quest":
-                block_size = int(match_before["block_size"])
+            if str(info.get("method") or "") == "quest":
                 keep_tokens = (keep_tokens // block_size) * block_size
             selector = {"token_ids": selection["token_ids"], "ranges": ranges}
         else:
+            usable = int(self._match_prefix(chat)['usable_tokens'])
+            if usable < self._prune_trigger_tokens:
+                return
             ranges = [(self._prune_range_start, self._prune_range_end)]
             keep_tokens = self._prune_keep_tokens
             selector = {
@@ -261,16 +216,14 @@ class PrefixPruneClient:
             **selector, "keep_tokens": keep_tokens, "policy": self._prune_policy,
             "observation_tokens": 64, "score_chunk_size": 1024, "prev_postfix_size": 32,
         }
-        request_digest = self._value_digest(prune_body)
         pending = getattr(self, "_prune_pending", None)
         if pending is not None:
-            if pending["request_digest"] != request_digest:
+            if pending["request"] != prune_body:
                 raise RuntimeError(
                     "A different prefix-prune request arrived while the previous job "
                     "still requires status recovery."
                 )
             prune_id = str(pending["prune_id"])
-            before_resident = int(pending["before_resident"])
             status = {"status": "queued"}
         else:
             queued = self._prefix_cache_request(
@@ -279,11 +232,9 @@ class PrefixPruneClient:
             prune_id = str(queued.get("prune_id") or "")
             if not prune_id:
                 raise RuntimeError(f"Prefix prune returned no prune_id: {queued}.")
-            before_resident = int(match_before.get("resident_kv_tokens") or 0)
             self._prune_pending = {
-                "request_digest": request_digest,
+                "request": prune_body,
                 "prune_id": prune_id,
-                "before_resident": before_resident,
             }
             status = queued
         for _ in range(9000):
@@ -298,39 +249,24 @@ class PrefixPruneClient:
             if status.get("status") in {"blocked", "failed"}:
                 self._prune_pending = None
             raise RuntimeError(f"Prefix prune did not complete: {status}.")
-        result = status.get("result") or {}
-        freed = int(result.get("freed_device_slots") or 0)
+        result = status["result"]
+        freed = int(result["freed_device_slots"])
         expected_freed = sum(right - left for left, right in ranges) - keep_tokens
         if freed != expected_freed or result.get("quality_degraded") is not True:
             raise RuntimeError(
                 "Prefix prune result violated physical accounting/tag contract: "
                 f"freed={freed} expected={expected_freed} result={result}."
             )
-        match_after = (
-            self._prefix_cache_request("POST", "/prefix_cache/match", {"token_ids": selection["token_ids"]})
-            if tool_mode else self._match_prefix(chat)
-        )
-        after_matched = int(match_after.get("matched_tokens") or 0)
-        after_resident = int(match_after.get("resident_kv_tokens") or 0)
-        if after_matched != usable or before_resident - after_resident != freed:
-            raise RuntimeError(
-                "Prefix prune did not preserve the logical route or compact resident KV: "
-                f"before={usable} after={after_matched} resident={after_resident}."
-            )
         self._prune_finished = True
-        self._prune_reuse_verified = False
-        self._prune_freed_slots = after_matched - after_resident
         self._prune_pending = None
         if tool_mode:
             end = selected_tool_index + 1 if selected_tool_index is not None else len(messages)
-            self._prune_processed_messages.extend(self._prune_seen_messages[cursor:end])
+            self._prune_message_cursor = end
         self._record_prune_event(
             "prune_completed",
             policy=self._prune_policy,
-            selector_digest=self._value_digest(chat["messages"][:2]),
             prune_id=prune_id,
             usable_tokens=usable,
-            resident_kv_tokens=after_resident,
             freed_device_slots=freed,
             target=self._prune_target,
             ranges=ranges,

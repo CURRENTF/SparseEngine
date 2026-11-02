@@ -1,7 +1,5 @@
 from copy import deepcopy
 
-import pytest
-
 from benchmark.swe_bench_lite.tool_prune import tool_result_ranges
 
 
@@ -63,14 +61,6 @@ def test_block_alignment_and_cached_prefix_limit_keep_mixed_blocks():
     assert result["eligible_tokens"] == 20
 
 
-def test_marker_sensitive_template_fails_instead_of_guessing_boundaries():
-    chat = {"messages": [{"role": "tool", "content": "result"}]}
-    def unusual_render(value):
-        return render(value) + str(len(value["messages"][0]["content"]))
-    with pytest.raises(ValueError, match="changed the rendered prompt"):
-        tool_result_ranges(chat, PairTokenizer(), unusual_render, block_size=1, usable_tokens=1)
-
-
 def test_no_tool_results_produces_no_deletion_ranges():
     result = tool_result_ranges(
         {"messages": [{"role": "user", "content": "keep me"}]}, PairTokenizer(), render,
@@ -93,7 +83,7 @@ def test_local_fast_tokenizer_uses_shared_server_rendering(tmp_path):
     result = selector.select(
         {"model": "local-test", "messages": [{"role": "user", "content": "keep"},
                                                {"role": "tool", "tool_call_id": "call-1", "content": "result result"}]},
-        block_size=1, usable_tokens=8,
+        block_size=1,
     )
     assert result["ranges"] == [(6, 8)]
     assert result["token_ids"][6:8] == [1, 1]

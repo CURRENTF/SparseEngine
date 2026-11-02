@@ -5,6 +5,7 @@ import hashlib
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
+import time
 from types import SimpleNamespace
 
 import httpx
@@ -287,7 +288,8 @@ def test_grading_cannot_pass_different_workload_or_failed_samples():
         grade({**base, "status": "failed"}, base)
 
 
-def test_real_http_replay_writes_results_and_detects_regression(tmp_path):
+@pytest.mark.parametrize("stream", [False, True])
+def test_real_http_replay_writes_results_and_detects_regression(tmp_path, stream):
     run, logs = legacy_fixture(tmp_path)
     trace = tmp_path / "export"
     export_legacy(run, [logs], trace, 1)
@@ -299,6 +301,21 @@ def test_real_http_replay_writes_results_and_detects_regression(tmp_path):
             requests.append(body)
             answer = response(count=body["max_tokens"])
             answer["usage"]["prompt_tokens_details"] = {"cached_tokens": int(len(requests) > 1)}
+            if body.get("stream"):
+                # P1 experimental validity: the role chunk precedes model work;
+                # counting it as the first token would fabricate a TTFT speedup.
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                def emit(chunk):
+                    self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+                    self.wfile.flush()
+                emit({"choices": [{"delta": {"role": "assistant"}}]})
+                time.sleep(.05)
+                emit({"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]})
+                emit({"choices": [], "usage": answer["usage"]})
+                self.wfile.write(b"data: [DONE]\n\n")
+                return
             data = json.dumps(answer).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -318,6 +335,7 @@ def test_real_http_replay_writes_results_and_detects_regression(tmp_path):
     args = SimpleNamespace(agent_trace=trace, agent_api_base=f"http://127.0.0.1:{server.server_port}/v1",
                            agent_server_manifest=manifest, agent_concurrency=1, agent_request_timeout=2,
                            agent_allow_estimated_timing=True, output_root=tmp_path, run_id="replay",
+                           agent_stream=stream,
                            dry_run=False, agent_api_key_env="UNUSED_TEST_KEY", agent_baseline=None,
                            agent_max_slowdown=1.1, agent_require_cache_hit=True)
     try:
@@ -329,6 +347,9 @@ def test_real_http_replay_writes_results_and_detects_regression(tmp_path):
     assert result["cache_reuse"]["successful_requests_with_cached_tokens"] == 1
     assert result["elapsed_s"] >= 1.5
     assert all(body["model"] == "target" and body["ignore_eos"] for body in requests)
+    if stream:
+        assert result["request_metrics"]["ttft_ms_mean"] >= 40
+        assert result["request_metrics"]["measured_request_count"] == 2
 
 
 def test_replay_pruning_finishes_before_next_turn_and_excludes_request_latency():

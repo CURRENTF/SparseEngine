@@ -24,9 +24,10 @@ class SparseVLLMLitellmModel(LitellmModel, PrefixPruneClient):
         ).strip().lower() in {"1", "true", "yes", "on"}
         self._prune_policy = os.getenv("SPARSEENGINE_PREFIX_PRUNE_POLICY", "").strip()
         self._prune_finished = False
-        self._prune_reuse_verified = False
-        self._prune_freed_slots = 0
-        self._prune_processed_messages: list[dict[str, Any]] = []
+        self._prune_message_cursor = 0
+        self._prune_seen_count = 0
+        self._prune_cache_info = None
+        self._prune_pending = None
         if self._prune_policy:
             if self._prune_policy not in {"snapkv_global", "kvzip_global"}:
                 raise ValueError(
@@ -239,8 +240,6 @@ class SparseVLLMLitellmModel(LitellmModel, PrefixPruneClient):
             if not self._prune_policy:
                 return super()._query(messages, **kwargs)
             chat = self._chat_selector(messages, kwargs)
-            if self._prune_target != "tool_results":
-                self._maybe_verify_prune_reuse(chat)
             response = super()._query(messages, **kwargs)
             self._maybe_prune(chat)
             return response

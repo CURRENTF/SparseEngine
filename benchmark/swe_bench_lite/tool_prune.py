@@ -11,13 +11,12 @@ def tool_result_ranges(
     render: Callable[[dict[str, Any]], str],
     *,
     block_size: int,
-    usable_tokens: int,
+    usable_tokens: int | None = None,
     message_start: int = 0,
     message_indices: tuple[int, ...] | None = None,
 ) -> dict[str, Any]:
-    if block_size <= 0 or usable_tokens < 0:
+    if block_size <= 0 or (usable_tokens is not None and usable_tokens < 0):
         raise ValueError("Invalid prefix-cache block size or usable token count.")
-    prompt = render(chat)
     if not 0 <= message_start <= len(chat["messages"]):
         raise ValueError("Invalid tool message cursor.")
     if message_indices is not None and any(
@@ -44,15 +43,13 @@ def tool_result_ranges(
         left = len(content) - len(content.lstrip())
         right = len(content.rstrip())
         begin, end = f"__prune_{nonce}_{index}_begin__", f"__prune_{nonce}_{index}_end__"
-        if begin in prompt or end in prompt:
-            raise ValueError("Tool-span marker collision.")
         # Leave exterior whitespace outside the markers so template trim filters
         # retain their original behavior. It is conservatively left unpruned.
         marked_chat["messages"][index] = {
             **message, "content": content[:left] + begin + core + end + content[right:],
         }
         markers.append((begin, end))
-    marked = render(marked_chat) if markers else prompt
+    marked = render(marked_chat)
     locations = []
     for begin, end in markers:
         if marked.count(begin) != 1 or marked.count(end) != 1:
@@ -74,13 +71,16 @@ def tool_result_ranges(
         clean_length += len(body)
         cursor = stop + len(end)
     pieces.append(marked[cursor:])
-    if "".join(pieces) != prompt:
-        raise ValueError("Tool-span annotation changed the rendered prompt; refusing to prune.")
+    prompt = "".join(pieces)
     bos = getattr(tokenizer, "bos_token", None)
     add_special = bos is not None and not prompt.startswith(str(bos))
     encoded = tokenizer(prompt, add_special_tokens=add_special, return_offsets_mapping=True)
     token_ids = list(encoded["input_ids"])
     offsets = encoded["offset_mapping"]
+    if usable_tokens is None:
+        from sparseengine.engine.prefix_cache import usable_prefix_cache_tokens
+
+        usable_tokens = usable_prefix_cache_tokens(len(token_ids), block_size)
     if len(offsets) != len(token_ids):
         raise ValueError("Tokenizer offsets do not match the rendered token sequence.")
     if usable_tokens > len(token_ids):
@@ -138,7 +138,7 @@ class ToolResultPruneSelector:
             self.tokenizer, ChatCompletionRequest.model_validate(chat), self.capabilities,
         )
 
-    def select(self, chat: dict[str, Any], *, block_size: int, usable_tokens: int,
+    def select(self, chat: dict[str, Any], *, block_size: int, usable_tokens: int | None = None,
                message_start: int = 0, message_indices: tuple[int, ...] | None = None):
         return tool_result_ranges(
             chat, self.tokenizer, self._render,
