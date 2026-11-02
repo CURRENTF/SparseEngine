@@ -316,7 +316,8 @@ class KVzipHeadSlotCacheManager(KVzipReconstructionMixin, HeadSlotCacheManager):
         from sparseengine.kernels.triton.head_slots import reorder_head_queries
 
         heads = self.num_kv_heads
-        cu = torch.tensor([0, state.replay_len], dtype=torch.int32, device=q.device)
+        # Construct offsets on device to avoid a synchronous host upload per layer.
+        cu = torch.arange(2, dtype=torch.int32, device=q.device) * state.replay_len
         packed_q = reorder_head_queries(q, cu, heads, state.replay_len)
         reqs = torch.arange(row * heads, (row + 1) * heads, dtype=torch.int32, device=q.device)
         starts = torch.arange(heads, dtype=torch.int32, device=q.device) * state.replay_len
