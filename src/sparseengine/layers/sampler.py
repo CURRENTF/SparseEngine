@@ -105,6 +105,8 @@ class Sampler(nn.Module):
         )
         top_k_positions = torch.arange(vocab_size, device=logits.device).unsqueeze(0)
         top_k_mask = top_k_positions >= top_k_limits.unsqueeze(1)
+        # Nucleus mass is conditional on the candidates surviving top-k.
+        sorted_logits = sorted_logits.masked_fill(top_k_mask, -torch.inf)
         sorted_probs = torch.softmax(sorted_logits, dim=-1)
         cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
         top_p_mask = cumulative_probs > top_ps.unsqueeze(dim=1)

@@ -329,6 +329,24 @@ class SamplerTest(unittest.TestCase):
 # receives each RNG draw, so same-seed token equality is not the contract.
 
 
+def test_joint_sampling_renormalizes_top_p_after_top_k():
+    # P1: a different nucleus silently changes benchmark sampling across engines.
+    # After top-2, token 0 has mass .60 / (.60 + .12) > .8, so it is
+    # the entire nucleus. Filtering against the original mass admits token 1.
+    probabilities = torch.tensor([0.60, 0.12, 0.11, 0.09, 0.08])
+    batch_size = 256
+    logits = probabilities.log().expand(batch_size, -1)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(42)
+        sampled = Sampler()(
+            logits,
+            temperatures=torch.ones(batch_size),
+            top_ps=torch.full((batch_size,), 0.8),
+            top_ks=torch.full((batch_size,), 2),
+        )
+    assert torch.equal(sampled, torch.zeros(batch_size, dtype=torch.long))
+
+
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_unfiltered_sampling_preserves_distribution_and_mixed_greedy(device):
     if device == "cuda" and not torch.cuda.is_available():

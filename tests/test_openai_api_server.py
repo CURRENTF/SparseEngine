@@ -1351,16 +1351,22 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 return "rendered"
 
         tokenizer = Tokenizer()
-        message = ChatMessage.model_validate(
-            {"role": "assistant", "content": "answer", "reasoning": "reason"}
-        )
-
-        self.assertEqual(_chat_prompt(tokenizer, [message]), "rendered")
-        self.assertEqual(message.reasoning_content, "reason")
-        self.assertEqual(
-            tokenizer.chat,
-            [{"role": "assistant", "content": "answer", "reasoning_content": "reason"}],
-        )
+        # Pi repeats identical aliases for vLLM and Qwen template compatibility.
+        # Rejecting that wire shape aborts every reasoning tool loop at turn two.
+        for aliases in ({"reasoning": "reason"},
+                        {"reasoning": "reason", "reasoning_content": "reason"}):
+            message = ChatMessage.model_validate(
+                {"role": "assistant", "content": "answer", **aliases}
+            )
+            self.assertEqual(_chat_prompt(tokenizer, [message]), "rendered")
+            self.assertEqual(message.reasoning_content, "reason")
+            self.assertEqual(
+                tokenizer.chat,
+                [{"role": "assistant", "content": "answer", "reasoning_content": "reason"}],
+            )
+        with self.assertRaisesRegex(ValueError, "must match"):
+            ChatMessage.model_validate({"role": "assistant", "content": "answer",
+                "reasoning": "first", "reasoning_content": "second"})
 
     def test_reasoning_content_requires_assistant_role_and_chat_template(self):
         from pydantic import ValidationError
@@ -1543,6 +1549,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                     "role": "assistant",
                     "content": None,
                     "reasoning_content": "need a lookup",
+                    "reasoning": "need a lookup",
                     "tool_calls": [
                         {
                             "id": "call_1",

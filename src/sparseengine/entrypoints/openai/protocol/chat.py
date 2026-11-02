@@ -39,6 +39,16 @@ class ChatMessage(BaseModel):
     tool_call_id: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_reasoning_aliases(cls, values):
+        if isinstance(values, dict) and "reasoning" in values and "reasoning_content" in values:
+            if values["reasoning"] != values["reasoning_content"]:
+                raise ValueError("reasoning and reasoning_content must match when both are supplied.")
+            values = dict(values)
+            values.pop("reasoning")
+        return values
+
     @model_validator(mode="after")
     def validate_role_specific_fields(self):
         if self.reasoning_content is not None and self.role != "assistant":
