@@ -201,11 +201,13 @@ This project is inspired by and/or references ideas and implementation technique
 
 ## Citation
 ```text
-@article{hao2026sparseengine,
+@article{Hao2026SparseEngineSI,
   title={SparseEngine: Sparse-First Inference Engine},
-  author={Hao, Jitai and Gu, Quansheng and Huang, Qiang and Yu, Jun},
-  journal={arXiv preprint arXiv:2609.39068},
-  year={2026}
+  author={Jitai Hao and Quan-Sheng Gu and Qiang Huang and Jun Yu},
+  journal={ArXiv},
+  year={2026},
+  volume={abs/2609.39068},
+  url={https://api.semanticscholar.org/CorpusID:292486860}
 }
 ```
 
