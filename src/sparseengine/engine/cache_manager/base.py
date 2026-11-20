@@ -621,6 +621,10 @@ class CacheManager(ABC):
             from .methods.h2o import H2OCacheManager
 
             return create_manager(H2OCacheManager)
+        if sparse_method == "pace":
+            from .methods.pace import PACECacheManager
+
+            return create_manager(PACECacheManager)
         if sparse_method == "rkv":
             from .methods.rkv import RKVCacheManager
 

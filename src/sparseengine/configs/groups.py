@@ -83,6 +83,13 @@ class SparseMethodConfig:
     h2o_prefill_budget: int = 8192
     h2o_recent_ratio: float = 0.5
     h2o_prefill_score_window: int = 128
+    pace_bonus_scale: float = 1e5
+    pace_bonus_decay: float = 0.35
+    pace_bounded_positions: bool = False
+    pace_position_limit: int | None = None
+    pace_reference_tokens: int = 4096
+    # Exclusive physical RoPE position bound; 0 when positions are unbounded.
+    pace_resolved_position_limit: int = field(default=0, init=False)
 
     rkv_compression_interval: int = 128
     rkv_observation_tokens: int = 8

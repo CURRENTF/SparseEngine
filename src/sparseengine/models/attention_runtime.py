@@ -11,6 +11,7 @@ from sparseengine.method_registry import (
     resolve_sparse_prefill_score_mode,
     sparse_decode_attention_requires_scores,
     sparse_prefill_attention_contract,
+    uses_h2o_eviction,
 )
 from sparseengine.operators.decode_attention import (
     DecodeAttentionOpSpec,
@@ -136,12 +137,12 @@ def build_mha_prefill_attention_spec(
         optional_score_output=contract.optional_score_output,
         layer_varying_page_table=contract.layer_varying_page_table,
         return_softmax_lse=(
-            cache_method == "h2o"
+            uses_h2o_eviction(cache_method)
             and prefill_sparse_method != "flashprefill_v2"
             and score_mode == "probability"
         ),
         allow_softmax_lse_fallback=(
-            cache_method == "h2o"
+            uses_h2o_eviction(cache_method)
             and prefill_sparse_method != "flashprefill_v2"
             and score_mode == "probability"
         ),
@@ -217,11 +218,11 @@ def build_mha_decode_attention_spec(
         layer_varying_page_table=bool(cache_method),
         cuda_graph=bool(cuda_graph),
         h2o_layerwise_probability_scores=(
-            normalized_method == "h2o" and requires_decode_scores
+            uses_h2o_eviction(normalized_method) and requires_decode_scores
             and not getattr(runtime_config, "h2o_decode_score_fusion", True)
         ),
         h2o_headwise_logits=(
-            normalized_method == "h2o" and requires_decode_scores
+            uses_h2o_eviction(normalized_method) and requires_decode_scores
             and getattr(runtime_config, "h2o_decode_score_fusion", True)
         ),
         context_capacity=int(getattr(runtime_config, "max_model_len", 0) or 0)

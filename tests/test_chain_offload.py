@@ -11,6 +11,7 @@ import torch
 from sparseengine.engine.cache_manager import chain_offload
 from sparseengine.engine.cache_manager.chain_offload import ChainOffloadController
 from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
+from sparseengine.engine.cache_manager.methods.pace import PACECacheManager
 from sparseengine.engine.cache_manager.methods.rkv import RKVCacheManager
 from sparseengine.engine.cache_manager.methods.skipkv import (
     SkipKVCacheManager, SkipKVSentence, SkipKVSequenceState,
@@ -47,6 +48,8 @@ def make_manager(cls=SnapKVCacheManager, device="cpu", rows=2, capacity=16):
     if issubclass(cls, H2OCacheManager):
         m._h2o_scores = {}
         m._h2o_active_decode_seq_ids = set()
+    if issubclass(cls, PACECacheManager):
+        m._pace_init_state()
     if issubclass(cls, RKVCacheManager):
         m._rkv_query_cache_enabled = True
         m._rkv_query_cache = [torch.arange(rows * 3 * 8, dtype=torch.float16, device=device).reshape(rows, 3, 1, 8) for _ in range(2)]

@@ -9,8 +9,8 @@ import torch.nn.functional as F
 
 from sparseengine.engine.sequence import Sequence
 from sparseengine.method_registry import (
-    normalize_sparse_method,
     resolve_prefill_sparse_method,
+    uses_h2o_eviction,
 )
 from sparseengine.platforms import device_runtime
 from sparseengine.utils.context import get_context
@@ -96,9 +96,7 @@ class H2OCacheManager(SnapKVCacheManager):
 
     @property
     def h2o_decode_enabled(self) -> bool:
-        return normalize_sparse_method(
-            getattr(self.config, "sparse_method", None)
-        ) == "h2o"
+        return uses_h2o_eviction(getattr(self.config, "sparse_method", None))
 
     def _prefill_append_peak(
         self,
@@ -595,6 +593,37 @@ class H2OCacheManager(SnapKVCacheManager):
     def _score_key(self, layer_idx: int, seq_id: int) -> tuple[int, int]:
         return int(layer_idx), int(seq_id)
 
+    def _on_prefill_score_appended(
+        self,
+        layer_idx: int,
+        seq: Sequence,
+        score: torch.Tensor,
+        *,
+        appended_from: int,
+    ) -> None:
+        """Subclass hook: ``score[appended_from:]`` was just appended for a prefill chunk.
+
+        ``score`` is the fresh cumulative vector about to be stored; in-place
+        edits are allowed. H2O itself has nothing to add.
+        """
+
+    def _store_kept_score(
+        self,
+        layer_idx: int,
+        seq_id: int,
+        kept_score: torch.Tensor,
+        keep_indices: torch.Tensor,
+        *,
+        previous_len: int,
+    ) -> None:
+        """Store the score of retained columns after an eviction.
+
+        ``keep_indices`` index the pre-eviction physical row of length
+        ``previous_len``, so subclasses can gather row-aligned state with the
+        same selection.
+        """
+        self._h2o_scores[self._score_key(layer_idx, seq_id)] = kept_score
+
     def h2o_score(self, layer_idx: int, seq_id: int) -> torch.Tensor | None:
         return self._h2o_scores.get(self._score_key(layer_idx, seq_id))
 
@@ -757,7 +786,7 @@ class H2OCacheManager(SnapKVCacheManager):
                 input_ids_np[token_offset : token_offset + chunk_size] = chunk_tokens
                 positions_np[token_offset : token_offset + chunk_size] = np.arange(
                     logical_start, logical_end
-                )
+                ) - int(getattr(seq, "position_offset", 0))
                 token_offset += chunk_size
                 cu_seqlens_q.append(token_offset)
 
@@ -988,6 +1017,9 @@ class H2OCacheManager(SnapKVCacheManager):
                 score_row,
                 new_len=score_end,
                 weight=float(effective_queries),
+            )
+            self._on_prefill_score_appended(
+                layer_idx, seq, cumulative, appended_from=prompt_cache_len,
             )
             self._h2o_scores[key] = cumulative
         return None
@@ -1309,7 +1341,9 @@ class H2OCacheManager(SnapKVCacheManager):
             kv_len,
             keep_indices,
         )
-        self._h2o_scores[self._score_key(layer_idx, seq.seq_id)] = kept_score
+        self._store_kept_score(
+            layer_idx, seq.seq_id, kept_score, keep_indices, previous_len=kv_len,
+        )
 
     def _get_final_prefill_workspace(
         self,
@@ -1628,7 +1662,10 @@ class H2OCacheManager(SnapKVCacheManager):
                         [seq],
                         keep_indices.unsqueeze(0),
                     )
-                    self._h2o_scores[self._score_key(layer_idx, seq.seq_id)] = kept_score
+                    self._store_kept_score(
+                        layer_idx, seq.seq_id, kept_score, keep_indices,
+                        previous_len=kv_len,
+                    )
                 else:
                     self.free_part_slots(
                         layer_idx,
@@ -1713,9 +1750,13 @@ class H2OCacheManager(SnapKVCacheManager):
                 )
             for local_layer, layer_idx in enumerate(compact_layers):
                 for batch_idx, seq in enumerate(seqs):
-                    self._h2o_scores[
-                        self._score_key(layer_idx, seq.seq_id)
-                    ] = compact_scores[local_layer][batch_idx]
+                    self._store_kept_score(
+                        layer_idx,
+                        seq.seq_id,
+                        compact_scores[local_layer][batch_idx],
+                        compact_indices[local_layer][batch_idx],
+                        previous_len=compact_lengths[local_layer],
+                    )
 
         num_evicted_rows = len(compact_layers) * len(seqs)
         dropped_tokens = sum(
@@ -1881,9 +1922,13 @@ class H2OCacheManager(SnapKVCacheManager):
                     )
                 for local_layer, layer_idx in enumerate(layer_indices):
                     for batch_idx, seq in enumerate(group_seqs):
-                        self._h2o_scores[
-                            self._score_key(layer_idx, seq.seq_id)
-                        ] = kept_scores[local_layer, batch_idx]
+                        self._store_kept_score(
+                            layer_idx,
+                            seq.seq_id,
+                            kept_scores[local_layer, batch_idx],
+                            keep_indices[local_layer, batch_idx],
+                            previous_len=kv_len,
+                        )
             else:
                 with profiler.record("h2o_decode_burst_fallback"):
                     for layer_idx in layer_indices:

@@ -20,7 +20,8 @@ from sparseengine.utils.log import logger
 
 
 CHAIN_PREFIX_METHODS = frozenset(
-    {"streamingllm", "snapkv", "adakv", "h2o", "pyramidkv", "rkv", "skipkv", "deltakv"}
+    {"streamingllm", "snapkv", "adakv", "h2o", "pace", "pyramidkv", "rkv", "skipkv",
+     "deltakv"}
 )
 RADIX_PREFIX_METHODS = frozenset({"", "omnikv", "quest", "deepseek_v4", "fp8_kv"})
 PREFIX_CACHE_MODES = frozenset({"auto", "radix", "chain"})
@@ -277,6 +278,18 @@ def build_chain_cache_fingerprint(config: Any) -> bytes:
             "h2o_prefill_score_window",
             "sparse_prefill_score_mode",
             "sparse_attn_score_dtype",
+        ),
+        "pace": (
+            "h2o_decode_budget",
+            "h2o_decode_eviction",
+            "h2o_decode_eviction_interval",
+            "h2o_prefill_budget",
+            "h2o_recent_ratio",
+            "h2o_prefill_score_window",
+            "sparse_prefill_score_mode",
+            "sparse_attn_score_dtype",
+            "pace_bonus_scale",
+            "pace_bonus_decay",
         ),
         "pyramidkv": (
             "sink_keep_tokens",

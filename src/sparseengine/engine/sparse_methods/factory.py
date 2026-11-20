@@ -33,6 +33,7 @@ RUNTIME_BINDINGS: dict[str, type[SparseMethodRuntime]] = {
     "adakv": AdaKVRuntime,
     "kvzip": KVzipRuntime,
     "h2o": H2ORuntime,
+    "pace": H2ORuntime,
     "pyramidkv": PyramidKVRuntime,
     "omnikv": OmniKVRuntime,
     "quest": QuestRuntime,
