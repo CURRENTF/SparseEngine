@@ -17,6 +17,7 @@ SparseEngine 围绕 cache-manager-first sparse runtime 构建。engine 支持 ph
 | `adakv` | Physical eviction | 按概率分数在每层各 KV head 间分配预算，保留逐 head 下限；在最终 prefill 和 chain 轮末压缩。 | `adakv_alpha`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `pool_kernel_size` |
 | `kvzip` | Physical eviction | query-agnostic 重建打分，支持 layer 独立并集或逐 head KV 回收。 | `kvzip_token_budget`, `kvzip_score_chunk_size`, `kvzip_prev_postfix_size`, `kv_cache_layout` |
 | `h2o` | Physical eviction | 中间 prefill chunk 可压缩到 `h2o_prefill_budget`，最终 prompt 压缩到 `h2o_decode_budget`。默认 decode 不评分或驱逐，物理 row 随生成 token 增长；开启 `h2o_decode_eviction` 后逐步累计概率分数并周期驱逐。 | `h2o_decode_eviction`, `h2o_decode_budget`, `h2o_decode_eviction_interval`, `h2o_prefill_budget`, `h2o_recent_ratio`, `h2o_prefill_score_window`, `sparse_prefill_score_mode` |
+| `pace` | Physical eviction | 基于前瞻调整分数的 H2O：每个请求的计划标记未来 agent step 将读取的 token 区间；计划内 token 优先于计划外 token，最早被需要的最先保留。无计划时行为与 H2O 相同。 | `pace_bonus_scale`, `pace_bonus_decay`, `pace_bounded_positions`, `pace_position_limit`, `pace_reference_tokens`, 全部 `h2o_*` 参数 |
 | `pyramidkv` | Physical eviction | PyramidKV 按 layer 分配 KV 预算，decode 驱逐始终开启。每层缓存最近 `observation_window_size` 个 decode query，在物理 KV 长度达到该层预算加 `decode_eviction_interval` 时评分并压缩，默认间隔为 1024。评分仅在驱逐边界、decode Graph replay 之后执行。 | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
 | `omnikv` | Logical masking，可选 offload | 跨层共享 token 选择；可将稀疏层完整历史保存在 pinned CPU 内存，decode 精确取回当前选择的 KV。 | `full_attention_layers`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `enable_omnikv_offload` |
 | `quest` | Query-aware page selection | QuEST 根据持久化的 page min/max summary 选择 token page，prefill 保持 dense。显式 KV 模型在 key 坐标中评分；GLM-4.7-Flash 使用匹配的 absorbed decode query 对融合 MLA latent/RoPE cache 评分，同时 compute payload 继续保持 latent。 | `quest_chunk_size`, `quest_skip_layers`, `sink_keep_tokens`, `decode_keep_tokens`, `recent_keep_tokens` |
@@ -105,6 +106,46 @@ recurrent、MLA、共享 KV 和 MoE 模型；head slots 还拒绝滑窗和位置
 不超过 `max_model_len`，需预留额外容量。重建增加 prefill 工作量，质量与性能需评测。
 固定参照版本见[开发契约](../../development/kvzip-runtime.md)。
 
+
+## PACE
+
+`sparse_method="pace"` 沿用 H2O 的预算、recent 窗口、压缩和 decode 驱逐，
+并根据每个请求的 `PACEPlan` 增加前瞻加分：
+
+```python
+from sparseengine import LLM, PACEPlan
+
+llm = LLM(model, sparse_method="pace", h2o_decode_eviction=True,
+          h2o_decode_budget=2048, h2o_prefill_budget=4096)
+# 区间为逻辑会话坐标中的左闭右开 token 范围；整数是将读取该区间的未来 agent step。
+plan = PACEPlan(current_step=3, spans=((120, 480, (4, 9)), (900, 1300, (5,))))
+outputs = llm.generate([prompt_ids], sampling_params, pace_plans=[plan])
+```
+
+`add_request`/`admit_request` 接受单数形式的 `pace_plan`；其他方法收到计划会直接报错。
+若某区间在当前 step `t` 之后的下一次计划引用为 step `r`，其 token 获得
+`pace_bonus_scale * (0.5 + 0.5 * exp(-pace_bonus_decay * (r - t)))` 的加分；
+重叠区间取最大值，最后一次引用已过去的区间不加分。加分在 prefill chunk 的分数
+追加时加入一次。在 chain 模式（`enable_prefix_caching=True`）下，每个续接 turn 的
+第一个 chunk 会用该 turn 的计划重新计算常驻 token 的加分并替换旧加分，引用已过去的
+token 回到普通 H2O 候选。默认假设加分下限 `pace_bonus_scale / 2` 高于任何可达的
+累计 attention 分数，引擎不强制检查。
+
+开启 `pace_bounded_positions=True` 后，会话长度可以超过模型的 RoPE 范围。每个序列按
+`physical = logical - shift` 写入；当下一个物理位置距离上限
+（`min(RoPE 最大位置, pace_position_limit)`）不足 `engine_prefill_chunk_size + 64` 时，
+各层常驻 row 按逻辑顺序重新编号为 `0..R-1`，并重新旋转其 key，保留 token 之间的间隔
+随之消失。每层 `pace_reference_tokens` 个 key 的参考存储避免舍入误差随重新编号累积，
+该存储在启动时从 KV 预算中预留。此时请求的逻辑长度不受限制，`max_model_len` 表示
+物理 row 容量。有界位置要求 `h2o_decode_eviction=True`、`decode_graph=False` 以及
+FP16/BF16 KV，且上限必须大于最坏常驻 row
+（`max(h2o_decode_budget + h2o_decode_eviction_interval, h2o_prefill_budget +
+engine_prefill_chunk_size)`）加上该余量。
+
+PACE 目前要求 `prefill_sparse_method="h2o_prefill"`（默认值）、token 布局的显式
+KV、Qwen2/Qwen3/Llama 以及 TP=EP=DP=1。支持 chain prefix cache 和 chain offload；
+radix prefix cache、多模态输入和 head-slot 布局会被拒绝。详见
+[开发契约](../../development/pace-runtime.md)。
 
 ## OmniKV KV offload
 

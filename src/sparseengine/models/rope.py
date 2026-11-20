@@ -129,6 +129,24 @@ def resolve_rope_scaling(
     return tuple(sorted(frozen.items()))
 
 
+def resolve_declared_rotary_dim(config: Any, head_dim: int) -> int:
+    """Rotary dimension a checkpoint declares: an explicit ``qk_rope_head_dim`` or
+    ``rotary_dim``, else ``head_dim * partial_rotary_factor`` (top level, then
+    ``rope_parameters``/``rope_scaling``), else the full ``head_dim``."""
+    for name in ("qk_rope_head_dim", "rotary_dim"):
+        explicit = config_get(config, name, None)
+        if explicit is not None:
+            return int(explicit)
+    factor = config_get(config, "partial_rotary_factor", None)
+    if factor is None:
+        for name in ("rope_parameters", "rope_scaling"):
+            parameters = config_get(config, name, None)
+            if isinstance(parameters, dict) and parameters.get("partial_rotary_factor") is not None:
+                factor = parameters["partial_rotary_factor"]
+                break
+    return int(int(head_dim) * float(1.0 if factor is None else factor))
+
+
 def resolve_rope_max_position(config: Any, *, model_name: str) -> int:
     declared = int(config_get(config, "max_position_embeddings", 0) or 0)
     if declared <= 0:

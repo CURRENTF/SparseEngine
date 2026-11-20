@@ -8,6 +8,7 @@ import torch
 from sparseengine.configs.cuda_graph import build_decode_cuda_graph_startup_plan
 from sparseengine.engine.cache_manager.storage import CacheLayout
 from sparseengine.method_registry import (
+    H2O_EVICTION_METHODS,
     normalize_sparse_method,
     resolve_cache_sparse_method,
 )
@@ -261,16 +262,20 @@ def profiling_kv_budget_bytes(config, num_slots: int) -> int:
         )
         return plan.budget(num_slots)
     if method != "quest":
-        if method in {"snapkv", "h2o", "kvzip"}:
+        if method in {"snapkv", "kvzip", *H2O_EVICTION_METHODS}:
             # These methods share an allocator with one KV payload,
             # one free-slot vector per layer, and layer-local row-slot maps.
             # Doubling the payload can exhaust VRAM before workspace profiling.
             int32_bytes = torch.empty((), dtype=torch.int32).element_size()
             layers = int(layout.num_kv_layers)
+            from sparseengine.engine.cache_manager.methods.pace import (
+                pace_reference_store_bytes,
+            )
             return int(
                 num_slots * (bytes_per_slot + layers * int32_bytes)
                 + layers * int(config.max_num_seqs_in_gpu)
                 * int(config.max_model_len) * int32_bytes
+                + pace_reference_store_bytes(config)
             )
         if method in {"", "vanilla", "omnikv", "palu"}:
             int32_bytes = torch.empty((), dtype=torch.int32).element_size()

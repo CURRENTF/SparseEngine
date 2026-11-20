@@ -187,6 +187,29 @@ def reverse_rotary_emb(
     return torch.cat((x1, x2), dim=-1).to(x.dtype)
 
 
+def build_rope_cos_sin_table(
+    rotary_dim: int,
+    max_position: int,
+    base: float,
+    rope_scaling: tuple[tuple[str, object], ...] | None,
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    """Return ``[max_position, rotary_dim]`` float32 ``cat(cos, sin) * attention_scaling``.
+
+    Same formula as ``RotaryEmbedding``'s ``cos_sin_cache``, but evaluated on
+    ``device``. On CUDA the result can differ from the CPU-built cache by one
+    float32 rounding step in some entries. PACE re-rotation uses this device-built
+    table so the native method reproduces its reference implementation bit for
+    bit (docs/development/pace-runtime.md).
+    """
+    inv_freq, attention_scaling = _compute_rope_parameters(rotary_dim, base, rope_scaling)
+    positions = torch.arange(int(max_position), dtype=torch.float, device=device)
+    freqs = torch.einsum("i,j -> ij", positions, inv_freq.to(device).float())
+    scale = float(attention_scaling)
+    return torch.cat((freqs.cos() * scale, freqs.sin() * scale), dim=-1)
+
+
 class RotaryEmbedding(nn.Module):
 
     def __init__(

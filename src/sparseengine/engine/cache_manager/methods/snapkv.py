@@ -3306,7 +3306,9 @@ class SnapKVCacheManager(CacheManager):
                     chunk_tokens = chunk_tokens[start_idx:end_idx]
 
                 input_ids_np[token_offset: token_offset + chunk_size] = chunk_tokens
-                positions_np[token_offset: token_offset + chunk_size] = np.arange(start_idx, end_idx)
+                positions_np[token_offset: token_offset + chunk_size] = (
+                    np.arange(start_idx, end_idx) - int(getattr(seq, "position_offset", 0))
+                )
 
                 cu_seqlens_q.append(cu_seqlens_q[-1] + chunk_size)
                 token_offset += chunk_size

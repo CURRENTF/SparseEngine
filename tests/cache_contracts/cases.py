@@ -25,7 +25,7 @@ class ChainCase:
 
 
 CHAIN_CASES = tuple(ChainCase(name) for name in (
-    'streamingllm', 'snapkv', 'h2o', 'pyramidkv', 'rkv', 'skipkv',
+    'streamingllm', 'snapkv', 'h2o', 'pace', 'pyramidkv', 'rkv', 'skipkv',
 )) + (ChainCase('', 'omnikv_prefill'), ChainCase('omnikv', 'omnikv_prefill'))
 RADIX_CASES = ('', 'omnikv', 'quest')
 
@@ -46,11 +46,13 @@ def make_chain(case: ChainCase, *, capacity=16, rows=2, device='cpu'):
         from sparseengine.engine.cache_manager.methods.streamingllm import StreamingLLMCacheManager
         from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
         from sparseengine.engine.cache_manager.methods.h2o import H2OCacheManager
+        from sparseengine.engine.cache_manager.methods.pace import PACECacheManager
         from sparseengine.engine.cache_manager.methods.rkv import RKVCacheManager
         from sparseengine.engine.cache_manager.methods.skipkv import SkipKVCacheManager
         cls = {
             'streamingllm': StreamingLLMCacheManager, 'snapkv': SnapKVCacheManager,
             'pyramidkv': SnapKVCacheManager, 'h2o': H2OCacheManager,
+            'pace': PACECacheManager,
             'rkv': RKVCacheManager, 'skipkv': SkipKVCacheManager,
         }[case.method]
         m = make_manager(cls, device=device, rows=rows, capacity=capacity)
@@ -71,6 +73,8 @@ def make_chain(case: ChainCase, *, capacity=16, rows=2, device='cpu'):
     cfg.h2o_decode_budget = 8
     cfg.h2o_recent_ratio = 0.5
     cfg.h2o_decode_eviction_interval = 1
+    cfg.pace_bonus_scale = 1e5
+    cfg.pace_bonus_decay = 0.35
     cfg.rkv_compression_interval = 4
     cfg.skipkv_compression_interval = 4
     return m

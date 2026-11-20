@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__all__ = ["LLM", "MultiModalPrompt", "SamplingParams"]
+__all__ = ["LLM", "MultiModalPrompt", "PACEPlan", "SamplingParams"]
 
 
 def __getattr__(name: str):
@@ -12,6 +12,9 @@ def __getattr__(name: str):
         from sparseengine.sampling_params import SamplingParams
 
         return SamplingParams
+    if name == "PACEPlan":
+        from sparseengine.engine.pace_plan import PACEPlan
+        return PACEPlan
     if name == "MultiModalPrompt":
         from sparseengine.multimodal import MultiModalPrompt
 

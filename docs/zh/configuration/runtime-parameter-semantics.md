@@ -137,6 +137,18 @@ Head 布局要求 BF16 显式 KV、TP1 和兼容 attention provider；SM90 和 S
 
 默认只在 prefill 压缩，decode 不持续驱逐。MLA 的 decode 驱逐使用近似分数，尚未与原始 H2O 完全对齐。
 
+## PACE
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `pace_bonus_scale` | float | `1e5` | `sparse_method="pace"` 的前瞻加分尺度；计划内 token 获得其一半到全部。须为有限正数。 |
+| `pace_bonus_decay` | float | `0.35` | 加分随区间下一次计划引用距离逐 step 衰减的系数。须为有限非负数。 |
+| `pace_bounded_positions` | bool | `False` | 通过重新编号常驻 row 并重新旋转 key，使 RoPE 位置保持在上限以内；同时取消请求逻辑长度限制。要求开启 decode 驱逐、eager decode 以及 FP16/BF16 KV。 |
+| `pace_position_limit` | int 或 None | `None` | 物理位置的上界（不含）；`None` 使用模型的 RoPE 最大位置。仅在有界位置模式下有效。 |
+| `pace_reference_tokens` | int | `4096` | 每个 KV layer 的参考 key 数量，避免重新旋转累积舍入误差；从 KV 预算中预留。`0` 表示关闭。 |
+
+PACE 同时使用上方全部 H2O 参数。计划按请求提供，见 [PACE](../features/sparse-methods.md#pace)。
+
 ## DeltaKV
 
 | 参数 | 类型 | 默认值 | 说明 |

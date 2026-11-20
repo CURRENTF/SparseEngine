@@ -29,9 +29,11 @@ from sparseengine.kernels.external.flashinfer.jit_cache import resolve_trtllm_ca
 from sparseengine.method_registry import (
     SPARSE_AUXILIARY_PREFILL_TEMPLATES,
     decode_graph_path_id,
+    request_logical_length_limit,
 )
 from sparseengine.platforms.interface import PlatformEnum
 from sparseengine.sampling_params import SamplingParams
+from sparseengine.engine.pace_plan import PACEPlan
 from sparseengine.engine.sequence import Sequence, SequenceStatus
 from sparseengine.engine.scheduler import Scheduler
 from sparseengine.engine.model_runner import ModelRunner, make_tp_shm_name, select_master_port
@@ -878,12 +880,24 @@ class LLMEngine:
         *,
         context_length: int | None = None,
         context_prefix_length: int = 0,
+        pace_plan: PACEPlan | None = None,
     ) -> RequestAdmission:
         """Validate and synchronously admit one request.
 
         In chain mode the returned seq_id is the resident sequence identity and
         remains stable across turns. The caller's request identity is separate.
         """
+        if pace_plan is not None:
+            if not isinstance(pace_plan, PACEPlan):
+                raise TypeError(
+                    f"pace_plan must be a PACEPlan, got {type(pace_plan).__name__}."
+                )
+            owner = getattr(self.config, "resolved_cache_sparse_method", None)
+            if owner != "pace":
+                raise ValueError(
+                    "pace_plan requires sparse_method='pace'; "
+                    f"the cache method is {owner!r}."
+                )
         pending = getattr(self, "_pending_slot_releases", set())
         if pending:
             raise RuntimeError(
@@ -952,7 +966,8 @@ class LLMEngine:
             prompt = self._tokenize_prompt(prompt)
         prompt_len = len(prompt)
         max_tokens = sampling_params.max_tokens
-        if prompt_len + max_tokens > self.config.max_model_len:
+        length_limit = request_logical_length_limit(self.config)
+        if length_limit is not None and prompt_len + max_tokens > length_limit:
             raise ValueError(
                 "Prompt length + max_tokens exceeds max_model_len: "
                 f"{prompt_len} + {max_tokens} > {self.config.max_model_len}. "
@@ -960,7 +975,7 @@ class LLMEngine:
             )
         logger.debug(f'add prompt with {len(prompt)} tokens.')
         seq = Sequence(prompt, sampling_params, context_length=context_length,
-                       context_prefix_length=context_prefix_length)
+                       context_prefix_length=context_prefix_length, pace_plan=pace_plan)
         if multimodal is not None:
             seq.multimodal_digest = multimodal.digest
             seq.multimodal_full_prefill = (
@@ -1123,13 +1138,19 @@ class LLMEngine:
         *,
         context_length: int | None = None,
         context_prefix_length: int = 0,
+        pace_plan: PACEPlan | None = None,
     ):
         """Backward-compatible request API returning only seq_id."""
-        if context_length is None and context_prefix_length == 0:
+        if context_length is None and context_prefix_length == 0 and pace_plan is None:
             return self.admit_request(prompt, sampling_params).seq_id
+        if pace_plan is None:
+            return self.admit_request(
+                prompt, sampling_params, context_length=context_length,
+                context_prefix_length=context_prefix_length,
+            ).seq_id
         return self.admit_request(
             prompt, sampling_params, context_length=context_length,
-            context_prefix_length=context_prefix_length,
+            context_prefix_length=context_prefix_length, pace_plan=pace_plan,
         ).seq_id
 
     def _refresh_prefix_cache_hit(self, seq: Sequence) -> None:
@@ -1986,6 +2007,7 @@ class LLMEngine:
         *,
         context_lengths: list[int] | None = None,
         context_prefix_lengths: list[int] | None = None,
+        pace_plans: list[PACEPlan | None] | None = None,
     ) -> list[dict]:
         """
         高层 API：批量输入 Prompt，阻塞直至全部生成完成。
@@ -1998,7 +2020,8 @@ class LLMEngine:
                 f"sampling_params={len(sampling_params)}."
             )
         for name, values in (("context_lengths", context_lengths),
-                             ("context_prefix_lengths", context_prefix_lengths)):
+                             ("context_prefix_lengths", context_prefix_lengths),
+                             ("pace_plans", pace_plans)):
             if values is not None and len(values) != len(prompts):
                 raise ValueError(f"{name} must have one entry per prompt.")
         if context_prefix_lengths is not None and context_lengths is None:
@@ -2011,6 +2034,14 @@ class LLMEngine:
         
         # 提交所有请求
         for i, (prompt, sp) in enumerate(zip(prompts, sampling_params)):
+            if pace_plans is not None and pace_plans[i] is not None:
+                self.add_request(
+                    prompt, sp,
+                    context_length=None if context_lengths is None else context_lengths[i],
+                    context_prefix_length=0 if context_prefix_lengths is None else context_prefix_lengths[i],
+                    pace_plan=pace_plans[i],
+                )
+                continue
             if context_lengths is None:
                 self.add_request(prompt, sp)
                 continue

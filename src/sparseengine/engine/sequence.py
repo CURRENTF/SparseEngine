@@ -3,6 +3,7 @@ from copy import copy
 from enum import Enum, auto
 from itertools import count
 
+from sparseengine.engine.pace_plan import PACEPlan
 from sparseengine.sampling_params import SamplingParams
 
 
@@ -88,7 +89,10 @@ class Sequence:
     counter = count()
 
     def __init__(self, token_ids: list[int], sampling_params = SamplingParams(), *,
-                 context_length: int | None = None, context_prefix_length: int = 0):
+                 context_length: int | None = None, context_prefix_length: int = 0,
+                 pace_plan: PACEPlan | None = None):
+        if pace_plan is not None and not isinstance(pace_plan, PACEPlan):
+            raise TypeError(f"pace_plan must be a PACEPlan, got {type(pace_plan).__name__}.")
         if context_length is not None:
             if (isinstance(context_length, bool) or not isinstance(context_length, int)
                     or not 0 < context_length < len(token_ids)):
@@ -100,6 +104,7 @@ class Sequence:
             raise ValueError("context_prefix_length must lie inside the declared context.")
         self.context_length = context_length
         self.context_prefix_length = context_prefix_length
+        self.pace_plan = pace_plan
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
@@ -123,6 +128,10 @@ class Sequence:
         self.chain_reused_tokens = 0
         self.multimodal_digest: str | None = None
         self.multimodal_position_delta = 0
+        # Physical RoPE position = logical position - position_offset. Owned by
+        # a cache manager that bounds positions (PACE), which sets it before
+        # every step in the process that prepares the step; 0 otherwise.
+        self.position_offset = 0
         self.multimodal_full_prefill = False
         # None means normal generation. During recompute replay the original
         # prompt is prefetched again, then accepted completion tokens before the
@@ -314,7 +323,8 @@ class Sequence:
             position = self.num_prompt_tokens + int(self.recompute_replay_cursor or 0)
         else:
             position = self.num_tokens - 1
-        return int(position + self.multimodal_position_delta)
+        return int(position + self.multimodal_position_delta
+                   - getattr(self, "position_offset", 0))
 
     @property
     def should_publish_sample(self) -> bool:
@@ -438,6 +448,7 @@ class Sequence:
             self.multimodal_full_prefill,
             self.context_length,
             self.context_prefix_length,
+            self.pace_plan,
         )
 
     def __setstate__(self, state):
@@ -453,7 +464,8 @@ class Sequence:
          self.recompute_replay_cursor, self.decode_progress_checkpoint,
          self.multimodal_digest, self.multimodal_position_delta,
          self.multimodal_full_prefill,
-         self.context_length, self.context_prefix_length) = state
+         self.context_length, self.context_prefix_length, self.pace_plan) = state
+        self.position_offset = 0
         # TP workers run forward only; rank 0 retains the forced replay tokens for sampling.
         self.benchmark_forced_token_ids = None
         self.completion_token_logprobs = []
