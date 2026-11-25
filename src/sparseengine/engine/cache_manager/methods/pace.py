@@ -68,6 +68,17 @@ def pace_reference_store_bytes(config) -> int:
     return per_layer * int(config.runtime_layout.num_kv_layers) + table
 
 
+def pace_row_state_bytes_per_slot(config) -> int:
+    """Row-aligned PACE state per KV slot and layer: logical, physical and ref in int64,
+    bonus in float32. Every recorded column sits on a resident slot of its layer, so the
+    state never exceeds this times the slots of the pool."""
+    if getattr(config, "sparse_method", "") != "pace":
+        return 0
+    int64 = torch.empty((), dtype=torch.int64).element_size()
+    float32 = torch.empty((), dtype=torch.float32).element_size()
+    return 3 * int64 + float32
+
+
 class PACECacheManager(H2OCacheManager):
     """H2O cache manager whose prefill scores carry a per-request foresight bonus."""
 
@@ -152,7 +163,8 @@ class PACECacheManager(H2OCacheManager):
         return self._pace_cos_sin
 
     # ------------------------------------------------------------------
-    # Memory: the reference store is part of the startup KV budget
+    # Memory: the reference store and RoPE table are reserved from the startup KV
+    # budget; the row-aligned state is part of every slot's cost
     # ------------------------------------------------------------------
     def _get_available_slots_info(self) -> tuple[int, int]:
         available, slot_bytes = super()._get_available_slots_info()
@@ -163,7 +175,8 @@ class PACECacheManager(H2OCacheManager):
                 f"table): required={reserved} available={int(available)} bytes. Lower "
                 "pace_reference_tokens if it is positive, or the RoPE limit."
             )
-        return int(available) - reserved, slot_bytes
+        return (int(available) - reserved,
+                int(slot_bytes) + pace_row_state_bytes_per_slot(self.config))
 
     def _pace_validate_rotary(self) -> None:
         """Check at startup, before serving, that re-rotation can be exact: the model must
@@ -315,10 +328,6 @@ class PACECacheManager(H2OCacheManager):
         for layer_idx in self.kv_transformer_layer_indices():
             self._pace_sync(layer_idx, seq_id)
 
-    def _pace_sync_all(self) -> None:
-        for layer_idx, seq_id in list(self._pace_rows["logical"]):
-            self._pace_sync(layer_idx, seq_id)
-
     def pace_row_state(self, layer_idx: int, seq_id: int) -> dict[str, torch.Tensor] | None:
         """Return the row-aligned state of a resident row, recording pending columns."""
         self._pace_sync(layer_idx, seq_id)
@@ -377,6 +386,10 @@ class PACECacheManager(H2OCacheManager):
         *,
         previous_len: int,
     ) -> None:
+        # Decode columns are recorded lazily: bring the row up to the length being
+        # compacted (every shift change records the row first, so the pending tail
+        # was written under the current shift).
+        self._pace_sync(layer_idx, seq_id, length=previous_len)
         super()._store_kept_score(
             layer_idx, seq_id, kept_score, keep_indices, previous_len=previous_len,
         )
@@ -398,16 +411,13 @@ class PACECacheManager(H2OCacheManager):
         for name in _ROW_FIELDS:
             self._pace_rows[name][key] = self._pace_rows[name][key].index_select(0, index)
 
-    # Every H2O eviction path enters through one of these; record pending decode
-    # columns first, so keep indices address recorded state.
+    # Pending decode columns (bonus 0) are recorded only when something reads row
+    # state: a prefill chunk, a compaction (_store_kept_score), a renumber, a rebase,
+    # a turn boundary or a snapshot. A decode step itself does no PACE bookkeeping.
     def _evict(self, seqs: list[Sequence], *, is_prefill: bool):
         for seq in seqs:
             self._pace_sync_seq(int(seq.seq_id))
         return super()._evict(seqs, is_prefill=is_prefill)
-
-    def _evict_decode_rows(self, seqs: list[Sequence]) -> None:
-        self._pace_sync_all()
-        return super()._evict_decode_rows(seqs)
 
     def free_part_slots(self, layer_idx, seq, keep_indices, *args, **kwargs):
         self._pace_sync(layer_idx, int(seq.seq_id))

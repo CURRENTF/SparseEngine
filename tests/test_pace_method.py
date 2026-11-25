@@ -204,6 +204,44 @@ def test_pace_without_plan_retains_and_scores_exactly_like_h2o():
         assert torch.equal(pace._h2o_scores[(layer, 0)], h2o._h2o_scores[(layer, 0)])
 
 
+def test_decode_steps_record_row_state_lazily():
+    """A decode step that compacts nothing does no PACE bookkeeping; readers still
+    see every column."""
+    plan = PACEPlan(1, ((1, 3, (2,)), (6, 8, (5, 9))))
+    pace = _manager(PACECacheManager, interval=8)
+    seq = _run(pace, plan, decode_steps=0)
+    layers = list(pace.kv_transformer_layer_indices())
+    quiet = compacting = 0
+    for i in range(20):
+        recorded = {layer: pace._pace_recorded((layer, 0)) for layer in layers}
+        evictions = pace._h2o_counters["decode_evictions"]
+        _decode(pace, seq, 12 + i, 0.05 * (i % 3))
+        if pace._h2o_counters["decode_evictions"] == evictions:
+            quiet += 1
+            for layer in layers:
+                assert pace._pace_recorded((layer, 0)) == recorded[layer]
+        else:
+            compacting += 1
+    assert quiet and compacting
+    for layer in layers:
+        state = pace.pace_row_state(layer, 0)
+        assert torch.equal(state["logical"], _resident_logical(pace, layer))
+        assert all(int(state[name].numel()) == int(state["logical"].numel())
+                   for name in ("bonus", "physical", "ref"))
+
+
+def test_pace_slot_cost_includes_the_row_aligned_state():
+    from sparseengine.engine.cache_manager.methods.pace import pace_row_state_bytes_per_slot
+    config = SimpleNamespace(sparse_method="pace")
+    # logical, physical and ref in int64, bonus in float32, per slot and layer
+    assert pace_row_state_bytes_per_slot(config) == 3 * 8 + 4
+    config.sparse_method = "h2o"
+    assert pace_row_state_bytes_per_slot(config) == 0
+    pace = _manager(PACECacheManager)
+    with patch.object(H2OCacheManager, "_get_available_slots_info", return_value=(10_000, 100)):
+        assert pace._get_available_slots_info()[1] == 100 + 28
+
+
 def test_pace_row_state_tracks_logical_positions_through_eviction():
     plan = PACEPlan(1, ((1, 3, (2,)), (6, 8, (5, 9))))
     pace = _manager(PACECacheManager)

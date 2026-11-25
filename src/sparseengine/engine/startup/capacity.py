@@ -270,9 +270,11 @@ def profiling_kv_budget_bytes(config, num_slots: int) -> int:
             layers = int(layout.num_kv_layers)
             from sparseengine.engine.cache_manager.methods.pace import (
                 pace_reference_store_bytes,
+                pace_row_state_bytes_per_slot,
             )
             return int(
-                num_slots * (bytes_per_slot + layers * int32_bytes)
+                num_slots * (bytes_per_slot + layers * (
+                    int32_bytes + pace_row_state_bytes_per_slot(config)))
                 + layers * int(config.max_num_seqs_in_gpu)
                 * int(config.max_model_len) * int32_bytes
                 + pace_reference_store_bytes(config)

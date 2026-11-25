@@ -158,7 +158,8 @@ position comes within `engine_prefill_chunk_size + 64` of the limit
 renumbered to `0..R-1` in logical order and its keys are re-rotated. Gaps
 between surviving tokens collapse. A per-layer reference store of
 `pace_reference_tokens` keys keeps rounding from compounding across renumbers;
-it is reserved from the KV budget at startup. Logical request length is then
+it is reserved from the KV budget at startup. PACE's row-aligned state (28 bytes per
+KV slot and layer) is counted in every slot's cost. Logical request length is then
 unbounded, and `max_model_len` is the physical row capacity. Bounded positions
 require `h2o_decode_eviction=True`, `decode_graph=False` and FP16/BF16 KV, and
 the limit must exceed the worst resident row

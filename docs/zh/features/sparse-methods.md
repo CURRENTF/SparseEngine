@@ -136,7 +136,7 @@ token 回到普通 H2O 候选。默认假设加分下限 `pace_bonus_scale / 2` 
 （`min(RoPE 最大位置, pace_position_limit)`）不足 `engine_prefill_chunk_size + 64` 时，
 各层常驻 row 按逻辑顺序重新编号为 `0..R-1`，并重新旋转其 key，保留 token 之间的间隔
 随之消失。每层 `pace_reference_tokens` 个 key 的参考存储避免舍入误差随重新编号累积，
-该存储在启动时从 KV 预算中预留。此时请求的逻辑长度不受限制，`max_model_len` 表示
+该存储在启动时从 KV 预算中预留；PACE 的 row 对齐状态（每个 KV slot、每层 28 字节）计入每个 slot 的开销。此时请求的逻辑长度不受限制，`max_model_len` 表示
 物理 row 容量。有界位置要求 `h2o_decode_eviction=True`、`decode_graph=False` 以及
 FP16/BF16 KV，且上限必须大于最坏常驻 row
 （`max(h2o_decode_budget + h2o_decode_eviction_interval, h2o_prefill_budget +

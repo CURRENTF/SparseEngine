@@ -87,7 +87,7 @@ scaling.
 | Storage | Explicit, homogeneous, unquantized BF16/FP16 KV (keys are edited in place when bounded). Actual post-RoPE keys required. MLA latent, shared-KV, head-slot layouts and quantized KV are rejected. |
 | Attention view | H2O's logical views; no custom payload. Only position values differ. |
 | Prefill execution | `h2o_prefill`, all chunked, batchable like H2O. Decode-only (`prefill_sparse_method=""`) and `flashprefill_v2` are rejected until validated. Score mode follows H2O (probability when `h2o_decode_eviction=True`). |
-| Admission | Physical capacity as H2O. With bounded positions, logical length is unbounded: `request_logical_length_limit` reports none, `max_model_len` becomes the physical row capacity (validated at config time against the worst resident row plus headroom), and decode-path capacity checks the physical row. The reference store is deducted from the KV budget at startup and allocated with the pool. |
+| Admission | Physical capacity as H2O. With bounded positions, logical length is unbounded: `request_logical_length_limit` reports none, `max_model_len` becomes the physical row capacity (validated at config time against the worst resident row plus headroom), and decode-path capacity checks the physical row. The reference store and RoPE table are deducted from the KV budget at startup; the row-aligned state (28 bytes) is added to every slot's per-layer cost, so the pool's slot count accounts for it. |
 | Lifecycle | Allocate: empty state, `shift=0`. Append: prefill writes logical/physical immediately; decode tokens are materialized from `next_physical` before any compaction or renumber. Evict/compact: gather by keep indices; references of evicted tokens are released. Chain turn finished: materialize decode tokens, assert `next_physical + shift == processed_token_count`. Chain snapshot/restore: row-aligned state and per-sequence shift travel with the H2O scores; reference entries are dropped (at most one extra rounding per offload). Radix prefix attach and fork are rejected. Free and warmup reset clear all state. Rollback: not supported, rejected. |
 | CUDA Graph | Foresight only: same as H2O (bonus and re-basing are host-scheduled prefill work). Bounded positions: eager only in this PR, rejected with `decode_graph=True`. Positions are written into the static buffer before replay and renumber runs in `finish_step` outside capture, so no algorithmic blocker is known; the gap is validation of every position producer under replay. |
 | Topology | TP=EP=DP=1 only. TP is plausible (the bonus and shift are deterministic per rank) but unvalidated; DP lacks per-request field forwarding. Rejected otherwise. |
@@ -109,15 +109,15 @@ length (`<= decode_budget + interval`), `C` prefill chunk, `S` plan spans,
 | Plan compile (once per turn) | `O(S log S)` host: merge spans into piecewise-constant max weights. |
 | Prefill chunk | `O(C log S)` once per sequence (searchsorted), then `A` adds of `C` floats. No host syncs. |
 | Turn re-basing | `O(A R log S)` once per resumed turn. |
-| Decode step | Unchanged from H2O, plus one integer subtraction per sequence. |
-| Eviction | H2O's, plus gathers of four `[R]` vectors per layer. |
+| Decode step | Unchanged from H2O, plus one integer subtraction per sequence. Decode columns are not recorded per step. |
+| Eviction | H2O's, plus one append of the pending decode columns and gathers of four `[R]` vectors per layer. |
 | Renumber | `O(A R Hkv D)` rotation plus an `O(R log R)` sort per layer. One event per `L - headroom - R` new tokens per sequence. |
 
 The overlay's per-span Python loop with a host sync per span and layer is
 removed. The overlay's slot-indexed tables (`O(A N)`) become row-aligned state
 (`O(A R)`).
 
-Bytes per sequence: `A * R * 28` for row-aligned state. Per KV layer:
+Bytes per sequence: `A * R * 28` for row-aligned state (counted per slot at startup: at most 28 bytes per slot and layer). Per KV layer:
 `cap * (Hkv * D * esize + 9)` for the reference store. For Qwen3-8B
 (`A=36`, `Hkv=8`, `D=128`, BF16) at `cap=4096` that is about 303 MB, shared by
 all sequences, plus about 2.2 MB per sequence at `R=2176`. The peak temporary
