@@ -2,9 +2,11 @@
 
 A short fact sits among thousands of filler lines, followed by a question that needs it.
 The KV budget is far below the prompt length; the PACEPlan names the fact's token span, so
-PACE keeps it. `--sparse_method h2o` runs the same prompt without a plan for comparison;
-whether H2O also keeps the fact depends on where it sits and what surrounds it (tokens next
-to the attention sinks at the very start tend to survive).
+PACE keeps it. `--sparse_method h2o` runs the same prompt without a plan for comparison.
+On this single prompt H2O usually keeps the fact too, because it stands out from uniform
+filler; the script shows how to pass a plan and checks that PACE works, not that it beats
+H2O. Plans matter when a span gets little attention at the time it is evicted but is needed
+later, as in multi-step agent sessions.
 
     python scripts/validation/pace_quickstart.py --model_path /path/to/Qwen3-8B
     python scripts/validation/pace_quickstart.py --model_path /path/to/Qwen3-8B --sparse_method h2o
