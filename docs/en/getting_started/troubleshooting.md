@@ -30,6 +30,20 @@ The engine cannot allocate enough KV slots for the prompt or prompt chunk.
 Increase `gpu_memory_utilization`, reduce `max_model_len` or batch size, or
 reduce the keep-token budgets.
 
+## `cuda_runtime.h: No such file or directory` during FlashInfer compilation
+
+FlashInfer compiles kernels on first use when no precompiled cache is installed. On
+machines with the NVIDIA driver and `nvcc` but without the CUDA toolkit headers, that
+compilation fails (`ninja: build stopped: subcommand failed`). Install the FlashInfer JIT
+cache whose version matches the installed `flashinfer-python`:
+
+```bash
+pip install "flashinfer-jit-cache==$(python -c 'import flashinfer; print(flashinfer.__version__)')" \
+  --index-url https://flashinfer.ai/whl/cu130
+```
+
+Use `cu129` in the index URL for CUDA 12.9.
+
 ## TensorRT-LLM DeepGEMM compilation cache
 
 CUDA workers use separate TensorRT-LLM DeepGEMM cache directories to avoid

@@ -155,10 +155,11 @@ Use `cu129` instead of `cu130` for CUDA 12.9.
 
 After installing the base environment, add these packages as needed.
 
-**FlashInfer JIT Cache** provides precompiled kernel caches to reduce compilation overhead on first use.
+**FlashInfer JIT Cache** provides precompiled kernel caches to reduce compilation overhead on first use. It is required when the CUDA toolkit headers are not installed: without it, FlashInfer compiles kernels on first use and fails with `cuda_runtime.h: No such file or directory`. Its version must match the installed `flashinfer-python`:
 
 ```bash
-pip install flashinfer-jit-cache --index-url https://flashinfer.ai/whl/cu130
+pip install "flashinfer-jit-cache==$(python -c 'import flashinfer; print(flashinfer.__version__)')" \
+  --index-url https://flashinfer.ai/whl/cu130
 ```
 
 **DeepEP V1** provides the NVLink MoE communication backend selected by `moe_backend="deepepv1"` and builds against the installed PyTorch/CUDA environment.
