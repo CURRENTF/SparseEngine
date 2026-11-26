@@ -19,6 +19,7 @@ Set `sparse_method` to one of the following method names.
 | `adakv` | Physical eviction | Allocate a layer budget across independent KV heads with probability scores and per-head safeguards; compact after final prefill and at chain turn completion. | `adakv_alpha`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `pool_kernel_size` |
 | `kvzip` | Physical eviction | Query-agnostic reconstruction with layer-specific unions or independent head slots. | `kvzip_token_budget`, `kvzip_score_chunk_size`, `kvzip_prev_postfix_size`, `kv_cache_layout` |
 | `h2o` | Physical eviction | Intermediate prefill chunks can be compacted to `h2o_prefill_budget`; the final prompt is compacted to `h2o_decode_budget`. Decode is score-free by default and grows with generated tokens. Optional `h2o_decode_eviction` accumulates decode probabilities and periodically evicts physical KV. | `h2o_decode_eviction`, `h2o_decode_budget`, `h2o_decode_eviction_interval`, `h2o_prefill_budget`, `h2o_recent_ratio`, `h2o_prefill_score_window`, `sparse_prefill_score_mode` |
+| `pace` | Physical eviction | H2O over foresight-adjusted scores: a per-request plan marks token spans that future agent steps will read; planned tokens outrank unplanned ones, the soonest-needed first. Without a plan it behaves like H2O. | `pace_bonus_scale`, `pace_bonus_decay`, `pace_bounded_positions`, `pace_position_limit`, `pace_reference_tokens`, all `h2o_*` parameters |
 | `pyramidkv` | Physical eviction | PyramidKV-style layer-dependent KV retention. Decode eviction is always enabled. Each sparse layer scores its last `observation_window_size` decode queries and compacts after its physical row reaches that layer's budget plus `decode_eviction_interval` (default 1024). Scoring runs after the decode Graph replay, only at eviction boundaries. | `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `observation_window_size`, `decode_eviction_interval`, `sparse_prefill_score_mode` |
 | `omnikv` | Logical masking with optional offload | Cross-layer token selection; optionally keep sparse-layer history in pinned CPU memory and fetch the exact selected KV for decode. | `full_attention_layers`, `decode_keep_tokens`, `sink_keep_tokens`, `recent_keep_tokens`, `enable_omnikv_offload` |
 | `quest` | Query-aware page selection | QuEST selects token pages from persistent min/max page summaries. Prefill stays dense. Explicit-KV models score in key coordinates; GLM-4.7-Flash scores the fused MLA latent/RoPE cache with the matching absorbed decode query while keeping the compute payload latent. | `quest_chunk_size`, `quest_skip_layers`, `sink_keep_tokens`, `decode_keep_tokens`, `recent_keep_tokens` |
@@ -121,6 +122,55 @@ fit `max_model_len`. Reserve this extra capacity. Reconstruction adds prefill
 work; quality and speed require evaluation. See the
 [development contract](../../development/kvzip-runtime.md) for the pinned reference.
 
+
+## PACE
+
+`sparse_method="pace"` keeps H2O's budgets, recent window, compaction and
+decode eviction, and adds a foresight bonus from a per-request `PACEPlan`:
+
+```python
+from sparseengine import LLM, PACEPlan
+
+llm = LLM(model, sparse_method="pace", h2o_decode_eviction=True,
+          h2o_decode_budget=2048, h2o_prefill_budget=4096)
+# Spans are half-open token ranges in logical session coordinates; the
+# integers are the future agent steps that will read each span.
+plan = PACEPlan(current_step=3, spans=((120, 480, (4, 9)), (900, 1300, (5,))))
+outputs = llm.generate([prompt_ids], sampling_params, pace_plans=[plan])
+```
+
+`add_request`/`admit_request` accept a singular `pace_plan`. A plan on any other
+method is rejected. For a span whose next planned reference is step `r` at
+current step `t`, its tokens receive
+`pace_bonus_scale * (0.5 + 0.5 * exp(-pace_bonus_decay * (r - t)))`; overlapping
+spans take the maximum, and spans whose last reference has passed get nothing.
+The bonus is added once when a prefill chunk's scores are appended. In chain
+mode (`enable_prefix_caching=True`), the first chunk of each resumed turn
+replaces the bonus already folded into resident scores with the bonus under the
+turn's plan, so tokens whose references have passed become ordinary H2O
+candidates. The bonus floor `pace_bonus_scale / 2` is assumed to exceed every
+reachable cumulative attention score; the engine does not enforce it.
+
+With `pace_bounded_positions=True`, sessions can exceed the model's RoPE range.
+Each sequence writes at `physical = logical - shift`; when the next physical
+position comes within `engine_prefill_chunk_size + 64` of the limit
+(`min(RoPE maximum, pace_position_limit)`), every layer's resident row is
+renumbered to `0..R-1` in logical order and its keys are re-rotated. Gaps
+between surviving tokens collapse. A per-layer reference store of
+`pace_reference_tokens` keys keeps rounding from compounding across renumbers;
+it is reserved from the KV budget at startup. PACE's row-aligned state (28 bytes per
+KV slot and layer) is counted in every slot's cost. Logical request length is then
+unbounded, and `max_model_len` is the physical row capacity. Bounded positions
+require `h2o_decode_eviction=True`, `decode_graph=False` and FP16/BF16 KV, and
+the limit must exceed the worst resident row
+(`max(h2o_decode_budget + h2o_decode_eviction_interval, h2o_prefill_budget +
+engine_prefill_chunk_size)`) plus that headroom.
+
+PACE currently requires `prefill_sparse_method="h2o_prefill"` (the default),
+explicit token-layout KV, Qwen2/Qwen3/Llama, and TP=EP=DP=1. Chain prefix
+caching and chain offload are supported; radix prefix caching, multimodal
+input and head-slot layouts are rejected. See the
+[development contract](../../development/pace-runtime.md).
 
 ## OmniKV KV offload
 

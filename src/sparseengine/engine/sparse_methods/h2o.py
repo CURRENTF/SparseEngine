@@ -5,8 +5,8 @@ import torch
 from sparseengine.engine.sequence import Sequence
 from sparseengine.method_registry import (
     h2o_uses_fused_prefill_score,
-    normalize_sparse_method,
     resolve_prefill_sparse_method,
+    uses_h2o_eviction,
 )
 from sparseengine.utils.profiler import profiler
 
@@ -87,9 +87,7 @@ class H2ORuntime(PassThroughRuntime):
         )
         if prefill_method == "h2o_prefill":
             self.cache_manager.evict_after_intermediate_prefill(step.seqs)
-        if normalize_sparse_method(
-            getattr(self.config, "sparse_method", None)
-        ) == "h2o":
+        if uses_h2o_eviction(getattr(self.config, "sparse_method", None)):
             self.cache_manager.compact_final_prefill_for_decode(step.seqs)
 
     def _h2o_kv_layer_indices(self) -> list[int]:

@@ -148,6 +148,19 @@ headroom and the distinction from original per-head KVzip.
 
 By default, compression happens during prefill without ongoing decode eviction. MLA decode eviction uses approximate scores and is not fully aligned with original H2O.
 
+## PACE
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `pace_bonus_scale` | float | `1e5` | Foresight bonus scale for `sparse_method="pace"`; planned tokens receive between half and all of it. Finite and positive. |
+| `pace_bonus_decay` | float | `0.35` | Per-step decay of the bonus with the distance to a span's next planned reference. Finite and non-negative. |
+| `pace_bounded_positions` | bool | `False` | Keep RoPE positions below a limit by renumbering resident rows and re-rotating keys; lifts the logical request-length limit. Requires decode eviction, eager decode and FP16/BF16 KV. |
+| `pace_position_limit` | int or None | `None` | Exclusive physical position bound; `None` uses the model's RoPE maximum. Only with bounded positions. |
+| `pace_reference_tokens` | int | `4096` | Reference keys per KV layer that keep re-rotation from compounding rounding; reserved from the KV budget. `0` disables the store. |
+
+PACE also uses every H2O parameter above. Plans are per request; see
+[PACE](../features/sparse-methods.md#pace).
+
 ## DeltaKV
 
 | Parameter | Type | Default | Description |

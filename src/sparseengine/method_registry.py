@@ -52,6 +52,8 @@ SPARSE_METHOD_MODEL_TYPES = {
     "deepseek_v4": frozenset({"deepseek_v4"}),
     "palu": frozenset({"llama", "qwen3"}),
     "kvzip": frozenset({"qwen2", "qwen3", "llama"}),
+    # Dense explicit-KV families with full-width split-half RoPE.
+    "pace": frozenset({"qwen2", "qwen3", "llama"}),
 }
 
 QUANTIZED_KV_METHODS = frozenset({"kivi", "turboquant", "fp8_kv"})
@@ -65,6 +67,7 @@ CANONICAL_SPARSE_METHODS = {
     "adakv",
     "kvzip",
     "h2o",
+    "pace",
     "pyramidkv",
     "omnikv",
     "quest",
@@ -74,6 +77,12 @@ CANONICAL_SPARSE_METHODS = {
     "deltakv",
     *QUANTIZED_KV_METHODS,
 }
+
+# Methods whose physical KV lifecycle is H2O cumulative-score eviction: one
+# score vector per (layer, sequence), H2O prefill compaction and decode eviction.
+# PACE (Planner-Aware Context Engine) adds a per-request foresight bonus to
+# these scores and otherwise keeps the H2O lifecycle.
+H2O_EVICTION_METHODS = frozenset({"h2o", "pace"})
 
 SUPPORTED_SPARSE_METHODS = set(CANONICAL_SPARSE_METHODS)
 SUPPORTED_SPARSE_METHOD_ALIASES = {str(k) for k in METHOD_ALIASES if k is not None and str(k)}
@@ -99,7 +108,7 @@ CANONICAL_PREFILL_SPARSE_METHODS = {
 
 PREFILL_SPARSE_METHOD_COMPATIBILITY = {
     "": frozenset(CANONICAL_SPARSE_METHODS),
-    "h2o_prefill": frozenset({"", "h2o"}),
+    "h2o_prefill": frozenset({"", "h2o", "pace"}),
     "omnikv_prefill": frozenset({"", "omnikv"}),
     "flashprefill_v2": frozenset({"", "omnikv", "quest", "snapkv", "h2o"}),
 }
@@ -120,7 +129,7 @@ def resolve_prefill_sparse_method(
 
     # A missing value keeps old `sparse_method="h2o"` configurations combined.
     # An explicit empty string is different: it requests decode-only H2O.
-    if method is None and normalize_sparse_method(sparse_method) == "h2o":
+    if method is None and uses_h2o_eviction(sparse_method):
         return "h2o_prefill"
     return normalize_prefill_sparse_method(method)
 
@@ -138,7 +147,9 @@ def resolve_cache_sparse_method(
         sparse_method=normalized,
     )
     if resolved_prefill == "h2o_prefill":
-        return "h2o"
+        # H2O prefill eviction needs an H2O-lifecycle owner; a decode method
+        # outside that family (including vanilla) is owned by plain H2O.
+        return normalized if normalized in H2O_EVICTION_METHODS else "h2o"
     return normalized
 
 
@@ -197,6 +208,7 @@ PREFIX_CACHE_SUPPORTED_METHODS = {
     "snapkv",
     "adakv",
     "h2o",
+    "pace",
     "pyramidkv",
     "rkv",
     "skipkv",
@@ -236,7 +248,7 @@ class SparsePrefillAttentionContract:
 
 
 _PREFILL_POSTHOC_SCORE_METHODS = frozenset(
-    {"snapkv", "adakv", "pyramidkv", "h2o"}
+    {"snapkv", "adakv", "pyramidkv", "h2o", "pace"}
 )
 
 # Prefill provider planning may be reused across transformer layers only when
@@ -253,6 +265,7 @@ _PREFILL_LAYER_VARYING_PAGE_TABLE = {
     "adakv": True,
     "kvzip": True,
     "h2o": True,
+    "pace": True,
     "pyramidkv": True,
     "omnikv": False,
     "quest": False,
@@ -283,7 +296,11 @@ def resolve_sparse_prefill_score_mode(
 
     normalized = normalize_sparse_method(method)
     if configured_mode is None:
-        return "logits" if normalized in {"snapkv", "h2o"} else "probability"
+        return (
+            "logits"
+            if normalized == "snapkv" or normalized in H2O_EVICTION_METHODS
+            else "probability"
+        )
     return str(configured_mode).strip().lower()
 
 
@@ -312,7 +329,7 @@ def sparse_prefill_attention_contract(
         normalized,
         prefill_sparse_method=resolved_prefill_method,
     )
-    h2o_score_collection = cache_method == "h2o"
+    h2o_score_collection = cache_method in H2O_EVICTION_METHODS
     layer_varying_page_table = _PREFILL_LAYER_VARYING_PAGE_TABLE[cache_method]
     fused_h2o_score = (
         h2o_score_collection
@@ -348,7 +365,7 @@ def h2o_uses_fused_prefill_score(config) -> bool:
             getattr(config, "sparse_method", None),
             prefill_sparse_method=getattr(config, "prefill_sparse_method", None),
         )
-        == "h2o"
+        in H2O_EVICTION_METHODS
         and resolve_prefill_sparse_method(
             getattr(config, "prefill_sparse_method", None),
             sparse_method=getattr(config, "sparse_method", None),
@@ -396,7 +413,7 @@ def sparse_decode_attention_score_kind(
     normalized = normalize_sparse_method(method)
     if normalized not in CANONICAL_SPARSE_METHODS:
         raise ValueError(f"Unknown sparse method {normalized!r}.")
-    if normalized == "h2o" and h2o_decode_eviction:
+    if normalized in H2O_EVICTION_METHODS and h2o_decode_eviction:
         if attention_cache_layout == "mla_latent":
             return AttentionScoreKind.RAW_QK_REDUCED
         return AttentionScoreKind.ATTENTION_PROBABILITY_REDUCED
@@ -515,6 +532,7 @@ _DEFAULT_PREFILL_POLICY_BY_METHOD = {
     "adakv": PREFILL_POLICY_ALL_CHUNKED,
     "kvzip": PREFILL_POLICY_ALL_CHUNKED,
     "h2o": PREFILL_POLICY_ALL_CHUNKED,
+    "pace": PREFILL_POLICY_ALL_CHUNKED,
     "pyramidkv": PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
     "omnikv": PREFILL_POLICY_ALL_CHUNKED,
     "quest": PREFILL_POLICY_ALL_CHUNKED,
@@ -540,6 +558,11 @@ def normalize_sparse_method(method: str | None) -> str:
     return METHOD_ALIASES.get(normalized, normalized)
 
 
+def uses_h2o_eviction(method: str | None) -> bool:
+    """Return whether the method owns KV state through the H2O eviction lifecycle."""
+    return normalize_sparse_method(method) in H2O_EVICTION_METHODS
+
+
 def validate_sparse_method_assets(method: str | None, model_path: str) -> None:
     if normalize_sparse_method(method) != "skipkv":
         return
@@ -550,6 +573,34 @@ def validate_sparse_method_assets(method: str | None, model_path: str) -> None:
             "SkipKV is supported only for models with released steering assets: "
             f"{supported}. Got model basename {model_name!r}."
         )
+
+
+# PACE renumbers once next_physical + headroom reaches the position limit. Renumber
+# checks run after every prefill chunk and every decode step, so at most one prefill
+# chunk is appended between two checks; the margin is extra slack on top of that. It is
+# kept equal to the reference implementation's value so the native method renumbers at
+# exactly the same points (parity). It is therefore a constant, not a tuning knob.
+PACE_POSITION_HEADROOM_MARGIN = 64
+
+
+def pace_position_headroom(engine_prefill_chunk_size: int) -> int:
+    """Positions that may be appended between two PACE renumber checks."""
+    return int(engine_prefill_chunk_size) + PACE_POSITION_HEADROOM_MARGIN
+
+
+def request_logical_length_limit(config) -> int | None:
+    """Largest prompt + generation length a request may declare, or None if unbounded.
+
+    PACE with bounded positions keeps physical rows and RoPE positions bounded
+    independently of the logical session length; ``max_model_len`` then bounds
+    the physical row, which its cache manager validates per step.
+    """
+    if (
+        normalize_sparse_method(getattr(config, "sparse_method", "")) == "pace"
+        and bool(getattr(config, "pace_bounded_positions", False))
+    ):
+        return None
+    return int(config.max_model_len)
 
 
 def is_deltakv_method(method: str | None) -> bool:
@@ -583,10 +634,18 @@ def validate_model_runtime_compatibility(
     if model_types is not None and model_type not in model_types:
         raise NotImplementedError(
             f"{method} requires one of {sorted(model_types)}; "
-            f"the auxiliary reconstruction lifecycle for {model_type!r} is not implemented."
+            f"its lifecycle for {model_type!r} is not implemented."
         )
     if method == "retroinfer" and topology.attn_tp_size != 1:
         raise ValueError("RetroInfer GPU-only v1 requires attention TP=1.")
+    if method == "pace" and (
+        topology.attn_tp_size, topology.moe_ep_size, topology.attn_dp_size
+    ) != (1, 1, 1):
+        raise ValueError(
+            "PACE is validated only for TP=EP=DP=1; got "
+            f"TP={topology.attn_tp_size} EP={topology.moe_ep_size} "
+            f"DP={topology.attn_dp_size}."
+        )
     compatibility = MODEL_RUNTIME_COMPATIBILITY.get(model_type)
     if model_type == "qwen3_moe" and topology.attn_tp_size > 1:
         compatibility = QWEN3_MOE_TP_EP_COMPATIBILITY

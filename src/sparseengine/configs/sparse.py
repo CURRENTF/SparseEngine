@@ -1,5 +1,7 @@
 """Sparse-method normalization and layout-dependent validation."""
 
+import math
+
 import torch
 
 from sparseengine.configs.common import (
@@ -10,6 +12,7 @@ from sparseengine.configs.common import (
 )
 from sparseengine.method_registry import (
     CANONICAL_PREFILL_SPARSE_METHODS,
+    H2O_EVICTION_METHODS,
     PREFILL_SPARSE_METHOD_COMPATIBILITY,
     SKIPKV_ASSET_MODEL_NAMES,
     SUPPORTED_SPARSE_METHODS,
@@ -17,10 +20,13 @@ from sparseengine.method_registry import (
     omnikv_prefill_layer_indices,
     resolve_cache_sparse_method,
     resolve_prefill_sparse_method,
+    pace_position_headroom,
     resolve_sparse_prefill_score_mode,
+    uses_h2o_eviction,
 )
 from sparseengine.utils.log import log_once, logger
 from sparseengine.models.layout import resolve_attention_qk_head_dim
+from sparseengine.models.rope import resolve_declared_rotary_dim, resolve_rope_max_position
 
 
 def normalize_sparse_method_name(config) -> None:
@@ -200,6 +206,103 @@ def _normalize_h2o(config) -> None:
         )
 
 
+def _normalize_pace(config) -> None:
+    if config.sparse_method != "pace":
+        return
+    if config.prefill_sparse_method != "h2o_prefill":
+        raise NotImplementedError(
+            "PACE is validated only with prefill_sparse_method='h2o_prefill'; got "
+            f"{config.prefill_sparse_method!r}."
+        )
+    if config.attention_cache_layout != "explicit_kv":
+        raise NotImplementedError("PACE requires explicit KV storage.")
+    if getattr(config, "kv_cache_layout", "token") == "head_slots":
+        raise NotImplementedError("PACE requires kv_cache_layout='token'.")
+    if getattr(config, "enable_multimodal", False):
+        raise NotImplementedError("PACE plans index text tokens; multimodal input is unsupported.")
+    _normalize_float_attr(config, "pace_bonus_scale")
+    _normalize_float_attr(config, "pace_bonus_decay")
+    if not math.isfinite(config.pace_bonus_scale) or config.pace_bonus_scale <= 0.0:
+        raise ValueError(
+            f"pace_bonus_scale must be finite and positive, got {config.pace_bonus_scale}."
+        )
+    if not math.isfinite(config.pace_bonus_decay) or config.pace_bonus_decay < 0.0:
+        raise ValueError(
+            f"pace_bonus_decay must be finite and non-negative, got {config.pace_bonus_decay}."
+        )
+    config.pace_bounded_positions = _coerce_bool_config(
+        "pace_bounded_positions", getattr(config, "pace_bounded_positions", False)
+    )
+    config.pace_resolved_position_limit = 0
+    if not config.pace_bounded_positions:
+        if getattr(config, "pace_position_limit", None) is not None:
+            raise ValueError("pace_position_limit requires pace_bounded_positions=True.")
+        return
+    reference_tokens = config.pace_reference_tokens
+    if isinstance(reference_tokens, bool) or not isinstance(reference_tokens, int) \
+            or reference_tokens < 0:
+        raise ValueError("pace_reference_tokens must be a non-negative integer.")
+    if not config.h2o_decode_eviction:
+        raise ValueError(
+            "pace_bounded_positions requires h2o_decode_eviction=True; without decode "
+            "eviction the resident row, and so the positions, keep growing."
+        )
+    if config.decode_graph:
+        raise NotImplementedError(
+            "pace_bounded_positions is validated only for eager decode; set decode_graph=False."
+        )
+    if config.hf_config.dtype not in (torch.float16, torch.bfloat16):
+        raise NotImplementedError(
+            "pace_bounded_positions re-rotates stored keys and requires FP16 or BF16 KV."
+        )
+    head_dim = int(resolve_attention_qk_head_dim(config.hf_config))
+    rotary_dim = resolve_declared_rotary_dim(config.hf_config, head_dim)
+    if rotary_dim != head_dim:
+        raise NotImplementedError(
+            "pace_bounded_positions supports full-width split-half RoPE only; the model "
+            f"declares rotary dimension {rotary_dim} for head dimension {head_dim}."
+        )
+    rope_max = int(resolve_rope_max_position(config.hf_config, model_name="PACE"))
+    limit = rope_max
+    requested = getattr(config, "pace_position_limit", None)
+    if requested is not None:
+        if isinstance(requested, bool) or not isinstance(requested, int) or requested <= 0:
+            raise ValueError("pace_position_limit must be a positive integer or None.")
+        limit = min(rope_max, int(requested))
+    chunk = int(config.engine_prefill_chunk_size)
+    headroom = pace_position_headroom(chunk)
+    worst_resident = max(
+        int(config.h2o_decode_budget) + int(config.h2o_decode_eviction_interval),
+        int(config.h2o_prefill_budget) + chunk,
+    )
+    if worst_resident + headroom >= limit:
+        raise ValueError(
+            f"pace position limit {limit} is too small: the resident row can reach "
+            f"{worst_resident} tokens (decode budget + interval, prefill budget + chunk) "
+            f"and {headroom} more are appended between renumbers."
+        )
+    if worst_resident + headroom > int(config.max_model_len):
+        raise ValueError(
+            "With pace_bounded_positions, max_model_len is the physical row capacity and "
+            f"must be at least {worst_resident + headroom}; got {config.max_model_len}."
+        )
+    if reference_tokens == 0:
+        log_once(
+            "pace_reference_tokens=0: bounded positions re-rotate stored keys in place, so "
+            "rounding error compounds with every renumber of a long-lived key. Use a "
+            "positive value (default 4096) unless measuring that effect.",
+            level="WARNING",
+        )
+    elif reference_tokens < worst_resident:
+        log_once(
+            f"pace_reference_tokens={reference_tokens} is below the worst resident row "
+            f"({worst_resident}); keys without a reference copy are re-rotated in place and "
+            "accumulate rounding error.",
+            level="WARNING",
+        )
+    config.pace_resolved_position_limit = limit
+
+
 def _normalize_sparse_prefill_score(config) -> None:
     config.h2o_decode_score_fusion = _coerce_bool_config(
         "h2o_decode_score_fusion", getattr(config, "h2o_decode_score_fusion", True)
@@ -208,8 +311,11 @@ def _normalize_sparse_prefill_score(config) -> None:
         "h2o_decode_eviction", getattr(config, "h2o_decode_eviction", False)
     )
     if config.h2o_decode_eviction:
-        if normalize_sparse_method(config.sparse_method) != "h2o":
-            raise ValueError("h2o_decode_eviction=True requires sparse_method='h2o'.")
+        if not uses_h2o_eviction(config.sparse_method):
+            raise ValueError(
+                "h2o_decode_eviction=True requires sparse_method in "
+                f"{{{', '.join(repr(m) for m in sorted(H2O_EVICTION_METHODS))}}}."
+            )
         if getattr(config, "attention_cache_layout", "explicit_kv") == "mla_latent":
             # TODO(h2o-mla-parity): normalize each head before reduction instead
             # of approximating attention mass with softmax(head-max raw QK).
@@ -245,7 +351,7 @@ def _normalize_sparse_prefill_score(config) -> None:
     if mode != "probability" and cache_method not in {
         "snapkv",
         "pyramidkv",
-        "h2o",
+        *H2O_EVICTION_METHODS,
     }:
         raise ValueError(
             "sparse_prefill_score_mode='logits' only applies to "
@@ -258,7 +364,7 @@ def _normalize_sparse_prefill_score(config) -> None:
             f"{config.sparse_attn_score_dtype!r}."
         )
     config.sparse_prefill_score_mode = mode
-    if mode == "probability" and cache_method == "h2o":
+    if mode == "probability" and cache_method in H2O_EVICTION_METHODS:
         # TODO(h2o-probability-efficiency): avoid duplicate QK work in H2O
         # probability scoring, including the path with reused attention LSE,
         # while preserving score semantics.
@@ -471,6 +577,7 @@ def normalize_sparse_methods(config) -> None:
     # and canonicalize config.sparse_prefill_score_mode before H2O window checks.
     _normalize_sparse_prefill_score(config)
     _normalize_h2o(config)
+    _normalize_pace(config)
     _normalize_rkv(config)
     _normalize_skipkv(config)
 
