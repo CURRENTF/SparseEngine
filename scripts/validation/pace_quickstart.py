@@ -1,8 +1,10 @@
 """PACE quickstart: plan-aware KV retention on one long prompt.
 
-A short fact is stated at the start of the prompt, followed by thousands of filler lines
-and a question that needs the fact. With a KV budget far below the prompt length, H2O
-usually evicts the fact; PACE keeps it because the plan names its token span.
+A short fact sits among thousands of filler lines, followed by a question that needs it.
+The KV budget is far below the prompt length; the PACEPlan names the fact's token span, so
+PACE keeps it. `--sparse_method h2o` runs the same prompt without a plan for comparison;
+whether H2O also keeps the fact depends on where it sits and what surrounds it (tokens next
+to the attention sinks at the very start tend to survive).
 
     python scripts/validation/pace_quickstart.py --model_path /path/to/Qwen3-8B
     python scripts/validation/pace_quickstart.py --model_path /path/to/Qwen3-8B --sparse_method h2o
@@ -26,7 +28,9 @@ def main():
     parser.add_argument("--sparse_method", choices=["pace", "h2o"], default="pace")
     parser.add_argument("--budget", type=int, default=2048, help="KV budget in tokens")
     parser.add_argument("--filler_lines", type=int, default=2500,
-                        help="filler lines between the fact and the question (~14 tokens each)")
+                        help="filler lines in the prompt (~14 tokens each)")
+    parser.add_argument("--fact_position", type=float, default=0.5,
+                        help="where the fact sits among the filler lines, 0 (start) to 1 (end)")
     parser.add_argument("--bounded", action="store_true",
                         help="PACE with bounded positions (pace_position_limit=8192)")
     parser.add_argument("--seed", type=int, default=0)
@@ -39,13 +43,13 @@ def main():
     rng = random.Random(args.seed)
     code = f"{rng.randint(1000, 9999)}-{rng.choice('ABCDEFGHJKMNPQRSTUVWXYZ')}{rng.choice('ABCDEFGHJKMNPQRSTUVWXYZ')}"
     fact = f"The release code for project Kestrel is {code}."
-    filler = "\n".join(f"Note {i}: routine status update, nothing to report."
-                       for i in range(args.filler_lines))
+    lines = [f"Note {i}: routine status update, nothing to report." for i in range(args.filler_lines)]
+    lines.insert(round(min(max(args.fact_position, 0.0), 1.0) * len(lines)), fact)
     question = "What is the release code for project Kestrel? Reply with the code only."
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     text = tokenizer.apply_chat_template(
-        [{"role": "user", "content": f"{fact}\n{filler}\n{question}"}],
+        [{"role": "user", "content": "\n".join(lines) + "\n" + question}],
         tokenize=False, add_generation_prompt=True, enable_thinking=False)
     enc = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
     start_char = text.index(fact)
@@ -72,7 +76,8 @@ def main():
     answer = out[0]["text"].strip()
     correct = code in answer
     print(f"{args.sparse_method}{' (bounded positions)' if args.bounded else ''}: "
-          f"prompt {len(enc['input_ids'])} tokens, KV budget {args.budget}, "
+          f"prompt {len(enc['input_ids'])} tokens, fact at tokens {fact_tokens[0]}-{fact_tokens[-1]}, "
+          f"KV budget {args.budget}, "
           f"expected {code!r}, answer {answer!r} -> {'correct' if correct else 'wrong'}")
     if args.sparse_method == "pace" and not correct:
         sys.exit(1)
