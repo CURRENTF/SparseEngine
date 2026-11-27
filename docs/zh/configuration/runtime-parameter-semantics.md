@@ -214,6 +214,5 @@ query 数量，不包含 prompt queries。
 工作区检查，需要按报错增加此参数。cache allocator 会单独
 预留。若一个评分分块都无法容纳，需要增大该参数；评分失败不会自动退回 Full-KV。
 
-旧近似算法的非零 `rkv_redundancy_window`、非空 `rkv_max_redundancy_tokens`、
-非 0.5 的 `rkv_similarity_threshold` 和非 1 的 `rkv_recent_similar_keep` 会被拒绝。
+R-KV 要求 `rkv_similarity_threshold=0.5` 和 `rkv_recent_similar_keep=1`。
 选择语义已变化，旧 RKV 结果需要重新运行后才能比较。

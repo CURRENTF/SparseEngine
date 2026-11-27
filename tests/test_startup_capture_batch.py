@@ -13,7 +13,7 @@ from sparseengine.sampling_params import SamplingParams
 def _engine(*, capacity=25, remote_capacity=None, fail_prefill=False, fail_capture=False):
     engine = object.__new__(LLMEngine)
     engine.config = SimpleNamespace(
-        sparse_method="h2o", decode_graph_startup_capture=True,
+        sparse_method="h2o", decode_graph=True,
         decode_graph_capture_sizes=[3], decode_graph_startup_capture_limit=8,
         max_model_len=24, sink_keep_tokens=2, decode_keep_tokens=6,
         recent_keep_tokens=2, hf_config=SimpleNamespace(vocab_size=128),

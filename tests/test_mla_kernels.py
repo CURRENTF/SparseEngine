@@ -13,7 +13,6 @@ from sparseengine.kernels.triton.mla import (
     copy_latent_to_cache,
     decode_stage1,
     decode_stage2,
-    gather_latent_history,
     prepare_mla_decode_schedule,
     run_mla_decode,
     validate_copy_slot_mappings,
@@ -251,85 +250,6 @@ def test_batched_copy_slot_validation_is_row_local() -> None:
         )
 
 
-@CUDA_REQUIRED
-def test_gather_latent_full_ragged_history_with_padded_row() -> None:
-    torch.manual_seed(5)
-    latent_cache = torch.randn(
-        (24, 1, 512),
-        dtype=torch.bfloat16,
-        device="cuda",
-    )
-    rope_cache = torch.randn(
-        (24, 1, 64),
-        dtype=torch.bfloat16,
-        device="cuda",
-    )
-    active_storage = torch.full((3, 14), -1, dtype=torch.int32, device="cuda")
-    active_slots = active_storage[:, ::2]
-    assert not active_slots.is_contiguous()
-    row_two = torch.tensor([7, 1, 13, 4, 18], dtype=torch.int32, device="cuda")
-    row_zero = torch.tensor([6, 21, 2], dtype=torch.int32, device="cuda")
-    active_slots[2, :5] = row_two
-    active_slots[0, :3] = row_zero
-    request_indices = torch.tensor([2, 0, -1], dtype=torch.int32, device="cuda")
-    context_lens = torch.tensor([5, 3, 0], dtype=torch.int32, device="cuda")
-    packed_starts = torch.tensor([0, 5, 8], dtype=torch.int32, device="cuda")
-    gathered_latent = torch.full(
-        (8, 512),
-        float("nan"),
-        dtype=torch.bfloat16,
-        device="cuda",
-    )
-    gathered_rope = torch.full(
-        (8, 64),
-        float("nan"),
-        dtype=torch.bfloat16,
-        device="cuda",
-    )
-
-    gather_latent_history(
-        latent_cache,
-        rope_cache,
-        active_slots,
-        request_indices,
-        context_lens,
-        packed_starts,
-        gathered_latent,
-        gathered_rope,
-        max_context_len=7,
-    )
-    torch.cuda.synchronize()
-
-    expected_slots = torch.cat((row_two, row_zero)).long()
-    torch.testing.assert_close(gathered_latent, latent_cache[expected_slots, 0])
-    torch.testing.assert_close(gathered_rope, rope_cache[expected_slots, 0])
-
-
-@CUDA_REQUIRED
-def test_gather_latent_rejects_duplicate_source_positions() -> None:
-    latent_cache = torch.zeros((4, 1, 512), dtype=torch.bfloat16, device="cuda")
-    rope_cache = torch.zeros((4, 1, 64), dtype=torch.bfloat16, device="cuda")
-    active_slots = torch.tensor([[1, 1]], dtype=torch.int32, device="cuda")
-    request_indices = torch.tensor([0], dtype=torch.int32, device="cuda")
-    context_lens = torch.tensor([2], dtype=torch.int32, device="cuda")
-    packed_starts = torch.tensor([0], dtype=torch.int32, device="cuda")
-    gathered_latent = torch.empty((2, 512), dtype=torch.bfloat16, device="cuda")
-    gathered_rope = torch.empty((2, 64), dtype=torch.bfloat16, device="cuda")
-
-    with pytest.raises(ValueError, match="duplicate"):
-        gather_latent_history(
-            latent_cache,
-            rope_cache,
-            active_slots,
-            request_indices,
-            context_lens,
-            packed_starts,
-            gathered_latent,
-            gathered_rope,
-            max_context_len=2,
-        )
-
-
 @pytest.mark.parametrize("batch_size", (1, 2, 8))
 @pytest.mark.parametrize("head_count", (5, 10, 20))
 @CUDA_REQUIRED
@@ -429,49 +349,6 @@ def test_mla_decode_writes_raw_attention_scores(reduce_heads: bool) -> None:
             expected = expected.max(dim=0).values
         torch.testing.assert_close(actual, expected, rtol=3e-2, atol=3e-2)
         assert torch.all(scores[batch_idx, ..., length:] == -1.0e20)
-
-
-@CUDA_REQUIRED
-@pytest.mark.parametrize("graph_mode", [False, True])
-def test_mla_h2o_reduced_score_softmax_matches_approximation(graph_mode):
-    from sparseengine.kernels.triton.h2o_score import h2o_softmax_accumulate
-
-    torch.manual_seed(218)
-    case = _make_decode_case(batch_size=1, head_count=20, max_context_len=33)
-    q, qr, latent, rope, slots, rows, lengths = case
-    length = int(lengths[0].item())
-    output = torch.empty_like(q)
-    scores = torch.empty((1, slots.shape[1]), device="cuda", dtype=torch.float32)
-    history = torch.zeros((1, 1, slots.shape[1]), device="cuda", dtype=torch.float32)
-    workspace = allocate_mla_decode_workspace(batch_size=1, head_count=20, device="cuda")
-
-    def attention():
-        run_mla_decode(
-            q, qr, latent, rope, slots, rows, lengths, output, workspace,
-            softmax_scale=GLM_MLA_SOFTMAX_SCALE, attn_score=scores,
-        )
-
-    attention()
-    graph = None
-    if graph_mode:
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            attention()
-    expected = torch.zeros(length, device="cuda")
-    active = slots[int(rows[0].item()), :length].long()
-    for _ in range(3):
-        q.mul_(0.9)
-        graph.replay() if graph is not None else attention()
-        # H2O accumulation is intentionally graph-out, following model replay.
-        h2o_softmax_accumulate(
-            scores.unsqueeze(0), history, width=length, previous_width=length,
-            softmax_scale=GLM_MLA_SOFTMAX_SCALE,
-        )
-        raw = q[0].float() @ latent[active, 0].float().T
-        raw += qr[0].float() @ rope[active, 0].float().T
-        expected += (raw.amax(0) * GLM_MLA_SOFTMAX_SCALE).softmax(-1)
-        torch.testing.assert_close(history[0, 0, :length], expected, rtol=3e-2, atol=2e-3)
-    assert torch.all(history[..., length:] == 0)
 
 
 @CUDA_REQUIRED

@@ -233,7 +233,6 @@ startup check reports insufficient bytes; the cache allocator
 reserves this workspace separately. Increase it if even one scoring tile cannot
 fit. There is no automatic Full-KV fallback on scoring failure.
 
-Legacy RKV approximation overrides `rkv_redundancy_window` (nonzero),
-`rkv_max_redundancy_tokens` (non-null), `rkv_similarity_threshold` (other than 0.5),
-and `rkv_recent_similar_keep` (other than 1) are rejected. Existing RKV results
-must be rerun before comparison because the token-selection semantics changed.
+R-KV requires `rkv_similarity_threshold=0.5` and `rkv_recent_similar_keep=1`.
+Rerun results from the legacy approximation before comparing them with current
+results because the token-selection semantics changed.

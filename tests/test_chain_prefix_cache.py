@@ -544,7 +544,6 @@ def test_runtime_chain_lru_reclaims_payload_before_reusing_capacity():
         recent_keep_tokens=1,
         decode_keep_tokens=4,
         observation_window_size=2,
-        snapkv_num_full_layers=0,
         sparse_attn_score_dtype="float32",
         pool_kernel_size=1,
     )
@@ -613,7 +612,6 @@ def test_runtime_warmup_reset_reclaims_chain_payload_before_metadata():
         recent_keep_tokens=1,
         decode_keep_tokens=4,
         observation_window_size=2,
-        snapkv_num_full_layers=0,
         sparse_attn_score_dtype="float32",
         pool_kernel_size=1,
     )
@@ -654,7 +652,6 @@ def test_snapkv_resumed_prefill_score_uses_physical_coordinates():
     manager = object.__new__(SnapKVCacheManager)
     manager.config = SimpleNamespace(
         sparse_method="snapkv",
-        snapkv_num_full_layers=0,
         observation_window_size=8,
         sink_keep_tokens=2,
         decode_keep_tokens=16,
@@ -693,7 +690,6 @@ def test_snapkv_resumed_prefill_skips_score_below_physical_budget():
     manager = object.__new__(SnapKVCacheManager)
     manager.config = SimpleNamespace(
         sparse_method="snapkv",
-        snapkv_num_full_layers=0,
         observation_window_size=8,
         sink_keep_tokens=2,
         decode_keep_tokens=16,
@@ -717,7 +713,6 @@ def test_snapkv_recompute_replay_scores_the_full_prompt_window():
     manager = object.__new__(SnapKVCacheManager)
     manager.config = SimpleNamespace(
         sparse_method="snapkv",
-        snapkv_num_full_layers=0,
         observation_window_size=8,
         sink_keep_tokens=2,
         decode_keep_tokens=16,
@@ -799,7 +794,6 @@ def test_resumed_snapkv_capacity_reserves_score_free_decode_growth():
     manager = object.__new__(SnapKVCacheManager)
     manager.config = SimpleNamespace(
         sparse_method="snapkv",
-        snapkv_num_full_layers=0,
         sink_keep_tokens=1,
         decode_keep_tokens=8,
         recent_keep_tokens=1,
@@ -831,7 +825,6 @@ def test_resumed_snapkv_without_suffix_reserves_growth_from_existing_row():
     manager = object.__new__(SnapKVCacheManager)
     manager.config = SimpleNamespace(
         sparse_method="snapkv",
-        snapkv_num_full_layers=0,
         sink_keep_tokens=1,
         decode_keep_tokens=8,
         recent_keep_tokens=1,
@@ -1117,7 +1110,6 @@ def test_chain_admission_reserves_capacity_before_prefill_allocation():
         prefix_cache_salt="",
         chain_cache_max_tombstones=8,
         full_attention_layers=[],
-        snapkv_num_full_layers=0,
         sink_keep_tokens=1,
         decode_keep_tokens=8,
         recent_keep_tokens=1,
@@ -1185,7 +1177,6 @@ def test_engine_chain_admission_reuses_resident_seq_and_logical_boundary():
         recent_keep_tokens=1,
         decode_keep_tokens=4,
         observation_window_size=2,
-        snapkv_num_full_layers=0,
         sparse_attn_score_dtype="float32",
         pool_kernel_size=1,
     )
@@ -1255,12 +1246,13 @@ def test_engine_chain_admission_reuses_resident_seq_and_logical_boundary():
         stable_token_digest([1, 2, 3, 9], count=3),
         3,
     )
-    coordinator.remember_processed_tokens(
+    prepared = coordinator.prepare_processed_tokens(
         chain_id=first.chain_id,
         seq_id=first.seq_id,
         token_ids=[1, 2, 3, 9],
         processed_token_count=3,
     )
+    coordinator.remember_prepared_tokens(prepared)
     assert cache_manager.finished_turns == [(first.seq_id, 3)]
     engine._active_chain_sequences.clear()
     resumed = engine.admit_request(

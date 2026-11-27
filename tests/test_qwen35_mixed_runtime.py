@@ -797,37 +797,11 @@ def test_qwen36_recurrent_capacity_counts_rows_and_scratch_exactly():
     assert on_capacity.pool_bytes == 1_019_805_696
 
 
-def _deprecation_messages(mock_log_once):
-    return [
-        call.args[0]
-        for call in mock_log_once.call_args_list
-        if call.args and "prefix_cache_max_recurrent_bytes is deprecated" in call.args[0]
-    ]
-
-
-def test_recurrent_budget_accepts_deprecated_prefix_cache_alias(tmp_path):
-    with patch("sparseengine.configs.prefix_cache.log_once") as mock_log_once:
-        config = _make_config(tmp_path, prefix_cache_max_recurrent_bytes=2 << 30)
-
-    assert config.recurrent_state_max_bytes == 2 << 30
-    assert config.prefix_cache_max_recurrent_bytes == 2 << 30
-    assert len(_deprecation_messages(mock_log_once)) == 1
-
-
-def test_recurrent_budget_rejects_conflicting_new_and_deprecated_names(tmp_path):
-    with pytest.raises(ValueError, match="conflicting recurrent state budgets"):
-        _make_config(
-            tmp_path,
-            recurrent_state_max_bytes=2 << 30,
-            prefix_cache_max_recurrent_bytes=3 << 30,
-        )
-
-
-def test_deprecated_recurrent_budget_caps_prefix_on_live_pool(tmp_path):
+def test_recurrent_budget_caps_prefix_on_live_pool(tmp_path):
     config = _make_config(
         tmp_path,
         enable_prefix_caching=True,
-        prefix_cache_max_recurrent_bytes=1,
+        recurrent_state_max_bytes=1,
     )
     state_spec = Qwen35ForCausalLM.recurrent_state_spec(config.hf_config, world_size=1)
 
@@ -1469,27 +1443,6 @@ def test_qwen35_rmsnorm_supports_strided_qkv_views(dtype):
         rtol=1.0e-2,
         atol=3.0e-2,
     )
-
-
-def test_qwen35_decode_state_padding_preserves_real_rows_for_static_batch():
-    from sparseengine.models.qwen3_5 import Qwen35LinearAttention
-
-    conv = torch.arange(2 * 3 * 4, dtype=torch.float32).reshape(2, 3, 4)
-    recurrent = torch.arange(2 * 3 * 2 * 2, dtype=torch.float32).reshape(2, 3, 2, 2)
-
-    padded_conv, padded_recurrent = Qwen35LinearAttention._pad_decode_states_for_static_batch(
-        conv,
-        recurrent,
-        token_batch=4,
-        real_batch=2,
-    )
-
-    assert padded_conv.shape == (4, 3, 4)
-    assert padded_recurrent.shape == (4, 3, 2, 2)
-    assert torch.equal(padded_conv[:2], conv)
-    assert torch.equal(padded_recurrent[:2], recurrent)
-    assert torch.equal(padded_conv[2], conv[0])
-    assert torch.equal(padded_recurrent[3], recurrent[0])
 
 
 def test_linear_layer_kv_hook_fails_fast_without_allocating_cache():

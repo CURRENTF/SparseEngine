@@ -22,6 +22,8 @@ from transformers.models.gemma4.modeling_gemma4 import (
     Gemma4TextRouter as HFGemma4Router,
 )
 
+from gemma4_reference import TorchGemma4OperatorProvider, TorchGemma4RouterProvider
+
 from sparseengine.configs.sparse import normalize_sparse_methods
 from sparseengine.distributed import ParallelContext, ParallelGroup
 from sparseengine.engine.cache_manager.base import ExplicitKVPayload
@@ -36,20 +38,14 @@ from sparseengine.models.gemma4 import (
 from sparseengine.models.layout import RuntimeLayout
 from sparseengine.operators.gemma4 import (
     Gemma4OpSpec,
-    TorchGemma4OperatorProvider,
     TritonGemma4OperatorProvider,
 )
 from sparseengine.operators.gemma4_attention import (
     Gemma4FlashInferPrefill,
     _FlashInferState,
 )
-from sparseengine.operators.gemma4_moe import (
-    GEMMA4_MOE_REGISTRY,
-    TorchGemma4MoeProvider,
-)
 from sparseengine.operators.gemma4_router import (
     H20Gemma4RouterProvider,
-    TorchGemma4RouterProvider,
     TritonGemma4RouterProvider,
 )
 from sparseengine.utils.config import config_layer_get
@@ -244,10 +240,6 @@ def test_gemma4_provider_gelu_tanh_and_mul_matches_torch(dtype, rows):
     actual = TritonGemma4OperatorProvider().gelu_tanh_and_mul(actual_input)
     torch.testing.assert_close(actual, expected, rtol=3e-3, atol=3e-3)
     assert actual.data_ptr() == actual_input.data_ptr()
-
-
-def test_gemma4_moe_torch_oracle_is_not_a_production_fallback():
-    assert TorchGemma4MoeProvider not in GEMMA4_MOE_REGISTRY.providers
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -654,7 +646,7 @@ def test_gemma4_moe_parallel_eager_and_graph_match_independent_dense_reference(t
             dense = norm(x, layer.pre_feedforward_layernorm)
             def project(x, linear):
                 if linear.quantized:
-                    from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+                    from fp8_reference import fp8_blockwise_linear_reference
                     return fp8_blockwise_linear_reference(
                         x.bfloat16(), linear.weight, linear.weight_scale_inv).float()
                 return F.linear(x, linear.weight.float())

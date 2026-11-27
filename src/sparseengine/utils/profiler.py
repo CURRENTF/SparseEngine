@@ -20,11 +20,8 @@ class Profiler:
         self.nvtx_enabled = env_is_one("SPARSEENGINE_NVTX")
         self._no_trace = nullcontext()
         self.rank = 0
-        # 通过环境变量开启设备同步，以准确测量设备耗时；保留旧 CUDA 名称兼容。
-        self.device_sync = (
-            env_is_one("SPARSEENGINE_SYNC_DEVICE")
-            or env_is_one("CUDA_SYNC_SENGINE")
-        )
+        # 通过环境变量开启设备同步，以准确测量设备耗时。
+        self.device_sync = env_is_one("SPARSEENGINE_SYNC_DEVICE")
 
     def trace(self, name: str):
         """Annotate launches without timing, device queries, or synchronization.

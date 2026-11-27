@@ -60,8 +60,7 @@ def validate_head_slots(config) -> None:
         raise ValueError("head_slots pool_kernel_size must be a positive integer.")
     if config.snapkv_decode_eviction:
         raise ValueError("head_slots compresses at final prefill/chain turn boundaries; decode eviction is unsupported.")
-    if (config.snapkv_num_full_layers or config.full_attention_layers
-            or config.pyramid_layer_ratios is not None):
+    if config.full_attention_layers or config.pyramid_layer_ratios is not None:
         raise ValueError("Use head_slot_budgets for every head/layer, without full-layer overrides.")
     budgets = config.head_slot_budgets
     if config.sparse_method == "adakv":

@@ -1801,24 +1801,6 @@ class H2OCacheManager(SnapKVCacheManager):
         if self.num_free_slots <= 0:
             self._evict_decode_rows([])
 
-    def evict_after_prefill(self, seqs: list[Sequence]) -> None:
-        """Compatibility wrapper for the legacy combined H2O lifecycle."""
-
-        self._evict(seqs, is_prefill=True)
-        for layer_idx in self.kv_transformer_layer_indices():
-            for seq in seqs:
-                if not seq.is_last_chunk_prefill:
-                    continue
-                kv_len = self._physical_row_len(layer_idx, seq)
-                if kv_len > self.h2o_decode_budget:
-                    raise RuntimeError(
-                        "H2O final prefill did not compact to the decode budget: "
-                        f"layer={layer_idx} seq_id={seq.seq_id} "
-                        f"kv_len={kv_len} budget={self.h2o_decode_budget}."
-                    )
-        if self.num_free_slots <= 0:
-            self._evict_decode_rows([])
-
     def _decode_eviction_groups(
         self,
         seqs: list[Sequence],
@@ -1890,63 +1872,43 @@ class H2OCacheManager(SnapKVCacheManager):
 
         budget = self.h2o_decode_budget
         ratio = float(self.config.h2o_recent_ratio)
-        fast_path = self.buffer_req_to_token_slots_tensor is not None
         evicted_rows = 0
         dropped_tokens = 0
         burst_count = 0
         for kv_len, group_seqs in groups.items():
             burst_count += len(group_seqs)
-            if fast_path:
-                with profiler.record("h2o_decode_burst_select"):
-                    scores = torch.stack(
-                        [
-                            self._require_score_length(layer_idx, seq, kv_len)
-                            for layer_idx in layer_indices
-                            for seq in group_seqs
-                        ],
-                        dim=0,
-                    ).view(len(layer_indices), len(group_seqs), kv_len)
-                    keep_indices = self.select_h2o_indices_batch(
-                        scores.view(-1, kv_len),
-                        budget=budget,
-                        recent_ratio=ratio,
-                    ).view(len(layer_indices), len(group_seqs), budget)
-                    kept_scores = scores.gather(2, keep_indices)
-                with profiler.record("h2o_decode_burst_compact_layers"):
-                    SnapKVCacheManager.free_part_slots_batch_layers(
-                        self,
-                        layer_indices,
-                        group_seqs,
-                        keep_indices,
-                        keep_indices_sorted=True,
+            with profiler.record("h2o_decode_burst_select"):
+                scores = torch.stack(
+                    [
+                        self._require_score_length(layer_idx, seq, kv_len)
+                        for layer_idx in layer_indices
+                        for seq in group_seqs
+                    ],
+                    dim=0,
+                ).view(len(layer_indices), len(group_seqs), kv_len)
+                keep_indices = self.select_h2o_indices_batch(
+                    scores.view(-1, kv_len),
+                    budget=budget,
+                    recent_ratio=ratio,
+                ).view(len(layer_indices), len(group_seqs), budget)
+                kept_scores = scores.gather(2, keep_indices)
+            with profiler.record("h2o_decode_burst_compact_layers"):
+                SnapKVCacheManager.free_part_slots_batch_layers(
+                    self,
+                    layer_indices,
+                    group_seqs,
+                    keep_indices,
+                    keep_indices_sorted=True,
+                )
+            for local_layer, layer_idx in enumerate(layer_indices):
+                for batch_idx, seq in enumerate(group_seqs):
+                    self._store_kept_score(
+                        layer_idx,
+                        seq.seq_id,
+                        kept_scores[local_layer, batch_idx],
+                        keep_indices[local_layer, batch_idx],
+                        previous_len=kv_len,
                     )
-                for local_layer, layer_idx in enumerate(layer_indices):
-                    for batch_idx, seq in enumerate(group_seqs):
-                        self._store_kept_score(
-                            layer_idx,
-                            seq.seq_id,
-                            kept_scores[local_layer, batch_idx],
-                            keep_indices[local_layer, batch_idx],
-                            previous_len=kv_len,
-                        )
-            else:
-                with profiler.record("h2o_decode_burst_fallback"):
-                    for layer_idx in layer_indices:
-                        for seq in group_seqs:
-                            score = self._require_score_length(
-                                layer_idx, seq, kv_len
-                            )
-                            keep_indices = self.select_h2o_indices(
-                                score,
-                                budget=budget,
-                                recent_ratio=ratio,
-                            )
-                            self.free_part_slots(
-                                layer_idx,
-                                seq,
-                                keep_indices,
-                                keep_indices_sorted=True,
-                            )
             rows = len(layer_indices) * len(group_seqs)
             evicted_rows += rows
             dropped_tokens += (kv_len - budget) * rows

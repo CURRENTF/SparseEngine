@@ -7,7 +7,7 @@ from transformers import Qwen3Config
 
 from sparseengine.config import QuantizationConfig
 from sparseengine.models.qwen3 import Qwen3ForCausalLM
-from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+from fp8_reference import fp8_blockwise_linear_reference
 from sparseengine.utils.loader import load_model
 
 

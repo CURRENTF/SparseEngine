@@ -33,7 +33,7 @@ def make_manager(cls=SnapKVCacheManager, device="cpu", rows=2, capacity=16):
     m.config = SimpleNamespace(
         sparse_method="snapkv", max_model_len=32, max_num_seqs_in_gpu=rows,
         sink_keep_tokens=1, recent_keep_tokens=1, decode_keep_tokens=8,
-        snapkv_num_full_layers=0, model="test-model", tensor_parallel_size=1,
+        model="test-model", tensor_parallel_size=1,
         hf_config=SimpleNamespace(model_type="test", dtype=torch.float16),
     )
     m.kv_cache = torch.arange(2 * 2 * capacity * 8, dtype=torch.float16, device=device).reshape(2, 2, capacity, 1, 8)

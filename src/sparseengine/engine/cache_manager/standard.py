@@ -222,14 +222,6 @@ class StandardCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManag
             )
         return storage
 
-    def _require_uniform_explicit_storage(self, operation: str) -> ExplicitKVStorage:
-        storage = self.attention_cache_storage
-        if not isinstance(storage, ExplicitKVStorage):
-            raise NotImplementedError(
-                f"{operation} does not support heterogeneous per-layer KV shapes."
-            )
-        return storage
-
     def get_layer_batch_states(self, layer_idx: int) -> LayerBatchStates:
         return self.layer_batch_state
 

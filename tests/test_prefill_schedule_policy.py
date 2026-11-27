@@ -16,11 +16,7 @@ from sparseengine.configs.cuda_graph import (
 )
 from sparseengine.engine.cache_manager.base import LayerBatchStates
 from sparseengine.engine.cache_manager.standard import StandardCacheManager
-from sparseengine.engine.cache_manager.methods.deltakv import DeltaKVCacheManager
-from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
-from sparseengine.engine.cache_manager.methods.deltakv_less_memory_cuda_graph import (
-    DeltaKVLessMemoryCudaGraphCacheManager,
-)
+from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
 from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
 from sparseengine.engine.decode_cuda_graph import DecodeCudaGraphRunner
 from sparseengine.engine.llm_engine import (
@@ -604,7 +600,6 @@ class PrefillPolicyRegistryTest(unittest.TestCase):
         cfg.recent_keep_tokens = 1
         cfg.decode_keep_tokens = 3
         cfg.pool_kernel_size = 1
-        cfg.snapkv_num_full_layers = 0
         cfg.pyramid_layer_ratios = None
         manager = FakeSnapManager()
         controller = SparseController(cfg, manager)
@@ -800,7 +795,6 @@ class PrefillPolicyConfigTest(unittest.TestCase):
         config = SimpleNamespace(
             sparse_method="pyramidkv", snapkv_decode_eviction=False,
             decode_eviction_interval=1024, observation_window_size=32,
-            snapkv_num_full_layers=0,
         )
         _normalize_snapkv(config)
         self.assertTrue(config.snapkv_decode_eviction)
@@ -1308,12 +1302,12 @@ class DecodeCudaGraphWarmupPolicyTest(unittest.TestCase):
 
 class DeltaKVLessMemoryCudaGraphReserveTest(unittest.TestCase):
     def make_manager(self, decode_graph=True):
-        manager = object.__new__(DeltaKVLessMemoryCudaGraphCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.config = SimpleNamespace(decode_graph=decode_graph)
         return manager
 
     def test_regular_less_memory_has_no_graph_workspace_reserve(self):
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = self.make_manager(decode_graph=False)
 
         self.assertEqual(manager._extra_workspace_reserve_bytes(), 0)
 
@@ -1460,7 +1454,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
                 self.assertEqual(pyramid.prefill_execution_mode(resumed), expected)
 
     def test_deltakv_fresh_modes_use_residual_boundary(self):
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.config = SimpleNamespace(
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
             engine_prefill_chunk_size=2,
@@ -1494,7 +1488,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         )
         managers.append(("pyramidkv", pyramid))
 
-        deltakv = object.__new__(DeltaKVLessMemoryCacheManager)
+        deltakv = object.__new__(DeltaKVCacheManager)
         deltakv.config = SimpleNamespace(
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
             engine_prefill_chunk_size=2,
@@ -1530,6 +1524,10 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
                 )
 
     def test_deltakv_base_resumed_raw_offload_fails_before_row_mutation(self):
+        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import (
+            DeltaKVLessMemoryCacheManager,
+        )
+
         manager = object.__new__(DeltaKVLessMemoryCacheManager)
         manager.config = SimpleNamespace(
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
@@ -1867,7 +1865,6 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         manager.config = SimpleNamespace(
             sparse_method="snapkv",
             observation_window_size=2,
-            snapkv_num_full_layers=0,
             sink_keep_tokens=1,
             decode_keep_tokens=4,
             recent_keep_tokens=1,
@@ -1878,11 +1875,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         self.assertEqual(manager.min_final_prefill_chunk_size(seq_with_len(11)), 2)
         self.assertEqual(manager.min_final_prefill_chunk_size(seq_with_len(6)), 0)
 
-        manager.config.snapkv_num_full_layers = 2
-        self.assertEqual(manager.min_final_prefill_chunk_size(seq_with_len(12)), 0)
-
         manager.config.sparse_method = "pyramidkv"
-        manager.config.snapkv_num_full_layers = 0
         manager.config.pyramid_layer_ratios = [1.0, 0.5]
         manager.runtime_layout = identity_runtime_layout(2)
         self.assertEqual(manager.min_final_prefill_chunk_size(seq_with_len(12)), 2)
@@ -1898,7 +1891,6 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
             long_prefill_offload_threshold=5,
             engine_prefill_chunk_size=4,
             observation_window_size=3,
-            snapkv_num_full_layers=0,
             sink_keep_tokens=1,
             decode_keep_tokens=4,
             recent_keep_tokens=1,
@@ -1937,7 +1929,6 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
             long_prefill_offload_threshold=64,
             engine_prefill_chunk_size=32,
             observation_window_size=8,
-            snapkv_num_full_layers=0,
             sink_keep_tokens=0,
             decode_keep_tokens=100,
             recent_keep_tokens=0,
@@ -1983,7 +1974,6 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         manager.config = SimpleNamespace(
             sparse_method="snapkv",
             observation_window_size=32,
-            snapkv_num_full_layers=0,
             sink_keep_tokens=64,
             decode_keep_tokens=4_096,
             recent_keep_tokens=512,
@@ -3302,7 +3292,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
 
     def test_full_prefill_staging_candidate_uses_candidate_budget(self):
         # P1: two individually fitting prompts must not overbook shared staging.
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.deltakv_prefill_staging_num_slots = 32768
         class StagingOracle(FakeMemoryOracle):
             def __init__(self):
@@ -3397,7 +3387,7 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
         from sparseengine.engine.cache_manager.raw_kv_offload import RawKVOffloadBuffer
 
         max_model_len = 16
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.device = torch.device("cpu")
         manager.config = SimpleNamespace(
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
@@ -3497,7 +3487,6 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
         manager._deltakv_restore_sparse_prefix_to_staging = (
             lambda layer_idx, start: None
         )
-        manager._debug_track_deltakv_full_slots = lambda *args, **kwargs: None
         calls = []
 
         def compress(layer_idx):
@@ -3553,8 +3542,7 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
             DecodeComputeView,
             ExplicitKVPayload,
         )
-        from sparseengine.engine.cache_manager.methods.deltakv_base import DeltaKVCacheTritonManagerV4
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+        from sparseengine.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager as DeltaKVBaseCacheManager
 
         q = torch.empty((1, 1, 4), dtype=torch.float32)
         selection = SimpleNamespace(
@@ -3571,7 +3559,7 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
         )
         for backend, staging_active, expected in cases:
             with self.subTest(backend=backend, staging_active=staging_active):
-                manager = object.__new__(DeltaKVLessMemoryCacheManager)
+                manager = object.__new__(DeltaKVCacheManager)
                 manager.config = SimpleNamespace(deltakv_sparse_decode_backend=backend)
                 manager.full_layer_to_idx = {}
                 manager._full_layer_kivi_enabled = lambda: False
@@ -3590,8 +3578,8 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
                     ),
                 )
 
-                with patch.object(DeltaKVCacheTritonManagerV4, "build_decode_compute_view", return_value=view):
-                    out = DeltaKVLessMemoryCacheManager.build_decode_compute_view(
+                with patch.object(DeltaKVBaseCacheManager, "build_decode_compute_view", return_value=view):
+                    out = DeltaKVCacheManager.build_decode_compute_view(
                         manager,
                         1,
                         q,
@@ -3813,7 +3801,7 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
         self.assertEqual(manager._deltakv_full_prefill_compressed_layers, set())
 
     def test_less_memory_finish_full_prefill_staging_clears_kivi_plans(self):
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         released_rows = []
         manager.raw_kv_offload_buffer = SimpleNamespace(
             release_row=lambda row_idx: released_rows.append(int(row_idx))
@@ -3832,7 +3820,7 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
         manager._full_layer_kivi_full_prefill_materialized_layers = {0}
         manager._deltakv_clear_long_prefill_offload_prefetch = lambda: None
 
-        DeltaKVLessMemoryCacheManager._deltakv_finish_full_prefill_staging(manager)
+        DeltaKVCacheManager._deltakv_finish_full_prefill_staging(manager)
 
         self.assertEqual(released_rows, [4])
         self.assertFalse(manager._deltakv_prefill_staging_active)
@@ -3843,32 +3831,6 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
 
 
 class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
-    def test_sparse_rope_to_key_applies_only_key_rope(self):
-        from sparseengine.layers.rotary_embedding import RotaryEmbedding
-
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
-        key = torch.arange(8, dtype=torch.float32).view(2, 1, 4)
-        positions = torch.tensor([0, 1], dtype=torch.long)
-        calls = []
-
-        def fake_apply_rotary_emb(x, cos, sin):
-            calls.append((x, cos, sin))
-            return x + 7
-
-        manager.rotary_emb = RotaryEmbedding(
-            head_size=4,
-            rotary_dim=4,
-            max_position_embeddings=2,
-            base=10000.0,
-            backend="torch",
-        )
-        with patch("sparseengine.engine.cache_manager.methods.deltakv_base.apply_rotary_emb", fake_apply_rotary_emb):
-            out = DeltaKVLessMemoryCacheManager._apply_sparse_rope_to_key(manager, positions, key)
-
-        self.assertEqual(len(calls), 1)
-        self.assertIs(calls[0][0], key)
-        torch.testing.assert_close(out, key + 7)
-
     def test_rotary_embedding_forward_uses_compiled_path(self):
         from sparseengine.layers.rotary_embedding import RotaryEmbedding
 
@@ -3907,7 +3869,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         torch.testing.assert_close(key_out, key + 2)
 
     def test_long_prefill_offload_sparse_restore_applies_rope_helper(self):
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.device = "cpu"
         manager.config = SimpleNamespace(engine_prefill_chunk_size=2)
         manager._deltakv_long_prefill_offload_step_active = True
@@ -3922,13 +3884,13 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         manager._apply_sparse_k_norm_if_needed = lambda l_idx, k: k + 1
         rope_calls = []
 
-        def fake_apply_sparse_rope_to_key(pos, key):
+        def fake_apply_sparse_key_rope(l_idx, pos, key):
             rope_calls.append((pos, key.clone()))
             return key + 100
 
-        manager._apply_sparse_rope_to_key = fake_apply_sparse_rope_to_key
+        manager._apply_sparse_key_rope = fake_apply_sparse_key_rope
 
-        DeltaKVLessMemoryCacheManager.before_prefill_layer_attention(manager, 1, None)
+        DeltaKVCacheManager.before_prefill_layer_attention(manager, 1, None)
 
         self.assertEqual(len(rope_calls), 2)
         torch.testing.assert_close(rope_calls[0][0], torch.tensor([0, 1], dtype=torch.long))
@@ -3939,7 +3901,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         torch.testing.assert_close(manager.deltakv_prefill_staging_kv_cache[0, :3], expected_normed + 100)
 
     def test_long_prefill_offload_prefetch_waits_for_current_stream_before_staging_write(self):
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.device = "cuda:0"
         manager._deltakv_long_prefill_offload_prefetch_stream = None
         manager._deltakv_long_prefill_offload_prefetch_states = {}
@@ -4024,7 +3986,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
                 lambda stream, event: stream.wait_event(event),
             ),
         ):
-            DeltaKVLessMemoryCacheManager._deltakv_schedule_next_long_prefill_offload_prefetch(
+            DeltaKVCacheManager._deltakv_schedule_next_long_prefill_offload_prefetch(
                 manager,
                 layer_idx=0,
                 row_idx=3,
@@ -4048,16 +4010,15 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         self.assertIs(state["event"], created_events[1])
 
     def test_compressor_residual_quant_group_size_uses_payload_dim(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.head_dim = 128
         manager.config = SimpleNamespace(deltakv_latent_quant_group_size=0, use_compression=True)
 
-        self.assertEqual(DeltaKVLessMemoryCacheManager._quant_group_size(manager, 1024), 1024)
+        self.assertEqual(DeltaKVCacheManager._quant_group_size(manager, 1024), 1024)
 
         manager.config.deltakv_latent_quant_group_size = 32
-        self.assertEqual(DeltaKVLessMemoryCacheManager._quant_group_size(manager, 1024), 32)
+        self.assertEqual(DeltaKVCacheManager._quant_group_size(manager, 1024), 32)
 
     def test_context_does_not_own_attention_transients(self):
         from sparseengine.utils.context import get_context, reset_context, set_context
@@ -4077,9 +4038,8 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         reset_context()
 
     def test_delta_quant_full_kivi_stages_first_prefill_even_below_chunk_threshold(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.config = SimpleNamespace(
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
             engine_prefill_chunk_size=32768,
@@ -4092,11 +4052,11 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         seq = seq_with_len(11766)
         seq.current_chunk_size = 11766
 
-        self.assertTrue(DeltaKVLessMemoryCacheManager._should_use_full_prefill_staging(manager, [seq]))
+        self.assertTrue(DeltaKVCacheManager._should_use_full_prefill_staging(manager, [seq]))
         peer = seq_with_len(4096)
         peer.current_chunk_size = 4096
         self.assertTrue(
-            DeltaKVLessMemoryCacheManager._should_use_full_prefill_staging(
+            DeltaKVCacheManager._should_use_full_prefill_staging(
                 manager,
                 [seq, peer],
             )
@@ -4104,18 +4064,17 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
 
         partial = seq_with_len(11766)
         partial.current_chunk_size = 4096
-        self.assertFalse(DeltaKVLessMemoryCacheManager._should_use_full_prefill_staging(manager, [partial]))
+        self.assertFalse(DeltaKVCacheManager._should_use_full_prefill_staging(manager, [partial]))
         self.assertFalse(
-            DeltaKVLessMemoryCacheManager._should_use_full_prefill_staging(
+            DeltaKVCacheManager._should_use_full_prefill_staging(
                 manager,
                 [seq, partial],
             )
         )
 
     def test_delta_quant_full_kivi_requests_full_prefill_when_step_slots_are_too_small(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.config = SimpleNamespace(
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
             engine_prefill_chunk_size=32768,
@@ -4128,18 +4087,18 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         manager.prefill_step_free_slots = lambda: 32
 
         seq = seq_with_len(11766)
-        self.assertTrue(DeltaKVLessMemoryCacheManager.should_schedule_full_prefill(manager, seq))
+        self.assertTrue(DeltaKVCacheManager.should_schedule_full_prefill(manager, seq))
         self.assertEqual(
-            DeltaKVLessMemoryCacheManager.prefill_step_free_slots_for(manager, seq),
+            DeltaKVCacheManager.prefill_step_free_slots_for(manager, seq),
             32768,
         )
         self.assertEqual(
-            DeltaKVLessMemoryCacheManager.prefill_step_reservation_cost(manager, seq, 11766),
+            DeltaKVCacheManager.prefill_step_reservation_cost(manager, seq, 11766),
             0,
         )
 
         tiny = seq_with_len(16)
-        self.assertTrue(DeltaKVLessMemoryCacheManager.should_schedule_full_prefill(manager, tiny))
+        self.assertTrue(DeltaKVCacheManager.should_schedule_full_prefill(manager, tiny))
         # Raw full layers need the same sparse-layer staging contract.
         manager.config.full_layer_kv_quant_bits = 0
         seq.current_chunk_size = seq.num_prompt_tokens
@@ -4147,9 +4106,8 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         self.assertTrue(manager._should_use_full_prefill_staging([seq]))
 
     def test_delta_quant_full_kivi_does_not_force_full_prefill_for_offload_candidate(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.config = SimpleNamespace(
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
             engine_prefill_chunk_size=1024,
@@ -4164,24 +4122,23 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
 
         seq = seq_with_len(2048)
         seq.current_chunk_size = 1024
-        self.assertFalse(DeltaKVLessMemoryCacheManager.should_schedule_full_prefill(manager, seq))
-        self.assertFalse(DeltaKVLessMemoryCacheManager._should_use_full_prefill_staging(manager, [seq]))
-        self.assertTrue(DeltaKVLessMemoryCacheManager._should_use_long_prefill_offload_staging(manager, [seq]))
+        self.assertFalse(DeltaKVCacheManager.should_schedule_full_prefill(manager, seq))
+        self.assertFalse(DeltaKVCacheManager._should_use_full_prefill_staging(manager, [seq]))
+        self.assertTrue(DeltaKVCacheManager._should_use_long_prefill_offload_staging(manager, [seq]))
 
     def test_delta_quant_raw_overhead_does_not_depend_on_prefill_chunk(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
         max_seqs = 8
         sink = 8
         recent = 32
         top_decode = 1342
 
-        persistent = DeltaKVLessMemoryCacheManager._resident_sparse_raw_overhead_slots(
+        persistent = DeltaKVCacheManager._resident_sparse_raw_overhead_slots(
             max_seqs,
             sink,
             recent,
         )
-        scratch = DeltaKVLessMemoryCacheManager._decode_reconstruct_scratch_slots(
+        scratch = DeltaKVCacheManager._decode_reconstruct_scratch_slots(
             max_seqs,
             top_decode,
             sink,
@@ -4287,9 +4244,8 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         reset_context()
 
     def test_delta_quant_sparse_store_uses_raw_space_only_outside_staging(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.deltakv_layer_to_idx = {1: 0}
         manager.has_prefill_staging_view = lambda layer_idx: False
 
@@ -4298,7 +4254,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         raw_k = torch.full((2, 1, 4), 3.0)
         raw_v = torch.full((2, 1, 4), 4.0)
 
-        store_k, store_v = DeltaKVLessMemoryCacheManager.get_layer_store_tensors(
+        store_k, store_v = DeltaKVCacheManager.get_layer_store_tensors(
             manager,
             1,
             k_post_rope=postrope_k,
@@ -4309,7 +4265,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         self.assertIs(store_k, raw_k)
         self.assertIs(store_v, raw_v)
 
-        full_k, full_v = DeltaKVLessMemoryCacheManager.get_layer_store_tensors(
+        full_k, full_v = DeltaKVCacheManager.get_layer_store_tensors(
             manager,
             0,
             k_post_rope=postrope_k,
@@ -4321,7 +4277,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         self.assertIs(full_v, value)
 
         manager.has_prefill_staging_view = lambda layer_idx: True
-        staging_k, staging_v = DeltaKVLessMemoryCacheManager.get_layer_store_tensors(
+        staging_k, staging_v = DeltaKVCacheManager.get_layer_store_tensors(
             manager,
             1,
             k_post_rope=postrope_k,
@@ -4333,11 +4289,10 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         self.assertIs(staging_v, value)
 
     def test_delta_quant_sparse_store_uses_explicit_pre_rope_state(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
         from sparseengine.utils.context import reset_context, set_context
 
         reset_context()
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.deltakv_layer_to_idx = {1: 0}
         manager.has_prefill_staging_view = lambda layer_idx: False
 
@@ -4347,7 +4302,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         raw_v = torch.full((2, 1, 4), 4.0)
 
         set_context(is_prefill=True, cache_manager=manager)
-        store_k, store_v = DeltaKVLessMemoryCacheManager.get_layer_store_tensors(
+        store_k, store_v = DeltaKVCacheManager.get_layer_store_tensors(
             manager,
             1,
             k_post_rope=postrope_k,
@@ -4361,9 +4316,8 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         reset_context()
 
     def test_delta_quant_storage_hooks_separate_raw_and_rope_paths(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.deltakv_layer_to_idx = {1: 0}
         manager.has_prefill_staging_view = lambda layer_idx: False
         manager._prefill_pre_rope_stage_active = lambda: False
@@ -4384,8 +4338,8 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         raw_k = torch.full((2, 1, 4), 3.0)
         raw_v = torch.full((2, 1, 4), 4.0)
 
-        DeltaKVLessMemoryCacheManager.save_raw_kv_if_needed(manager, 1, raw_k, raw_v)
-        DeltaKVLessMemoryCacheManager.save_rope_kv_if_needed(manager, 1, postrope_k, value)
+        DeltaKVCacheManager.save_raw_kv_if_needed(manager, 1, raw_k, raw_v)
+        DeltaKVCacheManager.save_rope_kv_if_needed(manager, 1, postrope_k, value)
 
         self.assertEqual(len(stores), 1)
         self.assertEqual(stores[0][0], 1)
@@ -4394,7 +4348,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         self.assertEqual(len(raw_hooks), 1)
         self.assertEqual(len(rope_hooks), 0)
 
-        DeltaKVLessMemoryCacheManager.save_rope_kv_if_needed(manager, 0, postrope_k, value)
+        DeltaKVCacheManager.save_rope_kv_if_needed(manager, 0, postrope_k, value)
 
         self.assertEqual(len(stores), 2)
         self.assertEqual(stores[1][0], 0)
@@ -4403,11 +4357,10 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         self.assertEqual(len(rope_hooks), 1)
 
     def test_full_layer_kivi_prefill_compute_uses_high_precision_staging(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
         from sparseengine.utils.context import reset_context
 
         reset_context()
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.full_layer_to_idx = {0: 0}
         manager._full_layer_kivi_enabled = lambda: True
         manager.has_prefill_staging_view = lambda layer_idx: True
@@ -4416,7 +4369,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         value = torch.arange(100, 116, dtype=torch.float32).view(4, 1, 4)
         manager.deltakv_prefill_staging_kv_cache = [postrope_k.clone(), value.clone()]
 
-        k_compute, v_compute = DeltaKVLessMemoryCacheManager.get_layer_compute_tensors(manager, 0)
+        k_compute, v_compute = DeltaKVCacheManager.get_layer_compute_tensors(manager, 0)
 
         self.assertIs(k_compute, manager.deltakv_prefill_staging_kv_cache[0])
         self.assertIs(v_compute, manager.deltakv_prefill_staging_kv_cache[1])
@@ -4425,10 +4378,9 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         reset_context()
 
     def test_delta_quant_materializes_raw_sparse_cache_for_attention(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
         from sparseengine.layers.rotary_embedding import apply_rotary_emb
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.deltakv_layer_to_idx = {1: 0}
         manager.has_prefill_staging_view = lambda layer_idx: False
         manager.num_kv_heads = 1
@@ -4470,7 +4422,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
 
         active_slots = torch.tensor([[2, 1]], dtype=torch.int32)
         context_lens = torch.tensor([2], dtype=torch.int32)
-        k_cache, v_cache, local_active, local_req, out_lens = DeltaKVLessMemoryCacheManager.get_layer_compute_view(
+        k_cache, v_cache, local_active, local_req, out_lens = DeltaKVCacheManager.get_layer_compute_view(
             manager,
             1,
             active_slots=active_slots,
@@ -4493,10 +4445,9 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         self.assertTrue(torch.equal(v_cache, raw_v))
 
     def test_delta_quant_materialized_view_does_not_rerope_postrope_slots(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
         from sparseengine.layers.rotary_embedding import apply_rotary_emb
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.deltakv_layer_to_idx = {1: 0}
         manager.has_prefill_staging_view = lambda layer_idx: False
         manager.num_kv_heads = 1
@@ -4540,7 +4491,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
 
         active_slots = torch.tensor([[2, 1]], dtype=torch.int32)
         context_lens = torch.tensor([2], dtype=torch.int32)
-        k_cache, _, _, _, _ = DeltaKVLessMemoryCacheManager.get_layer_compute_view(
+        k_cache, _, _, _, _ = DeltaKVCacheManager.get_layer_compute_view(
             manager,
             1,
             active_slots=active_slots,
@@ -4562,7 +4513,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
 
 class DeltaKVStaticDecodeRobustnessTest(unittest.TestCase):
     def test_no_graph_static_workspace_accepts_auto_capture_sizes(self):
-        manager = object.__new__(DeltaKVLessMemoryCudaGraphCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.config = SimpleNamespace(
             max_decoding_seqs=16,
             decode_graph_capture_sizes="auto",
@@ -4571,7 +4522,7 @@ class DeltaKVStaticDecodeRobustnessTest(unittest.TestCase):
         self.assertEqual(manager._decode_graph_capture_size_capacity(3), 16)
 
     def test_kivi_short_batch_prefill_does_not_use_singleton_staging_slots(self):
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.config = SimpleNamespace(
             prefill_schedule_policy=PREFILL_POLICY_LONG_BS1FULL_SHORT_BATCH,
             engine_prefill_chunk_size=8192,
@@ -4589,7 +4540,7 @@ class DeltaKVStaticDecodeRobustnessTest(unittest.TestCase):
         self.assertTrue(manager._should_stage_full_layer_kivi_prefill(seq, 1024))
 
     def test_kivi_short_batch_prefill_uses_disjoint_staging_ranges(self):
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.device = torch.device("cpu")
         manager.deltakv_prefill_staging_num_slots = 8
         manager.seq_id_to_row = {}
@@ -4613,7 +4564,7 @@ class DeltaKVStaticDecodeRobustnessTest(unittest.TestCase):
         self.assertEqual(manager._deltakv_less_memory_full_prefill_staging_offset, 5)
 
     def test_kivi_short_batch_finalize_reads_each_plan_staging_range(self):
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.device = torch.device("cpu")
         manager.head_dim = 8
         manager.config = SimpleNamespace(

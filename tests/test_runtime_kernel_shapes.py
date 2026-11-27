@@ -20,14 +20,14 @@ MODULES = {
 }
 TARGETS = {
     "omnikv": {"_partial_stats", "_merge_stats", "_normalize_head_max"},
-    "quest": {"_gqa_page_bounds", "_repair_and_merge_page_bounds", "_vector_page_bounds", "_max_head_bounds"},
+    "quest": {"_gqa_page_bounds", "_repair_and_merge_page_bounds"},
     "gather": {"_batch_gather_mean_kernel"},
     "minmax": {"_minmax_along_last_dim"},
     "materialize": {"_deltakv_materialize_sparse_view_block_kernel"},
 }
 
 
-def make_case(operation, size, module=None, *, strided=False, quest_backend=None):
+def make_case(operation, size, module=None, *, strided=False):
     """Return the serving wrapper (minmax: internal stage) and its oracle check."""
     module = module or importlib.import_module("sparseengine.kernels.triton." + MODULES[operation])
     device = "cuda"
@@ -71,13 +71,9 @@ def make_case(operation, size, module=None, *, strided=False, quest_backend=None
             rows.append(torch.stack(bounds).amax(0))
         expected = torch.stack(rows)
         def run():
-            if quest_backend == "tensorcore":
-                return (module.score_quest_pages_tensorcore(query, high, low, slots),)
-            return (module.score_quest_pages_tensorcore(query, high, low, slots),
-                    module.score_quest_pages_vector(query, high, low, slots))
+            return module.score_quest_pages_tensorcore(query, high, low, slots)
         def check(actual):
-            for score in actual:
-                torch.testing.assert_close(score, expected, rtol=0, atol=0)
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
     elif operation == "gather":
         src = torch.randn(113, 80, device=device, dtype=torch.float16)
         indices = torch.randint(0, 113, (2, size, 3), device=device, dtype=torch.int32)

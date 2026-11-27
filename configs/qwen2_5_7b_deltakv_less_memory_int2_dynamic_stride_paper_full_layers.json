@@ -13,7 +13,6 @@
   "stride_alpha": 0.02,
   "deltakv_neighbor_count": 4,
   "deltakv_latent_quant_bits": 2,
-  "full_layer_cluster_ratio": 0.08,
   "full_layer_stride_alpha": 0.0,
   "full_layer_kv_quant_bits": 4,
   "cluster_metric": "l2",

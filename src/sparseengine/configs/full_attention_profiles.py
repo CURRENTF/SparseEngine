@@ -163,8 +163,9 @@ def resolve_full_attention_layer_profile(
     raise ValueError(
         "No automatic full_attention_layers profile matches "
         f"model names={list(candidates)!r}, sparse_method={method!r}. "
-        f"Known profiles={known}. Pass explicit full_attention_layers or calibrate "
-        "the model with python -m sparseengine.utils.select_omnikv_full_layers."
+        f"Known profiles={known}. Pass explicit full_attention_layers or run "
+        "python3 scripts/compression/select_omnikv_full_layers.py "
+        "from the SparseEngine repository root."
     )
 
 

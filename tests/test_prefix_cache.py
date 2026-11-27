@@ -841,9 +841,8 @@ def test_lookup_returns_longest_full_block_prefix():
     index = RadixPrefixIndex(block_size=4, fingerprint=fp)
     last_block_id = _insert_tokens(index, list(range(8)))
 
-    hit_len, hit_last_block_id, hit_blocks = index.lookup_longest_prefix(
-        list(range(12)),
-        max_usable_tokens=usable_prefix_cache_tokens(12, 4),
+    hit_len, hit_last_block_id, hit_blocks = index.lookup_longest_block_ids(
+        index.block_ids_for_tokens(list(range(12)), max_tokens=usable_prefix_cache_tokens(12, 4)),
     )
 
     assert hit_len == 8
@@ -961,9 +960,8 @@ def test_lookup_never_returns_half_block_match():
     index = RadixPrefixIndex(block_size=4, fingerprint=fp)
     _insert_tokens(index, [1, 2, 3, 4])
 
-    hit_len, hit_last_block_id, hit_blocks = index.lookup_longest_prefix(
-        [1, 2, 3, 4, 5, 6],
-        max_usable_tokens=6,
+    hit_len, hit_last_block_id, hit_blocks = index.lookup_longest_block_ids(
+        index.block_ids_for_tokens([1, 2, 3, 4, 5, 6], max_tokens=6),
     )
 
     assert hit_len == 4
@@ -1002,13 +1000,8 @@ def test_radix_backend_removes_leaf_from_compressed_segment_and_preserves_siblin
     assert set(backend.leaf_block_ids()) == {b"c", b"y", b"q"}
 
 
-def test_radix_backend_maintains_locations_incrementally(monkeypatch):
+def test_radix_backend_maintains_locations_incrementally():
     backend = RadixTreeBackend()
-
-    def fail_rebuild():
-        raise AssertionError("Radix insert/remove should maintain locations incrementally.")
-
-    monkeypatch.setattr(backend, "_rebuild_locations", fail_rebuild)
 
     backend.insert((b"a", b"b"))
     assert backend.path_to_block(b"b") == (b"a", b"b")
@@ -1055,9 +1048,8 @@ def test_prefix_index_insert_block_appends_without_recovering_parent_path(monkey
         scoped.setattr(index.backend, "insert", fail_insert)
         last_block_id = _insert_tokens(index, list(range(12)))
 
-    hit_len, hit_last_block_id, hit_blocks = index.lookup_longest_prefix(
-        list(range(13)),
-        max_usable_tokens=usable_prefix_cache_tokens(13, 4),
+    hit_len, hit_last_block_id, hit_blocks = index.lookup_longest_block_ids(
+        index.block_ids_for_tokens(list(range(13)), max_tokens=usable_prefix_cache_tokens(13, 4)),
     )
 
     assert hit_len == 12
@@ -1086,7 +1078,8 @@ def test_lookup_does_not_touch_lru_state():
     block = index.get_chain(last_block_id, 1)[0]
     last_access = block.last_access
 
-    index.lookup_longest_prefix([1, 2, 3, 4, 5], max_usable_tokens=4)
+    block_ids = index.block_ids_for_tokens([1, 2, 3, 4, 5], max_tokens=4)
+    index.lookup_longest_block_ids(block_ids)
 
     assert block.last_access == last_access
 
@@ -1155,7 +1148,6 @@ def test_write_through_residency_demotes_device_without_deleting_radix_blocks():
     for block in chain:
         index.finish_d2h(block)
 
-    assert index.device_evictable_blocks() == 1
     assert index.device_freeable_blocks() == 3
     demoted = index.demote_device_until_freeable(2)
 
@@ -1163,9 +1155,8 @@ def test_write_through_residency_demotes_device_without_deleting_radix_blocks():
     assert len(index) == 3
     assert [block.residency.device_present for block in chain] == [True, False, False]
     assert all(block.residency.host_present for block in chain)
-    hit_len, hit_last_block_id, hit_blocks = index.lookup_longest_prefix(
-        list(range(13)),
-        max_usable_tokens=12,
+    hit_len, hit_last_block_id, hit_blocks = index.lookup_longest_block_ids(
+        index.block_ids_for_tokens(list(range(13)), max_tokens=12),
     )
     assert (hit_len, hit_last_block_id, hit_blocks) == (12, last_block_id, 3)
 
@@ -2722,7 +2713,7 @@ def test_standard_cpu_prefix_hit_allocates_slots_and_tracks_layer_wait_operation
     manager.prefix_cache.begin_d2h(block)
     manager.prefix_cache.finish_d2h(block)
     manager.prefix_cache.demote_device_until_freeable(1)
-    manager._free_device_prefix_block(block)
+    manager._free_device_prefix_blocks([block])
     seq.prefix_cache_enabled = True
     seq.prefix_cache_hit_len = 2
     seq.prefix_cache_hit_block_count = 1
@@ -3855,7 +3846,7 @@ def test_quest_cpu_prefix_hit_promotes_page_and_tracks_layer_wait():
     manager.prefix_cache.begin_d2h(block)
     manager.prefix_cache.finish_d2h(block)
     manager.prefix_cache.demote_device_until_freeable(1)
-    manager._free_device_prefix_block(block)
+    manager._free_device_prefix_blocks([block])
     seq.prefix_cache_hit_len = 2
     seq.prefix_cache_hit_block_count = 1
     seq.prefix_cache_hit_last_block_id = block_id
@@ -4746,7 +4737,7 @@ def test_single_allocation_overflow_preserves_rows_and_pool(method, existing):
         allocate = lambda: manager._allocate(10, size)
         free_count = lambda: manager._num_free_pages
     else:
-        from sparseengine.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager
+        from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
         manager = object.__new__(DeltaKVCacheManager)
         manager.device = torch.device('cpu')
         manager.seq_id_to_row = mapping
@@ -4793,7 +4784,7 @@ def test_quest_single_allocation_without_rows_does_not_evict():
 @pytest.mark.parametrize('raw', [False, True])
 @pytest.mark.parametrize('exhaustion', ['rows', 'length'])
 def test_deltakv_decode_rejection_preserves_earlier_rows(raw, exhaustion):
-    from sparseengine.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager
+    from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
     manager = object.__new__(DeltaKVCacheManager)
     manager.device = torch.device('cpu')
     manager.seq_id_to_row = {11: 1} if exhaustion == 'length' else {}
@@ -4820,8 +4811,8 @@ def test_deltakv_decode_rejection_preserves_earlier_rows(raw, exhaustion):
 
 @pytest.mark.parametrize('staging_capacity', [2, 8])
 def test_deltakv_staging_overflow_does_not_claim_row_or_advance_cursor(staging_capacity):
-    from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
-    manager = object.__new__(DeltaKVLessMemoryCacheManager)
+    from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
+    manager = object.__new__(DeltaKVCacheManager)
     manager.device = torch.device('cpu')
     manager.seq_id_to_row = {}
     manager.free_rows = deque([0])

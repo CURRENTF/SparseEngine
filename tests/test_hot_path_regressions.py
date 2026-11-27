@@ -9,7 +9,7 @@ import torch
 from sparseengine.engine.scheduler import Scheduler
 from sparseengine.engine.sequence import Sequence
 from sparseengine.engine.model_runner import ModelRunner
-from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
 from sparseengine.layers.sampler import Sampler
 from sparseengine.sampling_params import SamplingParams
 from test_prefill_schedule_policy import make_scheduler
@@ -126,9 +126,8 @@ def test_top_k_only_distribution_and_mixed_greedy_without_full_sort(device):
 
 @pytest.mark.parametrize('slots,error', [([0, 2], None), ([-1], 'out of range'), ([3], 'out of range'), ([1], 'without live positions')])
 def test_center_validation_preserves_address_and_liveness_errors(slots, error, device):
-    manager = object.__new__(DeltaKVLessMemoryCacheManager)
+    manager = object.__new__(DeltaKVCacheManager)
     manager.deltakv_slot_to_pos = torch.tensor([0, -1, 8], device=device)
-    manager._describe_deltakv_full_slots_for_debug = lambda *args, **kwargs: 'debug'
     def validate():
         manager._validate_live_deltakv_center_slots(torch.tensor(slots, device=device), row_idx=0,
             total_len=9, compressed_len=0, evict_start=1, evict_end=8, label='test')

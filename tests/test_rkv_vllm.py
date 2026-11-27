@@ -233,12 +233,9 @@ def test_cuda_scores_match_independent_oracle(dtype):
     assert actual.mean(1).topk(8).indices.tolist() == expected.mean(1).topk(8).indices.tolist()
 
 
-def test_legacy_approximation_config_is_rejected():
+def test_rkv_observation_window_must_fit_compression_interval():
     from sparseengine.configs.groups import SparseMethodConfig
     from sparseengine.configs.sparse import _normalize_rkv
-    config = SparseMethodConfig(sparse_method="rkv", rkv_redundancy_window=64)
-    with pytest.raises(ValueError, match="full resident domain"):
-        _normalize_rkv(config)
     config = SparseMethodConfig(sparse_method="rkv", rkv_observation_tokens=9, rkv_compression_interval=8)
     with pytest.raises(ValueError, match="rkv_compression_interval"):
         _normalize_rkv(config)

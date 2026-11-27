@@ -131,56 +131,10 @@ def test_glm_config_rejects_dp_without_matching_expert_ranks():
         _glm_config(data_parallel_size=2)
 
 
-def test_glm_config_defaults_to_bounded_vanilla_startup_graph_capture():
-    config = _glm_config(decode_graph=True)
-
-    assert config.decode_graph_startup_capture is True
-    assert config.decode_graph_startup_capture_limit == 32
-
-
-def test_glm_config_rejects_disabling_default_startup_graph_capture():
-    with pytest.raises(
-        ValueError,
-        match="requires startup capture",
-    ):
-        _glm_config(
-            decode_graph=True,
-            decode_graph_startup_capture=False,
-        )
-
-
-def test_glm_config_uses_shared_sparse_startup_capture_budget():
-    config = _glm_config(
-        decode_graph=True,
-        sparse_method="snapkv",
-    )
-
-    assert config.decode_graph_startup_capture is True
-    assert config.decode_graph_startup_capture_limit == 32
-
-
-def test_glm_config_rejects_startup_capture_without_cuda_graph():
-    with pytest.raises(ValueError, match="requires decode_graph=True"):
-        _glm_config(decode_graph=False, decode_graph_startup_capture=True)
-
-
-def test_glm_config_rejects_disabling_sparse_startup_capture():
-    with pytest.raises(
-        ValueError,
-        match="requires startup capture",
-    ):
-        _glm_config(
-            decode_graph=True,
-            decode_graph_startup_capture=False,
-            sparse_method="snapkv",
-        )
-
-
 def test_glm_config_rejects_startup_budget_smaller_than_batch_plan():
     with pytest.raises(ValueError, match="must cover every batch bucket"):
         _glm_config(
             decode_graph=True,
-            decode_graph_startup_capture=True,
             decode_graph_capture_sizes=[1, 2, 3, 4, 5],
             decode_graph_startup_capture_limit=4,
             max_decoding_seqs=5,

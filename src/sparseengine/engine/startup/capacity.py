@@ -102,7 +102,7 @@ def profiling_kv_slots(config) -> int:
         batch_slots(prefill_lengths, 2),
         batch_slots((1,) * int(config.max_decoding_seqs), 2),
     )
-    if bool(config.decode_graph_startup_capture):
+    if config.decode_graph:
         for batch_size, _ in build_decode_cuda_graph_startup_plan(config):
             required = max(
                 required,

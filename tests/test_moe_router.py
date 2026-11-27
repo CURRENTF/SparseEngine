@@ -149,7 +149,7 @@ def test_qwen_and_minimax_router_contracts_select_disjoint_atomic_providers():
     assert not GlmBiasedSigmoidRouterProvider.supports(minimax, _caps()).supported
     assert (
         MiniMaxBiasedSigmoidRouterProvider().binding_metadata()["kernel_path"]
-        == "triton.minimax_m2_router.topk_biased_sigmoid"
+        == "triton.moe_biased_sigmoid.topk_biased_sigmoid"
     )
 
 

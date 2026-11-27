@@ -16,7 +16,6 @@ from sparseengine.config import (
     _resolve_decode_cuda_graph_capture_sizes,
 )
 from sparseengine.configs.cuda_graph import (
-    _decode_cuda_graph_max_real_batch_size,
     _resolve_decode_static_batch_capacity,
 )
 from sparseengine.distributed import (
@@ -395,12 +394,9 @@ class ModelRunner:
             "decode_graph",
             bool(getattr(config, "decode_graph", False)),
         )
-        max_real_decode_batch_size = _decode_cuda_graph_max_real_batch_size(
-            max_decoding_seqs=config.max_decoding_seqs,
-        )
         decode_static_capture_sizes = _resolve_decode_cuda_graph_capture_sizes(
             config.decode_graph_capture_sizes,
-            max_real_decode_batch_size,
+            int(config.max_decoding_seqs),
         )
         self.collective_runtime = ParallelCollectiveRuntime(
             self.parallel_context,
@@ -422,15 +418,6 @@ class ModelRunner:
                 ),
             )
             self.collective_runtime.prepare()
-            if (
-                self.collective_runtime.has_graph_collectives
-                and not config.decode_graph_startup_capture
-            ):
-                raise ValueError(
-                    "Distributed decode CUDA Graph collectives require "
-                    "decode_graph_startup_capture=True so every graph buffer is "
-                    "registered before the first replay."
-                )
         except BaseException:
             model = getattr(self, "model", None)
             close_runtime_operators = getattr(model, "close_runtime_operators", None)
@@ -602,12 +589,9 @@ class ModelRunner:
 
         self.load_deltakv_compressors()
 
-        max_real_decode_batch_size = _decode_cuda_graph_max_real_batch_size(
-            max_decoding_seqs=runtime_config.max_decoding_seqs,
-        )
         decode_static_capture_sizes = _resolve_decode_cuda_graph_capture_sizes(
             runtime_config.decode_graph_capture_sizes,
-            max_real_decode_batch_size,
+            int(runtime_config.max_decoding_seqs),
         )
         # Decode graph keys are captured lazily and replayed in workload order,
         # which is not necessarily their capture order.  Do not force those

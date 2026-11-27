@@ -7,6 +7,8 @@ from typing import Any, Iterator
 import torch
 from torch import nn
 
+from sparseengine.env import env_bool
+
 
 TINY_RANDOM_ENV = "SPARSEENGINE_TINY_RANDOM"
 TINY_RANDOM_CONFIG_ENV = "SPARSEENGINE_TINY_RANDOM_CONFIG"
@@ -26,25 +28,13 @@ SUPPORTED_OVERRIDES = frozenset(
 )
 
 
-def env_flag(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return bool(default)
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{name} must be an explicit boolean, got {raw!r}.")
-
-
 def resolve_tiny_random_settings(
     *,
     enabled: bool,
     config_path: str | None,
     seed: int,
 ) -> tuple[bool, str | None, int]:
-    resolved_enabled = env_flag(TINY_RANDOM_ENV, enabled)
+    resolved_enabled = env_bool(TINY_RANDOM_ENV, bool(enabled), strict=True)
     resolved_path = os.getenv(TINY_RANDOM_CONFIG_ENV, config_path)
     resolved_seed_raw = os.getenv(TINY_RANDOM_SEED_ENV)
     resolved_seed = int(resolved_seed_raw) if resolved_seed_raw is not None else int(seed)

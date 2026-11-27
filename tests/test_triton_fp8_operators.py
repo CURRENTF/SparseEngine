@@ -9,7 +9,7 @@ from sparseengine.operators.fp8_linear import (
     resolve_fp8_linear_provider,
 )
 from sparseengine.platforms import current_platform
-from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+from fp8_reference import fp8_blockwise_linear_reference
 from sparseengine.kernels.triton.fp8_blockwise import fp8_blockwise_matmul
 from sparseengine.kernels.triton.moe import fused_moe_fp8
 from sparseengine.kernels.triton.minimax_m2_moe import fused_minimax_m2_moe_fp8

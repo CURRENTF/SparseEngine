@@ -135,7 +135,6 @@ def test_dp_rejects_uncaptured_sampling_plan_at_configuration_boundary():
     config = SimpleNamespace(
         data_parallel_size=2,
         decode_graph=True,
-        decode_graph_startup_capture=None,
         decode_graph_startup_capture_limit=None,
         decode_graph_capture_sampling=True,
         sparse_method="",

@@ -802,7 +802,6 @@ def _glm_method_runtime_config(method: str, *, num_layers: int):
         max_num_batched_tokens=16,
         engine_prefill_chunk_size=8,
         pyramid_layer_ratios=None,
-        snapkv_num_full_layers=0,
         observation_window_size=2,
         pool_kernel_size=1,
         prefill_schedule_policy="chunked",
@@ -818,8 +817,6 @@ def _glm_method_runtime_config(method: str, *, num_layers: int):
         rkv_score_chunk_mb=16,
         rkv_similarity_threshold=0.0,
         rkv_recent_similar_keep=0,
-        rkv_max_redundancy_tokens=16,
-        rkv_redundancy_window=0,
         enable_prefix_caching=False,
         prefix_cache_block_size=4,
     )

@@ -1,7 +1,7 @@
 import types
 import unittest
 
-from sparseengine.models.llama import _get_rope_scaling, _get_rope_theta
+from sparseengine.models.rope import resolve_rope_scaling, resolve_rope_theta
 
 
 class SparseVLLMLlamaRopeTest(unittest.TestCase):
@@ -17,8 +17,8 @@ class SparseVLLMLlamaRopeTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(_get_rope_theta(config), 500000.0)
-        scaling = dict(_get_rope_scaling(config))
+        self.assertEqual(resolve_rope_theta(config), 500000.0)
+        scaling = dict(resolve_rope_scaling(config, model_name="Llama"))
         self.assertEqual(scaling["rope_type"], "llama3")
         self.assertEqual(scaling["factor"], 8.0)
         self.assertEqual(scaling["original_max_position_embeddings"], 8192)

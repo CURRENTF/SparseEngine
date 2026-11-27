@@ -1,9 +1,7 @@
 """Decode CUDA Graph normalization and validation."""
 
 from collections.abc import Callable
-from typing import Any
 
-from sparseengine.configs.common import _coerce_bool_config
 from sparseengine.method_registry import (
     DECODE_CUDA_GRAPH_SUPPORTED_METHODS,
     decode_graph_path_id,
@@ -131,15 +129,6 @@ def _select_decode_cuda_graph_batch_size(
     )
 
 
-def _decode_cuda_graph_max_real_batch_size(
-    *,
-    max_decoding_seqs: int,
-) -> int:
-    """Return the largest decode batch that the scheduler can execute in one step."""
-
-    return int(max_decoding_seqs)
-
-
 def _resolve_decode_static_batch_capacity(
     capture_sizes: list[int] | tuple[int, ...],
     *,
@@ -147,13 +136,7 @@ def _resolve_decode_static_batch_capacity(
 ) -> int:
     """Return the largest padded decode batch reachable by the scheduler."""
 
-    max_real_batch_size = _decode_cuda_graph_max_real_batch_size(
-        max_decoding_seqs=max_decoding_seqs,
-    )
-    return _select_decode_cuda_graph_batch_size(
-        max_real_batch_size,
-        capture_sizes,
-    )
+    return _select_decode_cuda_graph_batch_size(int(max_decoding_seqs), capture_sizes)
 
 
 def build_decode_cuda_graph_startup_plan(config) -> list[tuple[int, int]]:
@@ -169,16 +152,6 @@ def build_decode_cuda_graph_startup_plan(config) -> list[tuple[int, int]]:
 
 
 def normalize_decode_cuda_graph(config) -> None:
-    startup_capture_setting = config.decode_graph_startup_capture
-    startup_capture_auto = startup_capture_setting is None
-    if startup_capture_auto:
-        config.decode_graph_startup_capture = bool(config.decode_graph)
-    else:
-        config.decode_graph_startup_capture = _coerce_bool_config(
-            "decode_graph_startup_capture",
-            startup_capture_setting,
-        )
-
     if config.decode_graph_startup_capture_limit is None:
         config.decode_graph_startup_capture_limit = 32
     config.decode_graph_startup_capture_limit = int(
@@ -188,13 +161,6 @@ def normalize_decode_cuda_graph(config) -> None:
         raise ValueError(
             "decode_graph_startup_capture_limit must be a positive integer, "
             f"got {config.decode_graph_startup_capture_limit}."
-        )
-    if config.decode_graph_startup_capture and not config.decode_graph:
-        raise ValueError("decode_graph_startup_capture requires decode_graph=True.")
-    if config.decode_graph and not config.decode_graph_startup_capture:
-        raise ValueError(
-            "decode_graph requires startup capture so the complete graph plan "
-            "is sealed before serving."
         )
     if config.decode_graph_capture_sampling and not config.decode_graph:
         raise ValueError("decode_graph_capture_sampling requires decode_graph=True.")
@@ -244,12 +210,9 @@ def normalize_decode_cuda_graph(config) -> None:
         raise ValueError(f"decode_graph supports these methods only: '', {supported}.")
 
     capture_sizes_setting = config.decode_graph_capture_sizes
-    max_real_batch_size = _decode_cuda_graph_max_real_batch_size(
-        max_decoding_seqs=config.max_decoding_seqs,
-    )
     config.decode_graph_capture_sizes = _resolve_decode_cuda_graph_capture_sizes(
         capture_sizes_setting,
-        max_real_batch_size,
+        int(config.max_decoding_seqs),
         int(config.decode_graph_startup_capture_limit),
     )
 
@@ -259,8 +222,7 @@ def normalize_decode_cuda_graph(config) -> None:
         "context_capacity": int(config.max_model_len),
     }]
     log_once(
-        "Decode CUDA Graph startup precapture enabled "
-        f"({'default' if startup_capture_auto else 'explicit'}): "
+        "Decode CUDA Graph startup precapture enabled: "
         f"budget={config.decode_graph_startup_capture_limit}, "
         f"planned_graphs={len(startup_plan)}, "
         f"batch_buckets={config.decode_graph_capture_sizes}, "

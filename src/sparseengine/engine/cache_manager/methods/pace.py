@@ -590,10 +590,6 @@ class PACECacheManager(H2OCacheManager):
         super().compact_final_prefill_for_decode(seqs)
         self._pace_maybe_renumber(s.seq_id for s in seqs if s.is_last_chunk_prefill)
 
-    def evict_after_prefill(self, seqs: list[Sequence]) -> None:
-        super().evict_after_prefill(seqs)
-        self._pace_maybe_renumber(s.seq_id for s in seqs)
-
     def evict_after_decode(self, seqs: list[Sequence]):
         super().evict_after_decode(seqs)
         if seqs:

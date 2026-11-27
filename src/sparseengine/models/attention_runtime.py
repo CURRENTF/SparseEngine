@@ -26,9 +26,7 @@ from sparseengine.operators.full_attention import (
 from sparseengine.operators.moe import model_activation_dtype
 from sparseengine.operators.prefill_attention import (
     FlashPrefillV2Semantics,
-    PreparedPrefillAttentionOp,
     PrefillAttentionOpSpec,
-    prepare_prefill_attention_op,
 )
 
 
@@ -148,25 +146,6 @@ def build_mha_prefill_attention_spec(
         ),
         prefill_sparse_method=prefill_sparse_method,
         flashprefill_v2=flashprefill_v2,
-    )
-
-
-def build_mha_prefill_attention_op(
-    config,
-    *,
-    sparse_method: str | None,
-    attention_tp_size: int,
-    device: torch.device,
-    runtime_config=None,
-) -> PreparedPrefillAttentionOp:
-    return prepare_prefill_attention_op(
-        build_mha_prefill_attention_spec(
-            config,
-            sparse_method=sparse_method,
-            attention_tp_size=attention_tp_size,
-            runtime_config=runtime_config,
-        ),
-        device_index=int(device.index or 0),
     )
 
 
@@ -329,7 +308,6 @@ __all__ = [
     "build_mha_decode_attention_op",
     "build_mha_decode_attention_spec",
     "build_mha_full_attention_provider",
-    "build_mha_prefill_attention_op",
     "build_mha_prefill_attention_spec",
     "resolve_mha_head_dim",
 ]

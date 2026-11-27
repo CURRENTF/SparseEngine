@@ -12,7 +12,7 @@ from sparseengine.layers.rotary_embedding import (
     apply_partial_rotary_emb,
     apply_rotary_emb,
 )
-from sparseengine.quantization.fp8 import (
+from fp8_reference import (
     fp8_blockwise_dequantize,
     fp8_blockwise_linear_reference,
 )

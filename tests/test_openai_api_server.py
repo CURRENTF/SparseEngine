@@ -92,7 +92,7 @@ async def _dispatcher_items_for_token_ids(
     incremental=True,
     stream=True,
 ):
-    from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher, _ActiveRequest
+    from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher, _ActiveRequest
     from sparseengine.entrypoints.openai.detokenizer import IncrementalDetokenizer
 
     class Engine:
@@ -102,7 +102,7 @@ async def _dispatcher_items_for_token_ids(
             self.last_step_logprob_outputs = []
             self.aborted = []
 
-        def abort_request(self, seq_id):
+        def abort_request(self, seq_id, disposition="invalidate"):
             self.aborted.append(seq_id)
 
         def exit(self):
@@ -315,7 +315,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             IncrementalDetokenizer(SlowTokenizer())
 
     async def test_dispatcher_rejects_slow_tokenizer_before_admission(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         class SlowTokenizer:
             is_fast = False
@@ -350,7 +350,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(engine.added)
 
     async def test_dispatcher_fatal_failure_marks_unready_and_notifies_supervisor(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         tokenizer = _byte_level_tokenizer()
 
@@ -375,7 +375,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             def step(self):
                 raise RuntimeError("fatal engine step")
 
-            def abort_request(self, seq_id):
+            def abort_request(self, seq_id, disposition="invalidate"):
                 self.aborted.append(seq_id)
 
             def exit(self):
@@ -402,7 +402,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             dispatcher.prefix_cache_routing_match([1, 2, 3])
 
     async def test_dispatcher_fatal_failure_releases_concurrent_control(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         tokenizer = _byte_level_tokenizer()
         step_started = threading.Event()
@@ -423,7 +423,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             def worker_load(self):
                 return {"active_requests": 1}
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 pass
 
             def exit(self):
@@ -450,7 +450,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dispatcher._controls.qsize(), 0)
 
     async def test_dispatcher_refreshes_snapshots_before_control_result(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         class Snapshot:
             def __init__(self, generation):
@@ -504,7 +504,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(published_snapshot_states, [(1, 1)])
 
     async def test_dispatcher_snapshot_refresh_failure_is_fatal(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         class Engine:
             tokenizer = object()
@@ -540,7 +540,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("snapshot refresh failed", dispatcher.failure_message)
 
     async def test_dispatcher_abort_failure_notifies_supervisor_and_rejects_new_work(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         tokenizer = _byte_level_tokenizer()
         step_started = threading.Event()
@@ -560,7 +560,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 release_step.wait(1)
                 return [], 0
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 raise RuntimeError("abort failed")
 
             def exit(self):
@@ -593,7 +593,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(dispatcher.is_ready)
 
     async def test_dispatcher_refreshes_snapshot_after_last_active_abort(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         tokenizer = _byte_level_tokenizer()
         step_started = threading.Event()
@@ -623,7 +623,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 release_step.wait(1)
                 return [], 0
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 self.active_requests = 0
                 abort_called.set()
 
@@ -650,7 +650,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             dispatcher.close()
 
     async def test_dispatcher_stop_abort_refreshes_snapshots_before_events(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         tokenizer = _byte_level_tokenizer()
         output_token_ids = tokenizer.encode("visibleSTOP")
@@ -684,7 +684,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 self.last_step_token_outputs = [(17, output_token_ids)]
                 return [], 0
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 self.active_requests = 0
 
             def exit(self):
@@ -739,7 +739,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_dispatcher_stop_abort_refresh_failure_releases_request(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         tokenizer = _byte_level_tokenizer()
         output_token_ids = tokenizer.encode("visibleSTOP")
@@ -766,7 +766,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 self.last_step_token_outputs = [(17, output_token_ids)]
                 return [], 0
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 self.active_requests = 0
                 self.fail_snapshot = True
 
@@ -898,7 +898,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             detokenizer.finish(token_ids)
 
     async def test_completion_response_collects_usage_and_sorts_choices(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.completion import _completion_response
 
         queue_0 = asyncio.Queue()
         queue_1 = asyncio.Queue()
@@ -939,7 +940,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         })
 
     async def test_dispatcher_records_prompt_cache_hits(self):
-        from sparseengine.entrypoints.openai.api_server import (
+        from sparseengine.entrypoints.openai.dispatcher import (
             AsyncEngineDispatcher,
             RequestHandle,
             _ActiveRequest,
@@ -975,7 +976,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((handle.reused_tokens, handle.prefilled_tokens), (4, 2))
 
     def test_sse_serializes_openai_data_frame(self):
-        from sparseengine.entrypoints.openai.api_server import _sse
+        from sparseengine.entrypoints.openai.serving.base import _sse
         from sparseengine.entrypoints.openai.serving.chat import (
             _chat_stream_chunk,
         )
@@ -1007,7 +1008,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_completion_request_rejects_unknown_fields(self):
         from pydantic import ValidationError
 
-        from sparseengine.entrypoints.openai.api_server import ChatCompletionRequest, CompletionRequest
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.protocol.completion import CompletionRequest
 
         with self.assertRaises(ValidationError):
             CompletionRequest(model="m", prompt="p", suffix="ignored")
@@ -1019,7 +1021,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_chat_request_accepts_claw_eval_tool_metadata(self):
-        from sparseengine.entrypoints.openai.api_server import ChatCompletionRequest, ChatMessage
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest, ChatMessage
 
         request = ChatCompletionRequest(
             model="m",
@@ -1058,7 +1060,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_chat_message_tool_fields_are_role_scoped(self):
         from pydantic import ValidationError
 
-        from sparseengine.entrypoints.openai.api_server import ChatMessage
+        from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
 
         with self.assertRaisesRegex(ValidationError, "tool_calls is only valid"):
             ChatMessage(role="user", content="question", tool_calls=[])
@@ -1083,7 +1085,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_logprob_request_limits_match_openai_bounds(self):
         from pydantic import ValidationError
 
-        from sparseengine.entrypoints.openai.api_server import ChatCompletionRequest, CompletionRequest
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.protocol.completion import CompletionRequest
 
         with self.assertRaises(ValidationError):
             CompletionRequest(model="m", prompt="p", logprobs=6)
@@ -1098,10 +1101,10 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_sampling_penalty_request_bounds_and_mapping(self):
         from pydantic import ValidationError
 
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            CompletionRequest,
-            ResponseRequest,
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.protocol.completion import CompletionRequest
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.sampling import (
             _sampling_params_from_request,
             _sampling_params_from_response_request,
         )
@@ -1168,12 +1171,10 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_stop_with_logprobs_fails_fast(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            CompletionRequest,
-            _validate_chat_request,
-            _validate_request,
-        )
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.protocol.completion import CompletionRequest
+        from sparseengine.entrypoints.openai.serving.chat import _validate_chat_request
+        from sparseengine.entrypoints.openai.serving.completion import _validate_request
 
         with self.assertRaises(HTTPException):
             _validate_request(
@@ -1192,7 +1193,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_chat_prompt_uses_fallback_without_chat_template(self):
-        from sparseengine.entrypoints.openai.api_server import ChatMessage, _chat_prompt
+        from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
+        from sparseengine.entrypoints.openai.render import _chat_prompt
 
         class Tokenizer:
             chat_template = None
@@ -1256,7 +1258,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_chat_prompt_maps_developer_and_text_parts_for_templates(self):
-        from sparseengine.entrypoints.openai.api_server import ChatMessage, _chat_prompt
+        from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
+        from sparseengine.entrypoints.openai.render import _chat_prompt
 
         class Tokenizer:
             chat_template = "template"
@@ -1286,7 +1289,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tokenizer.chat, [{"role": "system", "content": "policy\ndetails"}])
 
     def test_chat_prompt_preserves_multimodal_parts_for_model_processor(self):
-        from sparseengine.entrypoints.openai.api_server import ChatMessage, _chat_prompt
+        from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
+        from sparseengine.entrypoints.openai.render import _chat_prompt
         from sparseengine.multimodal import MultiModalPrompt
 
         prompt = _chat_prompt(
@@ -1307,7 +1311,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(prompt.messages[0]["content"][1]["text"], "describe")
 
     def test_chat_prompt_preserves_reasoning_content_for_templates(self):
-        from sparseengine.entrypoints.openai.api_server import ChatMessage, _chat_prompt
+        from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
+        from sparseengine.entrypoints.openai.render import _chat_prompt
 
         class Tokenizer:
             chat_template = "template"
@@ -1338,7 +1343,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_chat_prompt_accepts_reasoning_alias_for_templates(self):
-        from sparseengine.entrypoints.openai.api_server import ChatMessage, _chat_prompt
+        from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
+        from sparseengine.entrypoints.openai.render import _chat_prompt
 
         class Tokenizer:
             chat_template = "template"
@@ -1371,7 +1377,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_reasoning_content_requires_assistant_role_and_chat_template(self):
         from pydantic import ValidationError
 
-        from sparseengine.entrypoints.openai.api_server import ChatMessage, _chat_prompt
+        from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
+        from sparseengine.entrypoints.openai.render import _chat_prompt
 
         with self.assertRaisesRegex(ValidationError, "only valid for assistant"):
             ChatMessage(role="user", content="question", reasoning_content="reason")
@@ -1386,7 +1393,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_chat_template_kwargs_enable_thinking_passes_to_tokenizer(self):
-        from sparseengine.entrypoints.openai.api_server import ChatMessage, _chat_prompt
+        from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
+        from sparseengine.entrypoints.openai.render import _chat_prompt
 
         class Tokenizer:
             chat_template = "template"
@@ -1409,10 +1417,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(tokenizer.kwargs["enable_thinking"], False)
 
     def test_top_level_enable_thinking_resolves_to_chat_template_kwargs(self):
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            resolve_chat_template_kwargs,
-        )
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.render import resolve_chat_template_kwargs
 
         request = ChatCompletionRequest(
             model="m",
@@ -1425,7 +1431,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_top_level_enable_thinking_conflict_fails_fast(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import ChatCompletionRequest, _validate_chat_request
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.serving.chat import _validate_chat_request
 
         class Tokenizer:
             chat_template = "template"
@@ -1444,12 +1451,12 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_vllm_template_kwargs_are_normalized(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.render import (
             _chat_request_prompt,
-            _validate_chat_request,
             resolve_chat_template_kwargs,
         )
+        from sparseengine.entrypoints.openai.serving.chat import _validate_chat_request
 
         class Tokenizer:
             chat_template = "template"
@@ -1485,11 +1492,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_chat_reasoning_effort_controls_thinking(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            _validate_chat_request,
-            resolve_chat_template_kwargs,
-        )
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.render import resolve_chat_template_kwargs
+        from sparseengine.entrypoints.openai.serving.chat import _validate_chat_request
 
         request = ChatCompletionRequest(
             model="m",
@@ -1510,7 +1515,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_chat_accepts_store_false_and_rejects_store_true(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import ChatCompletionRequest, _validate_chat_request
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.serving.chat import _validate_chat_request
 
         request = ChatCompletionRequest(
             model="m",
@@ -1524,10 +1530,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 400)
 
     def test_chat_prompt_passes_tools_and_tool_history(self):
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            _chat_request_prompt,
-        )
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.render import _chat_request_prompt
 
         class Tokenizer:
             chat_template = "template"
@@ -1581,10 +1585,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tokenizer.tools[0]["name"], "get_weather")
 
     def test_chat_prompt_adapts_tools_for_minimax_template(self):
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            _chat_request_prompt,
-        )
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.render import _chat_request_prompt
 
         class Tokenizer:
             chat_template = "<minimax:tool_call>{{ tool.function }}"
@@ -1628,10 +1630,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_multimodal_chat_adapts_tools_for_gemma4_template(self):
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            _chat_request_prompt,
-        )
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.render import _chat_request_prompt
         from sparseengine.multimodal import MultiModalPrompt
 
         class Tokenizer:
@@ -1686,7 +1686,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_chat_prompt_rejects_invalid_tool_history_arguments(self):
-        from sparseengine.entrypoints.openai.api_server import ChatMessage, _chat_prompt
+        from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
+        from sparseengine.entrypoints.openai.render import _chat_prompt
 
         class Tokenizer:
             chat_template = "template"
@@ -1711,11 +1712,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_chat_tool_controls_and_template_support_fail_fast(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            _chat_request_prompt,
-            _validate_chat_request,
-        )
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.render import _chat_request_prompt
+        from sparseengine.entrypoints.openai.serving.chat import _validate_chat_request
 
         tool = {"type": "function", "function": {"name": "search", "parameters": {}}}
         for request in (
@@ -1768,7 +1767,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_chat_template_kwargs_validation_is_explicit(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import ChatCompletionRequest, _validate_chat_request
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.serving.chat import _validate_chat_request
 
         class Tokenizer:
             chat_template = "template"
@@ -1807,11 +1807,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_chat_max_completion_tokens_maps_to_sampling_params(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            _sampling_params_from_request,
-            _validate_chat_request,
-        )
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.sampling import _sampling_params_from_request
+        from sparseengine.entrypoints.openai.serving.chat import _validate_chat_request
 
         request = ChatCompletionRequest(
             model="m",
@@ -1876,7 +1874,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("reasoning", payload["data"][0])
 
     async def test_cancel_during_admission_aborts_after_seq_id_exists(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         tokenizer = _byte_level_tokenizer()
 
@@ -1892,7 +1890,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 self.release_add.wait(timeout=5)
                 return 123
 
-            def abort_request(self, seq_id):
+            def abort_request(self, seq_id, disposition="invalidate"):
                 self.aborted.append(seq_id)
 
             def step(self):
@@ -1915,6 +1913,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_prefix_cache_inspect_route_uses_dispatcher_control_queue(self):
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheInspectRequest
 
         class Tokenizer:
             bos_token = None
@@ -1941,7 +1940,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         endpoint = _route_endpoint(app, "/v1/prefix_cache/inspect")
         try:
             response = await endpoint(
-                api_server.PrefixCacheInspectRequest(token_ids=[7, 8], include_subtree=True),
+                PrefixCacheInspectRequest(token_ids=[7, 8], include_subtree=True),
                 _TestRequest(app),
             )
         finally:
@@ -1954,6 +1953,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_prefix_cache_prune_route_returns_async_job_and_status(self):
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCachePruneRequest
 
         class Tokenizer:
             bos_token = None
@@ -1995,7 +1995,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         status_endpoint = _route_endpoint(app, "/v1/prefix_cache/prune/{prune_id}")
         try:
             response = await start_endpoint(
-                api_server.PrefixCachePruneRequest(
+                PrefixCachePruneRequest(
                     chat={
                         "model": "model",
                         "messages": [{"role": "user", "content": "prune me"}],
@@ -2010,7 +2010,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             status_response = await status_endpoint("job-1", _TestRequest(app))
             legacy_kwargs = engine.kwargs
             multi_response = await start_endpoint(
-                api_server.PrefixCachePruneRequest(
+                PrefixCachePruneRequest(
                     token_ids=[1, 2, 3, 4, 5, 6],
                     ranges=[(0, 1), (2, 3), (4, 5)], keep_tokens=1, policy="kvzip_global",
                 ),
@@ -2092,6 +2092,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_prefix_cache_match_accepts_chat_messages(self):
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheMatchRequest
 
         class Tokenizer:
             bos_token = None
@@ -2123,7 +2124,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         endpoint = _route_endpoint(app, "/v1/prefix_cache/match")
         try:
             response = await endpoint(
-                api_server.PrefixCacheMatchRequest(messages=[{"role": "user", "content": "hello"}]),
+                PrefixCacheMatchRequest(messages=[{"role": "user", "content": "hello"}]),
                 _TestRequest(app),
             )
         finally:
@@ -2135,6 +2136,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_prefix_cache_match_accepts_full_chat_selector(self):
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheMatchRequest
 
         class Tokenizer:
             bos_token = None
@@ -2182,7 +2184,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         }
         try:
             response = await endpoint(
-                api_server.PrefixCacheMatchRequest(chat=chat),
+                PrefixCacheMatchRequest(chat=chat),
                 _TestRequest(app),
             )
         finally:
@@ -2281,6 +2283,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     async def test_routing_probe_snapshots_do_not_wait_for_engine_step(self):
         from sparseengine.engine.prefix_cache import PrefixCacheRoutingSnapshot
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheMatchRequest
 
         tokenizer = _byte_level_tokenizer()
         step_started = threading.Event()
@@ -2311,7 +2314,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 release_step.wait(1)
                 return [], 0
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 pass
 
             def exit(self):
@@ -2341,7 +2344,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             )
             match_response = await asyncio.wait_for(
                 match_endpoint(
-                    api_server.PrefixCacheMatchRequest(token_ids=[1, 2]),
+                    PrefixCacheMatchRequest(token_ids=[1, 2]),
                     _TestRequest(app),
                 ),
                 timeout=0.2,
@@ -2356,7 +2359,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(match_payload["enabled"])
 
     async def test_routing_snapshots_refresh_before_completion_events(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         tokenizer = _byte_level_tokenizer()
         completion_token_id = tokenizer.encode("a")[0]
@@ -2398,7 +2401,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 self.generation = 1
                 return [(17, [completion_token_id], [None], [None])], 0
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 pass
 
             def exit(self):
@@ -2446,6 +2449,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_prefix_cache_text_selector_tokenizes_server_side(self):
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheInspectRequest
 
         class Tokenizer:
             bos_token = "<s>"
@@ -2474,7 +2478,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         app = api_server.create_app("/tmp/model", served_model_name="model", engine=engine)
         endpoint = _route_endpoint(app, "/v1/prefix_cache/inspect")
         try:
-            response = await endpoint(api_server.PrefixCacheInspectRequest(text="hello"), _TestRequest(app))
+            response = await endpoint(PrefixCacheInspectRequest(text="hello"), _TestRequest(app))
         finally:
             app.state.dispatcher.close()
 
@@ -2485,6 +2489,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     async def test_prefix_cache_selector_rejects_both_or_neither(self):
         from fastapi import HTTPException
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheInspectRequest
 
         class Engine:
             tokenizer = object()
@@ -2497,15 +2502,16 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         endpoint = _route_endpoint(app, "/v1/prefix_cache/inspect")
         try:
             with self.assertRaises(HTTPException):
-                await endpoint(api_server.PrefixCacheInspectRequest(), _TestRequest(app))
+                await endpoint(PrefixCacheInspectRequest(), _TestRequest(app))
             with self.assertRaises(HTTPException):
-                await endpoint(api_server.PrefixCacheInspectRequest(token_ids=[1], text="x"), _TestRequest(app))
+                await endpoint(PrefixCacheInspectRequest(token_ids=[1], text="x"), _TestRequest(app))
         finally:
             app.state.dispatcher.close()
 
     async def test_prefix_cache_disabled_error_is_explicit(self):
         from fastapi import HTTPException
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheInspectRequest
 
         class Tokenizer:
             bos_token = None
@@ -2529,7 +2535,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         endpoint = _route_endpoint(app, "/v1/prefix_cache/inspect")
         try:
             with self.assertRaises(HTTPException) as ctx:
-                await endpoint(api_server.PrefixCacheInspectRequest(token_ids=[1]), _TestRequest(app))
+                await endpoint(PrefixCacheInspectRequest(token_ids=[1]), _TestRequest(app))
         finally:
             app.state.dispatcher.close()
 
@@ -2538,6 +2544,10 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_prefix_cache_delete_and_priority_routes_are_synchronous_controls(self):
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import (
+            PrefixCacheDeleteSubtreeRequest,
+            PrefixCacheSetEvictionPriorityRequest,
+        )
 
         class Tokenizer:
             bos_token = None
@@ -2579,11 +2589,11 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         priority_endpoint = _route_endpoint(app, "/v1/prefix_cache/set_eviction_priority")
         try:
             delete_response = await delete_endpoint(
-                api_server.PrefixCacheDeleteSubtreeRequest(text="ab"),
+                PrefixCacheDeleteSubtreeRequest(text="ab"),
                 _TestRequest(app),
             )
             priority_response = await priority_endpoint(
-                api_server.PrefixCacheSetEvictionPriorityRequest(token_ids=[7, 8], priority=-5),
+                PrefixCacheSetEvictionPriorityRequest(token_ids=[7, 8], priority=-5),
                 _TestRequest(app),
             )
         finally:
@@ -2600,7 +2610,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_step_failure_aborts_active_request(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         test_tokenizer = _byte_level_tokenizer()
 
@@ -2620,7 +2630,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 self.step_started.set()
                 raise RuntimeError("boom")
 
-            def abort_request(self, seq_id):
+            def abort_request(self, seq_id, disposition="invalidate"):
                 self.aborted.append(seq_id)
 
             def exit(self):
@@ -2638,7 +2648,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             dispatcher.close()
 
     async def test_final_detokenizer_error_reaches_client(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         tokenizer = _byte_level_tokenizer()
         streamed_token_id = tokenizer.encode("a")[0]
@@ -2659,7 +2669,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 self.last_step_logprob_outputs = [(7, [None], [None])]
                 return [(7, [mismatched_final_id], [None], [None])], 0
 
-            def abort_request(self, seq_id):
+            def abort_request(self, seq_id, disposition="invalidate"):
                 self.aborted.append(seq_id)
 
             def exit(self):
@@ -2684,7 +2694,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.aborted, [7])
 
     async def test_stop_detokenizer_error_reaches_client(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         tokenizer = _byte_level_tokenizer()
         token_id = tokenizer.encode("a")[0]
@@ -2705,7 +2715,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 self.last_step_logprob_outputs = [(7, [None], [None])]
                 return [], 0
 
-            def abort_request(self, seq_id):
+            def abort_request(self, seq_id, disposition="invalidate"):
                 self.aborted.append(seq_id)
 
             def exit(self):
@@ -2729,7 +2739,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.aborted, [7])
 
     async def test_dispatcher_close_times_out_blocked_step_and_exits_engine(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 
         test_tokenizer = _byte_level_tokenizer()
 
@@ -2752,7 +2762,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 self.release_step.wait()
                 return [], 0
 
-            def abort_request(self, seq_id):
+            def abort_request(self, seq_id, disposition="invalidate"):
                 self.aborted.append(seq_id)
 
             def exit(self):
@@ -2777,7 +2787,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     async def test_completion_route_error_cancels_sibling_handles(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.completion import _completion_response
 
         queue_0 = asyncio.Queue()
         queue_1 = asyncio.Queue()
@@ -2798,6 +2809,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_streaming_cancel_logs_request_cancel(self):
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.completion import CompletionRequest
 
         class Tokenizer:
             def encode(self, _prompt):
@@ -2816,7 +2828,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             def add_request(self, _prompt, _sampling_params):
                 return 1
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 pass
 
             def step(self):
@@ -2827,7 +2839,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
         app = api_server.create_app("/tmp/model", served_model_name="model", engine=Engine())
         endpoint = _route_endpoint(app, "/v1/completions")
-        request = api_server.CompletionRequest(model="model", prompt="p")
+        request = CompletionRequest(model="model", prompt="p")
         try:
             from sparseengine.entrypoints.openai.serving import completion as completion_serving
 
@@ -2845,7 +2857,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("request_cancel id={} model={} stream=false elapsed_s={:.3f}", messages)
 
     async def test_dispatcher_streaming_delta_uses_cumulative_suffix(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher, _ActiveRequest
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher, _ActiveRequest
         from sparseengine.entrypoints.openai.detokenizer import IncrementalDetokenizer
 
         tokenizer = _byte_level_tokenizer()
@@ -2892,7 +2904,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(active[7].completion_token_ids, token_ids)
 
     async def test_dispatcher_strips_terminal_eos_from_parser_text(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher, _ActiveRequest
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher, _ActiveRequest
         from sparseengine.entrypoints.openai.detokenizer import IncrementalDetokenizer
 
         tokenizer = _byte_level_tokenizer(special_tokens=["<eos>"])
@@ -2969,7 +2981,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_dispatcher_preserves_eos_when_ignored(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher, _ActiveRequest
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher, _ActiveRequest
         from sparseengine.entrypoints.openai.detokenizer import IncrementalDetokenizer
 
         tokenizer = _byte_level_tokenizer(special_tokens=["<eos>"])
@@ -3036,7 +3048,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_item["finish_reason"], "length")
 
     async def test_dispatcher_streams_complete_unicode_with_pending_logprobs(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher, _ActiveRequest
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher, _ActiveRequest
         from sparseengine.entrypoints.openai.detokenizer import IncrementalDetokenizer
 
         tokenizer = _byte_level_tokenizer()
@@ -3105,7 +3117,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_item["text_delta"], "")
 
     async def test_final_reconciliation_publishes_pending_logprobs(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher, _ActiveRequest
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher, _ActiveRequest
         from sparseengine.entrypoints.openai.detokenizer import IncrementalDetokenizer
 
         tokenizer = _byte_level_tokenizer()
@@ -3163,7 +3175,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_item["text_delta"], "")
 
     async def test_final_suffix_publishes_token_metadata(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher, _ActiveRequest
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher, _ActiveRequest
         from sparseengine.entrypoints.openai.detokenizer import IncrementalDetokenizer
 
         tokenizer = _byte_level_tokenizer()
@@ -3211,11 +3223,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_item["text_delta"], "")
 
     async def test_stream_logprobs_include_raw_only_special_token(self):
-        from sparseengine.entrypoints.openai.api_server import (
-            RequestHandle,
-            _chat_completion_stream,
-            _completion_stream,
-        )
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_stream
+        from sparseengine.entrypoints.openai.serving.completion import _completion_stream
 
         tokenizer = _byte_level_tokenizer(special_tokens=["<special>"])
         token_id = tokenizer._tokenizer.token_to_id("<special>")
@@ -3293,13 +3303,17 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chat_payloads[1]["choices"][0]["delta"]["content"], "")
 
     async def test_unicode_streams_match_non_streaming_endpoints(self):
-        from sparseengine.entrypoints.openai.api_server import (
-            RequestHandle,
-            ResponseRequest,
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.chat import (
             _chat_completion_response,
             _chat_completion_stream,
+        )
+        from sparseengine.entrypoints.openai.serving.completion import (
             _completion_response,
             _completion_stream,
+        )
+        from sparseengine.entrypoints.openai.serving.responses import (
             _response_response,
             _response_stream,
         )
@@ -3389,7 +3403,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"\xef\xbf\xbd", "".join(response_chunks).encode("utf-8"))
 
     async def test_unicode_response_reasoning_and_tool_call_stream(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, ResponseRequest, _response_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _response_stream
 
         raw_text = (
             '<think>中文推理</think><tool_call>{"name":"查询",'
@@ -3444,7 +3460,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("结束", streamed_text)
 
     async def test_dispatcher_stop_buffers_partial_stop_prefix(self):
-        from sparseengine.entrypoints.openai.api_server import AsyncEngineDispatcher, _ActiveRequest
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher, _ActiveRequest
         from sparseengine.entrypoints.openai.detokenizer import IncrementalDetokenizer
 
         tokenizer = _byte_level_tokenizer()
@@ -3457,7 +3473,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 self.last_step_logprob_outputs = [(7, [None], [None])]
                 self.aborted = []
 
-            def abort_request(self, seq_id):
+            def abort_request(self, seq_id, disposition="invalidate"):
                 self.aborted.append(seq_id)
 
             def exit(self):
@@ -3551,7 +3567,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(final["raw_text"], expected_raw)
 
     async def test_chat_completion_response_shape(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
 
         queue = asyncio.Queue()
         await queue.put(
@@ -3579,11 +3596,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["usage"], {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5})
 
     async def test_chain_metadata_is_exposed_by_all_response_shapes(self):
-        from sparseengine.entrypoints.openai.api_server import (
-            RequestHandle,
-            _chat_completion_response,
-            _completion_response,
-        )
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
+        from sparseengine.entrypoints.openai.serving.completion import _completion_response
         from sparseengine.entrypoints.openai.serving.responses import _usage_from_final
 
         final = {
@@ -3827,7 +3842,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         from fastapi import HTTPException
 
         from sparseengine.engine.chain_cache import ChainBusyError
-        from sparseengine.entrypoints.openai.api_server import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
         from sparseengine.entrypoints.openai.serving.chat import (
             serve_chat_completion,
         )
@@ -3903,10 +3918,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("shutting down", str(handle.admission_error))
 
     async def test_dispatcher_invalidates_chain_when_stop_is_found_at_finish(self):
-        from sparseengine.entrypoints.openai.api_server import (
-            AsyncEngineDispatcher,
-            _ActiveRequest,
-        )
+        from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher, _ActiveRequest
         from sparseengine.entrypoints.openai.detokenizer import (
             IncrementalDetokenizer,
         )
@@ -4391,7 +4403,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("abort failed", result["message"])
 
     async def test_chat_completion_parses_qwen3_reasoning(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
 
         queue = asyncio.Queue()
         await queue.put(
@@ -4425,7 +4438,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(choice["finish_reason"], "stop")
 
     async def test_chat_completion_parses_reasoning_and_tool_calls(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
 
         raw_text = (
             "<think>need weather</think>"
@@ -4467,7 +4481,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(choice["finish_reason"], "tool_calls")
 
     async def test_chat_completion_preserves_content_before_tool_calls(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
 
         raw_text = (
             "THOUGHT: I should inspect the repository first.\n"
@@ -4507,7 +4522,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(choice["finish_reason"], "tool_calls")
 
     async def test_chat_completion_parses_multiple_tool_calls(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
 
         text = (
             '<tool_call>{"name":"first","arguments":{"x":1}}</tool_call>'
@@ -4541,7 +4557,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call["function"]["name"] for call in calls], ["first", "second"])
 
     async def test_chat_completion_parses_qwen_xml_tool_call_with_transformers(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
 
         raw_text = (
             "reason</think>\n\nTHOUGHT: inspect\n\n"
@@ -4584,7 +4601,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(choice["finish_reason"], "tool_calls")
 
     async def test_chat_completion_reasoning_length_remains_explicit(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
 
         queue = asyncio.Queue()
         await queue.put(
@@ -4617,7 +4635,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(choice["finish_reason"], "length")
 
     async def test_chat_completion_transformers_controls_parse_outcomes(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
 
         async def parse(text, *, reasoning_parser_name=None, parse_tools=False):
             queue = asyncio.Queue()
@@ -4657,7 +4676,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(choice["finish_reason"], "stop")
 
     async def test_chat_completion_glm_empty_tool_name_preserves_output(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
 
         for text in (
             "</think><tool_call></tool_call>",
@@ -4689,10 +4709,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     async def test_chat_completion_does_not_mask_parser_contract_errors(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import (
-            RequestHandle,
-            _chat_completion_response,
-        )
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
         from sparseengine.entrypoints.openai.serving.response_parsing import (
             ResponseParseError,
         )
@@ -4738,7 +4756,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_chat_logprobs_reject_parsed_outputs(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import ChatCompletionRequest, _validate_chat_request
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.serving.chat import _validate_chat_request
 
         base = {
             "model": "m",
@@ -4768,7 +4787,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_chat_stream_starts_with_assistant_role(self):
-        from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_stream
 
         queue = asyncio.Queue()
         await queue.put(
@@ -4785,7 +4805,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 "top_logprobs": [],
             }
         )
-        handle = api_server.RequestHandle(output_queue=queue, cancelled=threading.Event())
+        handle = RequestHandle(output_queue=queue, cancelled=threading.Event())
 
         class Dispatcher:
             def cancel(self, _handle):
@@ -4793,7 +4813,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
         chunks = [
             chunk
-            async for chunk in api_server._chat_completion_stream(
+            async for chunk in _chat_completion_stream(
                 Dispatcher(),
                 "chatcmpl-test",
                 123,
@@ -4806,7 +4826,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first["choices"][0]["delta"], {"role": "assistant"})
 
     async def test_chat_stream_parses_reasoning_and_tool_calls(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_stream
 
         raw_text = (
             "reason</think>"
@@ -4897,10 +4918,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         })
 
     async def test_multimodal_chat_stream_uses_admitted_parser_prefix(self):
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            RequestHandle,
-        )
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
         from sparseengine.entrypoints.openai.serving.chat import (
             serve_chat_completion,
         )
@@ -5010,7 +5029,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_chat_stream_parser_disabled_preserves_raw_content(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_stream
 
         text = "<think>reason</think>answer"
         queue = asyncio.Queue()
@@ -5082,7 +5102,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(starts[0]["id"], starts[1]["id"])
 
     async def test_chat_stream_reasoning_length_finishes_explicitly(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_stream
 
         queue = asyncio.Queue()
         await queue.put(
@@ -5140,7 +5161,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_chat_stream_parse_failure_is_visible_and_cancels(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_stream
 
         queue = asyncio.Queue()
         await queue.put(
@@ -5184,7 +5206,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set())
 
     async def test_chat_stream_cancel_releases_dispatcher_request(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_stream
 
         queue = asyncio.Queue()
         handle = RequestHandle(output_queue=queue, cancelled=threading.Event())
@@ -5212,7 +5235,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set())
 
     async def test_chat_stream_disconnect_releases_dispatcher_request(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _chat_completion_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.chat import _chat_completion_stream
 
         queue = asyncio.Queue()
         handle = RequestHandle(output_queue=queue, cancelled=threading.Event())
@@ -5241,7 +5265,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set())
 
     def test_completion_logprobs_serializes_sampled_tokens(self):
-        from sparseengine.entrypoints.openai.api_server import _completion_logprobs
+        from sparseengine.entrypoints.openai.serving.base import _completion_logprobs
 
         class Tokenizer:
             def decode(self, token_ids, skip_special_tokens=True):
@@ -5259,7 +5283,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(logprobs["top_logprobs"][0], {"a": -0.1, "c": -1.0})
 
     def test_chat_logprobs_true_requests_sampled_logprobs(self):
-        from sparseengine.entrypoints.openai.api_server import ChatCompletionRequest, _sampling_params_from_request
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.sampling import _sampling_params_from_request
 
         request = ChatCompletionRequest(
             model="model",
@@ -5270,7 +5295,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_sampling_params_from_request(request).logprobs, 0)
 
     def test_response_prompt_renders_string_input_and_instructions(self):
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _response_prompt
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.render import _response_prompt
 
         class Tokenizer:
             chat_template = "template"
@@ -5303,7 +5329,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(tokenizer.kwargs["enable_thinking"], False)
 
     def test_response_prompt_rejects_unsupported_item_type(self):
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _response_prompt
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.render import _response_prompt
 
         class Tokenizer:
             chat_template = None
@@ -5315,7 +5342,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_response_prompt_preserves_multimodal_parts_for_model_processor(self):
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _response_prompt
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.render import _response_prompt
         from sparseengine.multimodal import MultiModalPrompt
 
         request = ResponseRequest(
@@ -5339,7 +5367,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(prompt.messages[0]["content"][1], {"type": "text", "text": "describe"})
 
     def test_response_prompt_validates_multimodal_parts(self):
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _response_prompt
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.render import _response_prompt
 
         cases = [
             ({"type": "input_image"}, "requires a non-empty image_url"),
@@ -5376,10 +5405,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     async def test_multimodal_admission_errors_return_bad_request(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import (
-            ChatCompletionRequest,
-            ResponseRequest,
-        )
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
         from sparseengine.entrypoints.openai.serving.chat import serve_chat_completion
         from sparseengine.entrypoints.openai.serving.responses import serve_response
 
@@ -5423,7 +5450,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ctx.exception.status_code, 400)
 
     def test_response_prompt_passes_tools_and_tool_outputs(self):
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _response_prompt
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.render import _response_prompt
 
         class Tokenizer:
             chat_template = "template"
@@ -5458,7 +5486,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tokenizer.tools[0]["name"], "get_weather")
 
     def test_response_prompt_adapts_minimax_tool_history(self):
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _response_prompt
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.render import _response_prompt
 
         class Tokenizer:
             chat_template = "<minimax:tool_call>{{ tool.function }}"
@@ -5507,7 +5536,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tokenizer.tools[0]["function"]["name"], "get_weather")
 
     def test_response_prompt_rejects_tools_without_template_support(self):
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _response_prompt
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.render import _response_prompt
 
         class Tokenizer:
             chat_template = "template"
@@ -5527,7 +5557,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_response_prompt_rejects_tool_history_without_template(self):
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _response_prompt
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.render import _response_prompt
 
         class Tokenizer:
             chat_template = None
@@ -5542,7 +5573,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_response_reasoning_effort_conflicts_fail_fast(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _validate_response_request
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _validate_response_request
 
         with self.assertRaises(HTTPException) as ctx:
             _validate_response_request(
@@ -5559,7 +5591,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     def test_response_unimplemented_control_fields_fail_fast(self):
         from fastapi import HTTPException
 
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _validate_response_request
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _validate_response_request
 
         for request in [
             ResponseRequest(model="model", input="hello", tool_choice="required"),
@@ -5572,8 +5605,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ctx.exception.status_code, 400)
 
     def test_response_accepts_opencode_compatibility_fields(self):
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _response_prompt
-        from sparseengine.entrypoints.openai.api_server import _validate_response_request
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.render import _response_prompt
+        from sparseengine.entrypoints.openai.serving.responses import _validate_response_request
 
         class Tokenizer:
             chat_template = None
@@ -5591,14 +5625,16 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_response_prompt(Tokenizer(), request), "user: hello\nassistant:")
 
     def test_response_max_output_tokens_maps_to_sampling_params(self):
-        from sparseengine.entrypoints.openai.api_server import ResponseRequest, _sampling_params_from_response_request
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.sampling import _sampling_params_from_response_request
 
         request = ResponseRequest(model="model", input="hello", max_output_tokens=7)
 
         self.assertEqual(_sampling_params_from_response_request(request).max_tokens, 7)
 
     async def test_response_response_shape_and_usage(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _response_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.responses import _response_response
 
         queue = asyncio.Queue()
         await queue.put(
@@ -5627,7 +5663,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["usage"], {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6})
 
     async def test_response_reasoning_parser_uses_raw_text(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, _response_response
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.serving.responses import _response_response
 
         queue = asyncio.Queue()
         await queue.put(
@@ -5656,7 +5693,8 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["output"][1]["content"][0]["text"], "answer")
 
     async def test_response_stream_true_returns_responses_sse(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, ResponseRequest
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
         from sparseengine.entrypoints.openai.serving.responses import serve_response
 
         queue = asyncio.Queue()
@@ -5724,7 +5762,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed["usage"], {"input_tokens": 4, "output_tokens": 2, "total_tokens": 6})
 
     async def test_response_stream_qwen3_reasoning_uses_raw_delta(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, ResponseRequest, _response_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _response_stream
 
         queue = asyncio.Queue()
         for delta in ["<thi", "nk>rea", "son</thi", "nk>answer"]:
@@ -5793,7 +5833,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed["output"][1]["content"][0]["text"], "answer")
 
     async def test_response_stream_parser_disabled_returns_raw_visible_text(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, ResponseRequest, _response_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _response_stream
 
         queue = asyncio.Queue()
         await queue.put(
@@ -5849,7 +5891,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("".join(output_deltas), "<think>reason</think>answer")
 
     async def test_response_stream_qwen3_thinking_off_streams_plain_answer(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, ResponseRequest, _response_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _response_stream
 
         queue = asyncio.Queue()
         await queue.put(
@@ -5913,7 +5957,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("".join(output_deltas), "hello")
 
     async def test_response_stream_reasoning_length_finishes_incomplete(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, ResponseRequest, _response_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _response_stream
 
         queue = asyncio.Queue()
         await queue.put(
@@ -5970,7 +6016,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed["output"][0]["text"], "partial")
 
     async def test_response_stream_transformers_finalizes_unclosed_reasoning(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, ResponseRequest, _response_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _response_stream
 
         queue = asyncio.Queue()
         await queue.put(
@@ -6040,7 +6088,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                     )
                 ], 0
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 pass
 
             def exit(self):
@@ -6069,7 +6117,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.sampling_params.max_tokens, 4)
 
     def test_qwen3_reasoning_parser_builds_reasoning_item(self):
-        from sparseengine.entrypoints.openai.api_server import _response_output_items
+        from sparseengine.entrypoints.openai.serving.responses import _response_output_items
 
         parsed = _transformers_response_parser().parse(
             "<think>reason</think>answer",
@@ -6083,7 +6131,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output[1]["content"][0]["text"], "answer")
 
     def test_qwen3_reasoning_parser_handles_template_opened_think(self):
-        from sparseengine.entrypoints.openai.api_server import _response_output_items
+        from sparseengine.entrypoints.openai.serving.responses import _response_output_items
 
         parsed = _transformers_response_parser().parse(
             "reason</think>\n\nanswer<|im_end|>",
@@ -6135,7 +6183,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed.content, "answer")
 
     def test_qwen3_reasoning_parser_handles_unclosed_region(self):
-        from sparseengine.entrypoints.openai.api_server import _response_output_items
+        from sparseengine.entrypoints.openai.serving.responses import _response_output_items
 
         parsed = _transformers_response_parser().parse(
             "<think>partial",
@@ -6147,7 +6195,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output, [{"id": output[0]["id"], "type": "reasoning", "text": "partial", "summary": []}])
 
     def test_reasoning_parser_disabled_returns_raw_text(self):
-        from sparseengine.entrypoints.openai.api_server import _response_output_items
+        from sparseengine.entrypoints.openai.serving.responses import _response_output_items
 
         from sparseengine.entrypoints.openai.serving.response_parsing import ParsedModelResponse
 
@@ -6158,7 +6206,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output[0]["content"][0]["text"], "<think>reason</think>answer")
 
     def test_tool_call_output_item_is_parsed(self):
-        from sparseengine.entrypoints.openai.api_server import _response_output_items
+        from sparseengine.entrypoints.openai.serving.responses import _response_output_items
 
         parsed = _transformers_response_parser().parse(
             '<tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}</tool_call>',
@@ -6333,7 +6381,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
             )
 
     def test_minimax_tool_calls_parse_reasoning_and_parallel_invokes(self):
-        from sparseengine.entrypoints.openai.api_server import _response_output_items
+        from sparseengine.entrypoints.openai.serving.responses import _response_output_items
 
         parsed = _transformers_response_parser(minimax_tools=True).parse(
             "reason</think>\n"
@@ -6423,7 +6471,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0]["function"]["arguments"], '{"city":"Paris"}')
 
     async def test_response_stream_tool_call_outputs_function_events(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, ResponseRequest, _response_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _response_stream
 
         queue = asyncio.Queue()
         await queue.put(
@@ -6487,7 +6537,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed["output"][0]["arguments"], '{"city":"Paris"}')
 
     async def test_response_stream_reasoning_then_tool_call(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, ResponseRequest, _response_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _response_stream
 
         raw = '<think>reason</think><tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}</tool_call>'
         queue = asyncio.Queue()
@@ -6551,7 +6603,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed["output"][1]["arguments"], '{"city":"Paris"}')
 
     async def test_response_stream_cancel_releases_dispatcher_request(self):
-        from sparseengine.entrypoints.openai.api_server import RequestHandle, ResponseRequest, _response_stream
+        from sparseengine.entrypoints.openai.dispatcher import RequestHandle
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
+        from sparseengine.entrypoints.openai.serving.responses import _response_stream
 
         queue = asyncio.Queue()
         handle = RequestHandle(output_queue=queue, cancelled=threading.Event())
@@ -6587,6 +6641,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_prefix_cache_match_accepts_response_selector(self):
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheMatchRequest
 
         class Tokenizer:
             bos_token = None
@@ -6613,7 +6668,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         endpoint = _route_endpoint(app, "/v1/prefix_cache/match")
         try:
             response = await endpoint(
-                api_server.PrefixCacheMatchRequest(
+                PrefixCacheMatchRequest(
                     response={"model": "model", "instructions": "policy", "input": "hello"}
                 ),
                 _TestRequest(app),
@@ -6629,6 +6684,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
     async def test_prefix_cache_match_rejects_multiple_selectors_with_response(self):
         from fastapi import HTTPException
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheMatchRequest
 
         class Engine:
             tokenizer = object()
@@ -6642,7 +6698,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
         try:
             with self.assertRaises(HTTPException):
                 await endpoint(
-                    api_server.PrefixCacheMatchRequest(text="hello", response={"model": "model", "input": "hello"}),
+                    PrefixCacheMatchRequest(text="hello", response={"model": "model", "input": "hello"}),
                     _TestRequest(app),
                 )
         finally:
@@ -6709,7 +6765,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 time.sleep(0.001)
                 return [], 0
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 pass
 
             def exit(self):
@@ -6773,7 +6829,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 time.sleep(0.001)
                 return [], 0
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 pass
 
             def exit(self):
@@ -6831,7 +6887,7 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 time.sleep(0.001)
                 return [], 0
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 pass
 
             def exit(self):
@@ -6856,6 +6912,9 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_all_generation_endpoints_only_publish_tokens_for_streaming(self):
         from sparseengine.entrypoints.openai import api_server
+        from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
+        from sparseengine.entrypoints.openai.protocol.completion import CompletionRequest
+        from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
 
         tokenizer = _byte_level_tokenizer()
         output_ids = tokenizer.encode("ok")
@@ -6876,17 +6935,17 @@ class OpenAIAPIServerTest(unittest.IsolatedAsyncioTestCase):
                 self.last_step_logprob_outputs = [(1, [-0.5] * len(output_ids), [None] * len(output_ids))]
                 return [(1, output_ids, [-0.5] * len(output_ids), [None] * len(output_ids))], len(output_ids)
 
-            def abort_request(self, _seq_id):
+            def abort_request(self, _seq_id, disposition="invalidate"):
                 pass
 
             def exit(self):
                 pass
 
         for path, request_type, kwargs in [
-            ("/v1/completions", api_server.CompletionRequest, {"prompt": "hello", "max_tokens": 2}),
-            ("/v1/chat/completions", api_server.ChatCompletionRequest,
+            ("/v1/completions", CompletionRequest, {"prompt": "hello", "max_tokens": 2}),
+            ("/v1/chat/completions", ChatCompletionRequest,
              {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 2}),
-            ("/v1/responses", api_server.ResponseRequest, {"input": "hello", "max_output_tokens": 2}),
+            ("/v1/responses", ResponseRequest, {"input": "hello", "max_output_tokens": 2}),
         ]:
             for stream in (False, True):
                 with self.subTest(path=path, stream=stream):

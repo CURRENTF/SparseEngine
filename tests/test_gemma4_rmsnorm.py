@@ -1,11 +1,12 @@
 import pytest
 import torch
 
+from gemma4_reference import TorchGemma4OperatorProvider
+
 from sparseengine.layers.gemma4_rmsnorm import Gemma4RMSNorm
 from sparseengine.operators.gemma4 import (
     GEMMA4_REGISTRY,
     Gemma4OpSpec,
-    TorchGemma4OperatorProvider,
     TritonGemma4OperatorProvider,
 )
 from sparseengine.operators.registry import OpResolver

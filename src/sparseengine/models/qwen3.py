@@ -16,7 +16,6 @@ from sparseengine.layers.embed_head import VocabParallelEmbedding, ParallelLMHea
 from sparseengine.models.attention_runtime import (
     bind_mha_full_attention_provider,
     build_mha_full_attention_provider,
-    build_mha_prefill_attention_op,
 )
 from sparseengine.models.rope import (
     resolve_rope_max_position,
@@ -24,33 +23,6 @@ from sparseengine.models.rope import (
     resolve_rope_theta,
 )
 from sparseengine.operators.full_attention import FullAttentionProvider
-from sparseengine.operators.prefill_attention import PreparedPrefillAttentionOp
-
-
-def build_qwen3_prefill_attention_op(
-    config: Qwen3Config,
-    *,
-    engine_config,
-    parallel_context,
-    device: torch.device,
-) -> PreparedPrefillAttentionOp:
-    """Resolve the shared Qwen3 prefill operator before model execution."""
-
-    return build_mha_prefill_attention_op(
-        config,
-        sparse_method=engine_config.sparse_method,
-        attention_tp_size=parallel_context.attn_tp_size,
-        device=device,
-        runtime_config=engine_config,
-    )
-
-
-def _get_rope_theta(config: Qwen3Config) -> float:
-    return resolve_rope_theta(config)
-
-
-def _get_rope_scaling(config: Qwen3Config):
-    return resolve_rope_scaling(config, model_name="Qwen3")
 
 
 class Qwen3Attention(nn.Module):
@@ -138,38 +110,14 @@ class Qwen3Attention(nn.Module):
         cache_manager = context.cache_manager
         layer_idx = context.now_layer_idx
         # DeltaKV compressors are trained on raw K/V before QK norm and RoPE.
-        pre_rope_k = k
-        pre_rope_v = v
-        cache_manager.save_raw_kv_if_needed(layer_idx, pre_rope_k, pre_rope_v)
-        debug_layers = os.getenv("SPARSEENGINE_DEBUG_CAPTURE_PRE_ROPE_LAYERS")
-        if debug_layers:
-            wanted = {int(part) for part in debug_layers.split(",") if part.strip()}
-            if int(layer_idx) in wanted:
-                self.debug_last_pre_rope_positions = positions.detach().clone()
-                self.debug_last_pre_rope_k = pre_rope_k.detach().clone()
-                self.debug_last_pre_rope_v = pre_rope_v.detach().clone()
+        cache_manager.save_raw_kv_if_needed(layer_idx, k, v)
         if not self.qkv_bias:
             q = self.q_norm(q)
             k = self.k_norm(k)
         q, k = self.rotary_emb(positions, q, k)
         cache_manager.save_rope_kv_if_needed(layer_idx, k, v)
-        debug_qk_layers = os.getenv("SPARSEENGINE_DEBUG_QK_LAYERS")
-        debug_qk_capture = False
-        if debug_qk_layers:
-            wanted = {int(part) for part in debug_qk_layers.split(",") if part.strip()}
-            debug_qk_capture = int(context.now_layer_idx) in wanted
-            if debug_qk_capture:
-                self.debug_last_k_raw = pre_rope_k.detach().clone()
-                self.debug_last_q_postrope = q.detach().clone()
-                self.debug_last_k_postrope = k.detach().clone()
-                self.debug_last_v = v.detach().clone()
-                self.debug_last_qk_positions = positions.detach().clone()
         o = self.attn(q, k, v)
-        projected = self._o_proj_chunked(o.flatten(1, -1), hidden_states)
-        if debug_qk_capture:
-            self.debug_last_attn_output = o.detach().clone()
-            self.debug_last_o_proj_output = projected.detach().clone()
-        return projected
+        return self._o_proj_chunked(o.flatten(1, -1), hidden_states)
 
 
 class Qwen3MLP(nn.Module):
@@ -236,8 +184,8 @@ class Qwen3DecoderLayerBase(nn.Module):
             rms_norm_eps=config.rms_norm_eps,
             qkv_bias=config.attention_bias,
             head_dim=config.head_dim,
-            rope_theta=_get_rope_theta(config),
-            rope_scaling=_get_rope_scaling(config),
+            rope_theta=resolve_rope_theta(config),
+            rope_scaling=resolve_rope_scaling(config, model_name="Qwen3"),
             proj_chunk_size=getattr(config, "mlp_chunk_size", 16384),
             quantization=getattr(config, "quantization_config", None),
         )

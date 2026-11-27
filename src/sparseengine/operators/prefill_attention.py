@@ -1100,17 +1100,6 @@ def _resolve_prefill_attention_provider(
     return resolved.provider, execution_spec
 
 
-def resolve_prefill_attention_provider(
-    spec: PrefillAttentionOpSpec,
-    *,
-    device_index: int | None = None,
-) -> PrefillAttentionProvider:
-    provider, _ = _resolve_prefill_attention_provider(
-        spec, device_index=device_index
-    )
-    return provider
-
-
 class PreparedPrefillAttentionOp:
     """Prepared prefill dispatch shared by all layers in one model runtime."""
 

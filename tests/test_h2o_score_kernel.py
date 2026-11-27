@@ -2,10 +2,9 @@ import pytest
 import torch
 from types import SimpleNamespace
 
-from sparseengine.kernels.triton.h2o_score import (
-    h2o_softmax_accumulate,
-    h2o_headwise_softmax_accumulate,
-)
+from sparseengine.kernels.triton.h2o_decode_score import h2o_probability_from_lse
+from sparseengine.kernels.triton.h2o_score import h2o_headwise_softmax_accumulate_rows
+from sparseengine.kernels.triton.paged_flash_decoding import paged_flash_decode
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -104,6 +103,10 @@ def test_h2o_fused_headwise_paged_graph_matches_independent_torch(heads, kv_head
     # Sliced batch and token strides exercise the runtime's shared backing store.
     raw = torch.full((2, batch + 1, heads, width + 3), torch.nan, device="cuda")[:1, :batch, :, :width]
     cumulative = torch.randn(1, batch, width + 7, device="cuda")
+    row_metadata = torch.tensor(
+        [[[cumulative[0, row].data_ptr(), 0] for row in range(batch)]],
+        dtype=torch.int64, device="cuda",
+    )
     mid_o = torch.empty(batch, heads, 16, dim, device="cuda")
     mid_lse = torch.empty(batch, heads, 16, device="cuda")
 
@@ -112,7 +115,8 @@ def test_h2o_fused_headwise_paged_graph_matches_independent_torch(heads, kv_head
             q, k, v, slots, requests, lengths, mid_o, mid_lse,
             attn_score=raw[0], target_tokens_per_split=256,
         )
-        h2o_headwise_softmax_accumulate(raw, cumulative, lengths.view(1, batch), softmax_scale=dim**-0.5)
+        row_metadata[0, :, 1].copy_(lengths)
+        h2o_headwise_softmax_accumulate_rows(raw, row_metadata, softmax_scale=dim**-0.5)
         return output
 
     run()
@@ -147,44 +151,6 @@ def test_h2o_fused_headwise_paged_graph_matches_independent_torch(heads, kv_head
             torch.testing.assert_close(output[row], reference_output, atol=2e-2, rtol=2e-2)
         torch.testing.assert_close(cumulative, expected, atol=2e-5, rtol=2e-5)
         assert pointers == (raw.data_ptr(), cumulative.data_ptr(), output.data_ptr())
-from sparseengine.kernels.triton.h2o_decode_score import h2o_probability_from_lse
-from sparseengine.kernels.triton.paged_flash_decoding import paged_flash_decode
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-@pytest.mark.parametrize("batch", [1, 2, 4])
-@pytest.mark.parametrize("batch_stride", [False, True])
-def test_h2o_softmax_accumulate_matches_torch(batch, batch_stride):
-    torch.manual_seed(0)
-    layers, capacity, width = 3, 192, 129
-    previous_width = width - 1
-    allocated_batch = batch + 3 if batch_stride else batch
-    logits_storage = torch.randn(layers, allocated_batch, capacity, device="cuda")
-    logits = logits_storage[:, :batch]
-    initial = torch.randn(layers, batch, capacity, device="cuda")
-    actual = initial.clone()
-    expected = initial.clone()
-    scale = 128**-0.5
-
-    probabilities = torch.softmax(logits[:, :, :width] * scale, dim=-1)
-    expected[:, :, :previous_width].add_(
-        probabilities[:, :, :previous_width]
-    )
-    expected[:, :, previous_width:width].copy_(
-        probabilities[:, :, previous_width:width]
-    )
-    h2o_softmax_accumulate(
-        logits,
-        actual,
-        width=width,
-        previous_width=previous_width,
-        softmax_scale=scale,
-    )
-
-    assert torch.allclose(
-        actual[:, :, :width], expected[:, :, :width], atol=1e-6, rtol=1e-5
-    )
-    assert torch.equal(actual[:, :, width:], initial[:, :, width:])
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires idle CUDA GPU")

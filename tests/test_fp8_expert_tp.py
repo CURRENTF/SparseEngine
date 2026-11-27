@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+from fp8_reference import fp8_blockwise_linear_reference
 from sparseengine.quantization.fp8_tp import Fp8ExpertTpShard
 
 

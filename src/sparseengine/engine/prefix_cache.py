@@ -766,21 +766,6 @@ class RadixTreeBackend:
             "prefix_cache_tree_edges": int(edge_count),
         }
 
-    def _rebuild_locations(self) -> None:
-        locations: dict[bytes, tuple[RadixTreeNode, int]] = {}
-        leaf_block_ids: set[bytes] = set()
-        stack = list(self.root.children.values())
-        while stack:
-            node = stack.pop()
-            for index, block_id in enumerate(node.segment):
-                locations[block_id] = (node, index)
-            if node.segment and not node.children:
-                leaf_block_ids.add(node.segment[-1])
-            stack.extend(node.children.values())
-        self._locations = locations
-        self._leaf_block_ids = leaf_block_ids
-
-
 @dataclass(frozen=True)
 class PrefixCacheBlockedBlock:
     block_id: bytes | None
@@ -1112,15 +1097,6 @@ class RadixPrefixIndex:
         hit_len = result.hit_block_count * self.block_size
         return hit_len, result.last_block_id, result.hit_block_count
 
-    def lookup_longest_prefix(
-        self,
-        token_ids: list[int],
-        *,
-        max_usable_tokens: int,
-    ) -> tuple[int, bytes | None, int]:
-        block_ids = self.block_ids_for_tokens(token_ids, max_tokens=max_usable_tokens)
-        return self.lookup_longest_block_ids(block_ids)
-
     @cpu_timing.timed
     def lookup_longest_block_ids(
         self,
@@ -1365,9 +1341,6 @@ class RadixPrefixIndex:
         ):
             return False
         return self.device_child_count(block.stable_block_id) == 0
-
-    def device_evictable_blocks(self) -> int:
-        return sum(1 for block in self.blocks.values() if self.can_demote_device(block))
 
     def device_freeable_blocks(self) -> int:
         """Count device blocks reclaimable by repeated residency-leaf demotion."""

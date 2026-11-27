@@ -3,10 +3,6 @@ import sys
 from loguru import logger
 
 
-def quick_debug_print(something):
-    return f'{something}'
-
-
 # 移除默认的 handler
 logger.remove()
 

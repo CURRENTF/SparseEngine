@@ -278,26 +278,19 @@ def test_pyramid_capacity_uses_larger_reservation_or_eviction_interval():
     assert max(supported) - min(supported) <= 1
 
 
-def test_pyramid_capacity_reserves_full_attention_and_unstaged_prefill_peaks():
-    def allocate(*, full_layers, staged):
-        config = _manager_config(method="pyramidkv")
-        config.max_model_len = 2048
-        config.snapkv_num_full_layers = full_layers
-        config.prefill_schedule_policy = (
-            "long_bs1full_short_batch" if staged else "unstaged"
-        )
-        with (
-            patch.object(platforms, "_current_platform", CpuPlatform()),
-            patch.object(CacheManager, "_get_available_slots_info", return_value=(400_000, 40)),
-        ):
-            SnapKVCacheManager(config, _parallel_context())
-        return config.num_kvcache_slots
+def test_pyramid_capacity_reserves_unstaged_prefill_peaks():
+    config = _manager_config(method="pyramidkv")
+    config.max_model_len = 2048
+    config.prefill_schedule_policy = "unstaged"
+    with (
+        patch.object(platforms, "_current_platform", CpuPlatform()),
+        patch.object(CacheManager, "_get_available_slots_info", return_value=(400_000, 40)),
+    ):
+        SnapKVCacheManager(config, _parallel_context())
 
-    full_layer_slots = allocate(full_layers=1, staged=True)
-    assert full_layer_slots[0] // 2048 == full_layer_slots[1] // (1 + 1 + 1 + 3)
-    unstaged_slots = allocate(full_layers=0, staged=False)
-    assert unstaged_slots[0] == unstaged_slots[1]
-    assert unstaged_slots[0] >= 2048
+    first_layer_slots, second_layer_slots = config.num_kvcache_slots
+    assert first_layer_slots == second_layer_slots
+    assert first_layer_slots >= config.max_model_len
 
 
 @pytest.mark.parametrize(

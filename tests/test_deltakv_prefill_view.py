@@ -1,14 +1,17 @@
+from types import SimpleNamespace
+
 import pytest
 import torch
 
 from sparseengine.engine.cache_manager.base import SparseSelection
-from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
+from sparseengine.utils.context import reset_context, set_context
 
 
 @pytest.mark.parametrize("width", [7, 45451])
 def test_prefill_preserves_reconstructed_view_larger_than_decode_workspace(width):
     """Prefill must not repack post-RoPE history into the decode scratch pool."""
-    manager = object.__new__(DeltaKVLessMemoryCacheManager)
+    manager = object.__new__(DeltaKVCacheManager)
     manager.deltakv_layer_to_idx = {1: 0}
     manager.has_prefill_staging_view = lambda _: False
     # The real failure requested 2 * 45451 slots from a 65536-slot workspace.
@@ -31,7 +34,11 @@ def test_prefill_preserves_reconstructed_view_larger_than_decode_workspace(width
         context_lens=lengths, max_context_len=width, release_temp_slots=True,
     )
     current = torch.empty((2, 1, 4))
-    view = manager.build_prefill_compute_view(1, current, current, selection)
+    set_context(is_prefill=True, seqs=[SimpleNamespace(), SimpleNamespace()])
+    try:
+        view = manager.build_prefill_compute_view(1, current, current, selection)
+    finally:
+        reset_context()
     assert view.payload.k_cache.data_ptr() == manager.deltakv_full_kv_cache[0, 0].data_ptr()
     assert view.payload.v_cache.data_ptr() == manager.deltakv_full_kv_cache[1, 0].data_ptr()
     assert view.meta.active_slots is active
@@ -51,7 +58,7 @@ def test_prefill_preserves_reconstructed_view_larger_than_decode_workspace(width
 
 
 def test_prefill_keeps_offloaded_history_staging_view():
-    manager = object.__new__(DeltaKVLessMemoryCacheManager)
+    manager = object.__new__(DeltaKVCacheManager)
     manager.deltakv_layer_to_idx = {1: 0}
     manager.has_prefill_staging_view = lambda _: True
     manager._deltakv_long_prefill_offload_step_active = True
@@ -70,9 +77,7 @@ def test_prefill_keeps_offloaded_history_staging_view():
 
 
 def test_prefill_raw_keys_are_rotated_once_and_reconstructed_keys_are_preserved():
-    from sparseengine.utils.context import reset_context, set_context
-
-    manager = object.__new__(DeltaKVLessMemoryCacheManager)
+    manager = object.__new__(DeltaKVCacheManager)
     manager.deltakv_layer_to_idx = {1: 0}
     manager.has_prefill_staging_view = lambda _: False
     manager.deltakv_full_kv_cache = torch.zeros(2, 1, 6, 1, 4)

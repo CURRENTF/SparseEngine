@@ -25,14 +25,6 @@ from sparseengine.models.rope import (
 from sparseengine.operators.full_attention import FullAttentionProvider
 
 
-def _get_rope_theta(config: Qwen2Config) -> float:
-    return resolve_rope_theta(config)
-
-
-def _get_rope_scaling(config: Qwen2Config):
-    return resolve_rope_scaling(config, model_name="Qwen2")
-
-
 class Qwen2Attention(nn.Module):
 
     def __init__(
@@ -114,34 +106,11 @@ class Qwen2Attention(nn.Module):
         context = get_context()
         cache_manager = context.cache_manager
         layer_idx = context.now_layer_idx
-        pre_rope_k = k
-        cache_manager.save_raw_kv_if_needed(layer_idx, pre_rope_k, v)
-        debug_layers = os.getenv("SPARSEENGINE_DEBUG_CAPTURE_PRE_ROPE_LAYERS")
-        if debug_layers:
-            wanted = {int(part) for part in debug_layers.split(",") if part.strip()}
-            if int(layer_idx) in wanted:
-                self.debug_last_pre_rope_positions = positions.detach().clone()
-                self.debug_last_pre_rope_k = pre_rope_k.detach().clone()
-                self.debug_last_pre_rope_v = v.detach().clone()
+        cache_manager.save_raw_kv_if_needed(layer_idx, k, v)
         q, k = self.rotary_emb(positions, q, k)
         cache_manager.save_rope_kv_if_needed(layer_idx, k, v)
-        debug_qk_layers = os.getenv("SPARSEENGINE_DEBUG_QK_LAYERS")
-        debug_qk_capture = False
-        if debug_qk_layers:
-            wanted = {int(part) for part in debug_qk_layers.split(",") if part.strip()}
-            debug_qk_capture = int(context.now_layer_idx) in wanted
-            if debug_qk_capture:
-                self.debug_last_k_raw = pre_rope_k.detach().clone()
-                self.debug_last_q_postrope = q.detach().clone()
-                self.debug_last_k_postrope = k.detach().clone()
-                self.debug_last_v = v.detach().clone()
-                self.debug_last_qk_positions = positions.detach().clone()
         o = self.attn(q, k, v)
-        projected = self._o_proj_chunked(o.flatten(1, -1), hidden_states)
-        if debug_qk_capture:
-            self.debug_last_attn_output = o.detach().clone()
-            self.debug_last_o_proj_output = projected.detach().clone()
-        return projected
+        return self._o_proj_chunked(o.flatten(1, -1), hidden_states)
 
 
 class Qwen2MLP(nn.Module):
@@ -207,8 +176,8 @@ class Qwen2DecoderLayer(nn.Module):
             rms_norm_eps=config.rms_norm_eps,
             qkv_bias=getattr(config, "attention_bias", True),
             head_dim=head_dim,
-            rope_theta=_get_rope_theta(config),
-            rope_scaling=_get_rope_scaling(config),
+            rope_theta=resolve_rope_theta(config),
+            rope_scaling=resolve_rope_scaling(config, model_name="Qwen2"),
             proj_chunk_size=getattr(config, "mlp_chunk_size", 16384),
             quantization=quantization,
         )

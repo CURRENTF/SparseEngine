@@ -360,7 +360,7 @@ def test_quest_attach_combines_resident_prefix_and_promoted_suffix():
         m.prefix_cache.finish_h2d(block)
     demoted = m.prefix_cache.demote_device_until_freeable(1)
     assert len(demoted) == 1
-    m._free_device_prefix_block(demoted[0])
+    m._free_device_prefix_blocks(demoted)
     h = RadixHarness(m, paged=True)
     before_free = len(h.observe().free)
     m._attach_prefix_cache_if_needed(seq)

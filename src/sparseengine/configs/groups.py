@@ -16,7 +16,6 @@ class PrefixCacheConfig:
     enable_prefix_cache_offload: bool = False
     prefix_cache_host_size_gb: float | None = None
     recurrent_state_max_bytes: int | None = None
-    prefix_cache_max_recurrent_bytes: int | None = None
     prefix_cache_salt: str = ""
 
 
@@ -27,7 +26,6 @@ class DecodeCudaGraphConfig:
     decode_graph: bool = True
     decode_graph_capture_sampling: bool = False
     decode_graph_capture_sizes: str | int | list[int] | tuple[int, ...] | None = "auto"
-    decode_graph_startup_capture: bool | None = None
     decode_graph_startup_capture_limit: int | None = None
     sparse_attn_score_dtype: str = "float32"
 
@@ -67,7 +65,6 @@ class SparseMethodConfig:
     retroinfer_update_tokens: int = 1024
 
     observation_window_size: int = 32
-    snapkv_num_full_layers: int = 0
     snapkv_decode_eviction: bool = False
     decode_eviction_interval: int = 1024
     sparse_prefill_score_mode: str | None = None
@@ -98,8 +95,6 @@ class SparseMethodConfig:
     rkv_score_chunk_mb: int = 512
     rkv_similarity_threshold: float | None = None
     rkv_recent_similar_keep: int = 1
-    rkv_max_redundancy_tokens: int | None = None
-    rkv_redundancy_window: int = 0
 
     skipkv_compression_interval: int = 128
     skipkv_alpha: float = 0.1
@@ -165,15 +160,12 @@ class DeltaKVConfig:
     deltakv_neighbor_count: int = 4
     deltakv_center_ratio: float = 0.1
     cluster_metric: str = "l2"
-    cluster_on_kv: bool = True
     use_compression: bool = True
     deltakv_latent_dim: int = 128
     deltakv_latent_quant_bits: int = 4
     deltakv_latent_quant_group_size: int = 0
-    enable_sparse_ref_fp8: bool = False
 
     full_layer_kv_quant_bits: int = 0
-    full_layer_cluster_ratio: float = 0.0
     full_layer_kivi_group_size: int = 32
     full_layer_kivi_residual_length: int = 32
     full_layer_kivi_decode_block_seq: int = 256
@@ -181,9 +173,6 @@ class DeltaKVConfig:
     full_layer_kivi_decode_num_warps: int = 2
     full_layer_kivi_decode_num_stages: int = 3
     enable_full_layer_kivi_quant: bool = True
-    enable_full_layer_kivi_fused_decode: bool = False
-    enable_full_layer_kivi_grouped_decode: bool = False
-    enable_full_layer_kivi_dense_decode: bool = False
     pool_kernel_size: int = 1
 
     use_nonlinear_compressor: bool = True

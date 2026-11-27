@@ -253,19 +253,6 @@ class RuntimeState:
             self.recurrent_state_manager.prepare_step(seqs, is_prefill)
         return result
 
-    def prepare_decode_static(self, seqs: list[Sequence], *args):
-        self._evict_mixed_prefix_for_step(seqs, is_prefill=False)
-        result = self.cache_manager.prepare_decode_static(seqs, *args)
-        if self.recurrent_state_manager is not None:
-            if not args or not hasattr(args[0], "shape") or not hasattr(args[0], "device"):
-                raise RuntimeError("Static recurrent decode requires the graph input tensor.")
-            self.recurrent_state_manager.prepare_decode_static(
-                seqs,
-                token_batch=int(args[0].shape[0]),
-                device=args[0].device,
-            )
-        return result
-
     def init_decode_graph_state(
         self,
         graph_state: DecodeGraphState,

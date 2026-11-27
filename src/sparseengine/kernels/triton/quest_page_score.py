@@ -1,4 +1,4 @@
-"""Page-tiled QuEST bounds with vector or matrix-product reductions."""
+"""Page-tiled QuEST bounds with matrix-product reductions."""
 from __future__ import annotations
 
 import torch
@@ -78,50 +78,6 @@ def _gqa_page_bounds(
     tl.store(repair + (row * NUM_PARTS + part) * NUM_PAGES + pages, needs_repair, pages < NUM_PAGES)
 
 
-@triton.jit(do_not_specialize=["NUM_PAGES"])
-def _vector_page_bounds(
-    query, page_max, page_min, page_table, partial,
-    NUM_PAGES, QUERY_HEADS: tl.constexpr,
-    KV_HEADS: tl.constexpr, HEAD_DIM: tl.constexpr,
-    GROUP_SIZE: tl.constexpr, BLOCK_P: tl.constexpr, BLOCK_D: tl.constexpr,
-):
-    row, tile, kv_head = tl.program_id(0), tl.program_id(1), tl.program_id(2)
-    pages = tile * BLOCK_P + tl.arange(0, BLOCK_P)
-    physical = tl.maximum(tl.load(page_table + row * NUM_PAGES + pages, pages < NUM_PAGES, 0), 0)
-    dims = tl.arange(0, BLOCK_D)
-    offsets = physical[:, None] * KV_HEADS * HEAD_DIM + kv_head * HEAD_DIM + dims[None, :]
-    mask = (pages[:, None] < NUM_PAGES) & (dims[None, :] < HEAD_DIM)
-    high = tl.load(page_max + offsets, mask, 0).to(tl.float32)
-    low = tl.load(page_min + offsets, mask, 0).to(tl.float32)
-    best = tl.full((BLOCK_P,), -float("inf"), tl.float32)
-    for head in range(GROUP_SIZE):
-        q = tl.load(
-            query + (row * QUERY_HEADS + kv_head * GROUP_SIZE + head) * HEAD_DIM + dims,
-            dims < HEAD_DIM, 0,
-        )
-        q32 = q.to(tl.float32)
-        positive = tl.sum(tl.where(q32[None, :] >= 0, q32[None, :] * high, 0), 1).to(q.dtype)
-        negative = tl.sum(tl.where(q32[None, :] < 0, q32[None, :] * low, 0), 1).to(q.dtype)
-        bound = (positive + negative).to(q.dtype)
-        best = tl.maximum(best, bound.to(tl.float32))
-    tl.store(partial + (row * KV_HEADS + kv_head) * NUM_PAGES + pages, best, pages < NUM_PAGES)
-
-
-@triton.jit(do_not_specialize=["NUM_PAGES"])
-def _max_head_bounds(
-    partial, output, NUM_PAGES,
-    NUM_PARTS: tl.constexpr, BLOCK_H: tl.constexpr,
-):
-    row = tl.program_id(0)
-    pages = tl.program_id(1) * 256 + tl.arange(0, 256)
-    heads = tl.arange(0, BLOCK_H)
-    scores = tl.load(
-        partial + (row * NUM_PARTS + heads[:, None]) * NUM_PAGES + pages[None, :],
-        (heads[:, None] < NUM_PARTS) & (pages[None, :] < NUM_PAGES), -float("inf"),
-    )
-    tl.store(output + row * NUM_PAGES + pages, tl.max(scores.to(tl.float32), 0), pages < NUM_PAGES)
-
-
 @triton.jit(do_not_specialize=["PAGES"])
 def _repair_and_merge_page_bounds(
     query, high, low, slots, repair, partial, output,
@@ -175,14 +131,6 @@ def _score_buffers(query, batch, parts, pages):
     return partial, output
 
 
-def _merge(partial, output, batch, parts, pages):
-    if parts > 1:
-        _max_head_bounds[(batch, triton.cdiv(pages, 256))](
-            partial, output, pages, parts, triton.next_power_of_2(parts), num_warps=4,
-        )
-    return output
-
-
 def score_quest_pages_tensorcore(
     query, page_max, page_min, page_table, *, block_pages=64, block_dim=128, num_warps=4,
 ):
@@ -211,21 +159,3 @@ def score_quest_pages_tensorcore(
         ),
     )
     return output
-
-
-def score_quest_pages_vector(
-    query, page_max, page_min, page_table, *, block_pages=8, num_warps=4,
-):
-    batch, heads, dim, kv_heads = _validate_quest_page_score_inputs(query, page_max, page_min, page_table)
-    if block_pages not in (1, 2, 4, 8, 16, 32):
-        raise ValueError("Unsupported QuEST vector tile.")
-    pages = int(page_table.shape[1])
-    partial, output = _score_buffers(query, batch, kv_heads, pages)
-    if not batch or not pages:
-        return output
-    _vector_page_bounds[(batch, triton.cdiv(pages, block_pages), kv_heads)](
-        query, page_max, page_min, page_table, partial,
-        pages, heads, kv_heads, dim, heads // kv_heads,
-        block_pages, triton.next_power_of_2(dim), num_warps=num_warps, num_stages=1,
-    )
-    return _merge(partial, output, batch, kv_heads, pages)

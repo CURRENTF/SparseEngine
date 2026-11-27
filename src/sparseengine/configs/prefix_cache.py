@@ -9,7 +9,7 @@ from sparseengine.configs.common import (
 from sparseengine.engine.chain_cache import normalize_prefix_cache_mode
 from sparseengine.engine.prefix_cache import resolve_prefix_cache_block_size
 from sparseengine.method_registry import PREFIX_CACHE_SUPPORTED_METHODS
-from sparseengine.utils.log import log_once
+
 
 def normalize_prefix_cache(config) -> None:
     cache_method = str(
@@ -80,33 +80,10 @@ def normalize_prefix_cache(config) -> None:
                 "enable_prefix_cache_offload requires an explicit "
                 "prefix_cache_host_size_gb."
             )
-    recurrent_state_max_bytes = _coerce_optional_positive_int(
+    config.recurrent_state_max_bytes = _coerce_optional_positive_int(
         "recurrent_state_max_bytes",
         config.recurrent_state_max_bytes,
     )
-    config.prefix_cache_max_recurrent_bytes = _coerce_optional_positive_int(
-        "prefix_cache_max_recurrent_bytes",
-        config.prefix_cache_max_recurrent_bytes,
-    )
-    if config.prefix_cache_max_recurrent_bytes is not None:
-        log_once(
-            "prefix_cache_max_recurrent_bytes is deprecated; use "
-            "recurrent_state_max_bytes instead. The budget is an explicit "
-            "hard limit for the live recurrent-state pool.",
-            level="WARNING",
-        )
-        if (
-            recurrent_state_max_bytes is not None
-            and recurrent_state_max_bytes != config.prefix_cache_max_recurrent_bytes
-        ):
-            raise ValueError(
-                "conflicting recurrent state budgets: "
-                f"recurrent_state_max_bytes={recurrent_state_max_bytes} and "
-                "prefix_cache_max_recurrent_bytes="
-                f"{config.prefix_cache_max_recurrent_bytes}."
-            )
-        recurrent_state_max_bytes = config.prefix_cache_max_recurrent_bytes
-    config.recurrent_state_max_bytes = recurrent_state_max_bytes
     if config.enable_prefix_caching and cache_method not in PREFIX_CACHE_SUPPORTED_METHODS:
         raise ValueError(
             f"prefix caching supports cache methods {sorted(PREFIX_CACHE_SUPPORTED_METHODS)}; "

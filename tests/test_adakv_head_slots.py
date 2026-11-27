@@ -136,7 +136,7 @@ def test_head_slot_config_rejects_incompatible_storage_and_lifecycle_before_allo
         runtime_layout=SimpleNamespace(heterogeneous_kv=False, linear_attention_layer_indices=(),
                                        num_kv_layers=2, num_layers=2),
         observation_window_size=4, pool_kernel_size=1, snapkv_decode_eviction=False,
-        snapkv_num_full_layers=0, full_attention_layers=[], pyramid_layer_ratios=None,
+        full_attention_layers=[], pyramid_layer_ratios=None,
         adakv_alpha=.5, sink_keep_tokens=1, recent_keep_tokens=1, decode_keep_tokens=2,
         max_model_len=16, sparse_prefill_score_mode="probability")
     normalize_head_slot_layout(config)

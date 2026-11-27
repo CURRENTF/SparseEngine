@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import torch
 
-from sparseengine.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager
+from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
 from sparseengine.engine.prefix_prune import select_global_keep_indices
 from sparseengine.multimodal.runtime import MultiModalRuntime, MultiModalState
 from sparseengine.utils.context import get_context, set_context

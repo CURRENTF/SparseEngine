@@ -480,7 +480,6 @@ def _controller_config(method: str, num_layers: int, ratios=None):
         recent_keep_tokens=1,
         decode_keep_tokens=4,
         sparse_attn_score_dtype="float32",
-        snapkv_num_full_layers=0,
         pyramid_layer_ratios=ratios,
         pool_kernel_size=1,
     )

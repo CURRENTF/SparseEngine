@@ -689,31 +689,6 @@ class Qwen35LinearAttention(nn.Module):
                 },
             )
 
-    @staticmethod
-    def _pad_decode_states_for_static_batch(
-        conv_states: torch.Tensor,
-        recurrent_states: torch.Tensor,
-        *,
-        token_batch: int,
-        real_batch: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if token_batch < real_batch:
-            raise RuntimeError(
-                "qwen3_5 decode linear attention received fewer tokens than real sequences: "
-                f"tokens={token_batch} seqs={real_batch}."
-            )
-        if token_batch == real_batch:
-            return conv_states, recurrent_states
-        if real_batch <= 0:
-            raise RuntimeError("qwen3_5 decode linear attention static batch requires a real sequence.")
-        pad_rows = int(token_batch) - int(real_batch)
-        conv_pad = conv_states[:1].repeat((pad_rows,) + (1,) * (conv_states.dim() - 1))
-        recurrent_pad = recurrent_states[:1].repeat((pad_rows,) + (1,) * (recurrent_states.dim() - 1))
-        return (
-            torch.cat([conv_states, conv_pad], dim=0).contiguous(),
-            torch.cat([recurrent_states, recurrent_pad], dim=0).contiguous(),
-        )
-
     def _prefill_gdn(self, mixed_qkv: torch.Tensor, z: torch.Tensor, b: torch.Tensor, a: torch.Tensor, context, recurrent_state_manager):
         if self.gated_delta_rule_op is None:
             raise RuntimeError(

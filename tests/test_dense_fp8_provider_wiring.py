@@ -12,7 +12,7 @@ from sparseengine.models.qwen2 import Qwen2ForCausalLM
 from sparseengine.models.qwen3 import Qwen3ForCausalLM
 from sparseengine.models.attention_runtime import resolve_mha_head_dim
 from sparseengine.quantization.config import QuantizationConfig
-from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+from fp8_reference import fp8_blockwise_linear_reference
 from sparseengine.utils.loader import load_model
 
 

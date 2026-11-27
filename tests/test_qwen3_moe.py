@@ -11,7 +11,7 @@ from sparseengine.config import QuantizationConfig
 from sparseengine.distributed import ParallelContext, ParallelGroup
 from sparseengine.layers.layernorm import RMSNorm
 from sparseengine.models.qwen3 import Qwen3Attention
-from sparseengine.models.qwen3 import build_qwen3_prefill_attention_op
+from sparseengine.models.attention_runtime import build_mha_prefill_attention_spec
 from sparseengine.models.qwen3_moe import (
     Qwen3MoeForCausalLM,
     Qwen3MoePackedExperts,
@@ -22,7 +22,7 @@ from sparseengine.operators.moe import (
     FlashInferCutlassFp8MoeProvider,
     TritonMoeProvider,
 )
-from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+from fp8_reference import fp8_blockwise_linear_reference
 from sparseengine.utils.loader import load_model
 
 
@@ -195,20 +195,12 @@ def test_qwen3_moe_builds_real_prefill_shape_spec(
         num_key_value_heads=4,
         head_dim=128,
     )
-    prepared = SimpleNamespace(name="prepared")
-    with patch(
-        "sparseengine.models.attention_runtime.prepare_prefill_attention_op",
-        return_value=prepared,
-    ) as prepare:
-        actual = build_qwen3_prefill_attention_op(
-            config,
-            engine_config=SimpleNamespace(sparse_method=""),
-            parallel_context=_tp_context(0, tp_size),
-            device=torch.device("cuda", 0),
-        )
+    spec = build_mha_prefill_attention_spec(
+        config,
+        sparse_method="",
+        attention_tp_size=tp_size,
+    )
 
-    spec = prepare.call_args.args[0]
-    assert actual is prepared
     assert spec.num_query_heads == expected_q_heads
     assert spec.num_kv_heads == expected_kv_heads
     assert spec.head_dim == 128
@@ -245,20 +237,13 @@ def test_qwen3_prefill_builder_preserves_orthogonal_flashprefill_semantics(
         flashprefill_v2_min_sparse_q_len=4096,
         flashprefill_v2_use_mean_correction=True,
     )
-    prepared = SimpleNamespace(name="flashprefill_v2")
-    with patch(
-        "sparseengine.models.attention_runtime.prepare_prefill_attention_op",
-        return_value=prepared,
-    ) as prepare:
-        actual = build_qwen3_prefill_attention_op(
-            _config(),
-            engine_config=engine_config,
-            parallel_context=_tp_context(0, 1),
-            device=torch.device("cuda", 0),
-        )
+    spec = build_mha_prefill_attention_spec(
+        _config(),
+        sparse_method=sparse_method,
+        attention_tp_size=1,
+        runtime_config=engine_config,
+    )
 
-    spec = prepare.call_args.args[0]
-    assert actual is prepared
     assert spec.prefill_sparse_method == "flashprefill_v2"
     assert spec.flashprefill_v2 is not None
     assert spec.flashprefill_v2.k_block_n == 128
@@ -301,21 +286,13 @@ def test_qwen3_moe_shares_and_closes_full_attention_provider():
     full_attention.close.assert_called_once_with()
 
 
-def test_qwen3_sparse_prefill_uses_resolved_provider():
-    prepared = SimpleNamespace(name="prepared")
-    with patch(
-        "sparseengine.models.attention_runtime.prepare_prefill_attention_op",
-        return_value=prepared,
-    ) as prepare:
-        actual = build_qwen3_prefill_attention_op(
-            _config(),
-            engine_config=SimpleNamespace(sparse_method="snapkv"),
-            parallel_context=_tp_context(0, 1),
-            device=torch.device("cuda", 0),
-        )
+def test_qwen3_sparse_prefill_spec_uses_layer_varying_rows():
+    spec = build_mha_prefill_attention_spec(
+        _config(),
+        sparse_method="snapkv",
+        attention_tp_size=1,
+    )
 
-    assert actual is prepared
-    spec = prepare.call_args.args[0]
     assert spec.score_output is AttentionScoreKind.NONE
     assert spec.layer_varying_page_table
 

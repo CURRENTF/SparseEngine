@@ -240,7 +240,6 @@ def build_chain_cache_fingerprint(config: Any) -> bytes:
             "deltakv_center_ratio", "deltakv_neighbor_count", "cluster_metric",
             "full_layer_kv_quant_bits", "enable_full_layer_kivi_quant",
             "full_layer_kivi_group_size", "full_layer_kivi_residual_length",
-            "enable_sparse_ref_fp8",
         ),
         "omnikv": (
             "sink_keep_tokens",
@@ -264,7 +263,6 @@ def build_chain_cache_fingerprint(config: Any) -> bytes:
             "observation_window_size",
             "snapkv_decode_eviction",
             "decode_eviction_interval",
-            "snapkv_num_full_layers",
             "sparse_prefill_score_mode",
             "sparse_attn_score_dtype",
             "pool_kernel_size",
@@ -1042,9 +1040,6 @@ class ChainCacheCoordinator:
             # bounded separately, including the full (uncompressed) token list.
             self.index.max_token_history_tokens += self.offload.capacity_bytes // 4
 
-    def owner_seq_id(self, chain_id: str) -> int:
-        return int(self.index.lookup(chain_id).seq_id)
-
     def admission_requirements(
         self,
         *,
@@ -1390,20 +1385,6 @@ class ChainCacheCoordinator:
             capacity_slots=(self.cache_manager.chain_capacity_residency(int(seq_id))
                             if hasattr(self.cache_manager, "chain_capacity_residency") else None),
         )
-
-    def remember_processed_tokens(
-        self,
-        *,
-        chain_id: str,
-        seq_id: int,
-        token_ids: list[int],
-        processed_token_count: int,
-    ) -> ChainRecord:
-        prepared = self.prepare_processed_tokens(
-            chain_id=chain_id, seq_id=seq_id, token_ids=token_ids,
-            processed_token_count=processed_token_count,
-        )
-        return self.remember_prepared_tokens(prepared)
 
     def prepare_processed_tokens(
         self,

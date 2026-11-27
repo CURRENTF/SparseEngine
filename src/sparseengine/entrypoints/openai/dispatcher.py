@@ -120,9 +120,7 @@ class AsyncEngineDispatcher:
             max_workers=1, thread_name_prefix="sparseengine-input"
         )
         self._pending: queue.Queue[_QueuedRequest | object | None] = queue.Queue()
-        self._aborts: queue.Queue[
-            _AbortRequest | tuple[int, str, str | None] | tuple[int, str] | int
-        ] = queue.Queue()
+        self._aborts: queue.Queue[_AbortRequest] = queue.Queue()
         self._latest_request_tokens: dict[int, str] = {}
         self._controls: queue.Queue[_ControlRequest] = queue.Queue()
         self._closing = threading.Event()
@@ -146,18 +144,6 @@ class AsyncEngineDispatcher:
     def is_ready(self) -> bool:
         with self._state_lock:
             return self._terminal_message_locked() is None
-
-    @property
-    def chain_cache_enabled(self) -> bool:
-        config = getattr(self.engine, "config", None)
-        return (
-            str(
-                getattr(
-                    config, "resolved_prefix_cache_mode", "disabled"
-                )
-            )
-            == "chain"
-        )
 
     @property
     def admission_ack_enabled(self) -> bool:
@@ -707,8 +693,6 @@ class AsyncEngineDispatcher:
                         item.handle.seq_id,
                         disposition="invalidate",
                     )
-                except TypeError:
-                    self.engine.abort_request(item.handle.seq_id)
                 except Exception:
                     logger.exception(
                         "Failed to abort request {} after admission setup failed.",
@@ -854,12 +838,7 @@ class AsyncEngineDispatcher:
                     final.raw_text,
                     final_stop_index,
                 )
-                try:
-                    self.engine.abort_request(
-                        seq_id, disposition="invalidate"
-                    )
-                except TypeError:
-                    self.engine.abort_request(seq_id)
+                self.engine.abort_request(seq_id, disposition="invalidate")
                 if request.chain_id is not None:
                     request.chain_status = "invalidated"
                 self._refresh_routing_snapshots()
@@ -876,31 +855,43 @@ class AsyncEngineDispatcher:
                         f"final={len(final_parser_raw_text)}."
                     )
                 active.pop(seq_id, None)
-                self._mark_request_terminal(seq_id, request)
-                self._put(
-                    request,
-                    {
-                        "type": "final",
-                        "index": request.index,
-                        "text": visible_text,
-                        "raw_text": final_parser_raw_text,
-                        "text_delta": visible_text[request.emitted_text_len:],
-                        "finish_reason": "stop",
-                        "prompt_tokens": (
-                            request.prompt_token_count
-                            if request.prompt_token_count is not None
-                            else len(request.prompt_token_ids)
-                        ),
-                        "completion_tokens": len(request.completion_token_ids),
-                        "token_ids": request.completion_token_ids,
-                        "token_logprobs": request.completion_token_logprobs,
-                        "top_logprobs": request.completion_top_logprobs,
-                        "chain_id": request.chain_id,
-                        "chain_status": request.chain_status,
-                        "reused_tokens": request.reused_tokens,
-                        "prefilled_tokens": request.prefilled_tokens,
-                    },
+                self._publish_final_event(
+                    seq_id, request, visible_text, final_parser_raw_text, "stop",
                 )
+
+    def _publish_final_event(
+        self,
+        seq_id: int,
+        request: _ActiveRequest,
+        text: str,
+        raw_text: str,
+        finish_reason: str,
+    ) -> None:
+        self._mark_request_terminal(seq_id, request)
+        self._put(
+            request,
+            {
+                "type": "final",
+                "index": request.index,
+                "text": text,
+                "raw_text": raw_text,
+                "text_delta": text[request.emitted_text_len:],
+                "finish_reason": finish_reason,
+                "prompt_tokens": (
+                    request.prompt_token_count
+                    if request.prompt_token_count is not None
+                    else len(request.prompt_token_ids)
+                ),
+                "completion_tokens": len(request.completion_token_ids),
+                "token_ids": request.completion_token_ids,
+                "token_logprobs": request.completion_token_logprobs,
+                "top_logprobs": request.completion_top_logprobs,
+                "chain_id": request.chain_id,
+                "chain_status": request.chain_status,
+                "reused_tokens": request.reused_tokens,
+                "prefilled_tokens": request.prefilled_tokens,
+            },
+        )
 
     def _publish_pending_token_event(
         self,
@@ -967,120 +958,67 @@ class AsyncEngineDispatcher:
                 abort = self._aborts.get_nowait()
             except queue.Empty:
                 return changed
-            chain_id = None
-            request_token = None
-            if isinstance(abort, _AbortRequest):
-                seq_id = int(abort.seq_id)
-                disposition = str(abort.disposition)
-                chain_id = abort.chain_id
-                request_token = abort.request_token
-                if (
-                    abort.terminal is not None
-                    and abort.terminal.is_set()
-                    and not abort.force
-                ):
-                    continue
-            elif isinstance(abort, tuple) and len(abort) == 3:
-                seq_id, disposition, chain_id = abort
-            elif isinstance(abort, tuple):
-                seq_id, disposition = abort
-            else:
-                seq_id, disposition = abort, "invalidate"
-            latest_request_tokens = getattr(
-                self, "_latest_request_tokens", {}
-            )
-            latest_request_token = latest_request_tokens.get(int(seq_id))
-            if (
-                request_token is not None
-                and latest_request_token is not None
-                and request_token != latest_request_token
-            ):
-                if isinstance(abort, _AbortRequest):
-                    if abort.terminal is not None:
-                        abort.terminal.set()
-                    self._resolve_abort(abort)
+            seq_id = abort.seq_id
+            disposition = abort.disposition
+            chain_id = abort.chain_id
+            request_token = abort.request_token
+            if abort.terminal is not None and abort.terminal.is_set() and not abort.force:
+                continue
+            latest_request_tokens = getattr(self, "_latest_request_tokens", {})
+            latest_request_token = latest_request_tokens.get(seq_id)
+            if latest_request_token is not None and request_token != latest_request_token:
+                if abort.terminal is not None:
+                    abort.terminal.set()
+                self._resolve_abort(abort)
                 continue
             if seq_id in active:
                 active_request = active[seq_id]
                 if (
-                    request_token is not None
-                    and active_request.request_token is not None
+                    active_request.request_token is not None
                     and request_token != active_request.request_token
                 ):
-                    if isinstance(abort, _AbortRequest):
-                        if abort.terminal is not None:
-                            abort.terminal.set()
-                        self._resolve_abort(abort)
+                    if abort.terminal is not None:
+                        abort.terminal.set()
+                    self._resolve_abort(abort)
                     continue
                 try:
-                    try:
-                        self.engine.abort_request(
-                            seq_id, disposition=disposition
-                        )
-                    except TypeError:
-                        self.engine.abort_request(seq_id)
+                    self.engine.abort_request(seq_id, disposition=disposition)
                 except Exception as exc:
-                    if isinstance(abort, _AbortRequest):
-                        self._resolve_abort(abort, error=exc)
+                    self._resolve_abort(abort, error=exc)
                     raise
                 active.pop(seq_id)
                 self._mark_request_terminal(seq_id, active_request)
-                if isinstance(abort, _AbortRequest):
-                    self._resolve_abort(abort)
+                self._resolve_abort(abort)
                 changed = True
+            elif abort.force:
+                try:
+                    if chain_id:
+                        discard_chain = getattr(self.engine, "discard_chain", None)
+                        if not callable(discard_chain):
+                            raise RuntimeError("Engine does not expose discard_chain.")
+                        discarded = discard_chain(chain_id, expected_seq_id=seq_id)
+                        changed = bool(discarded) or changed
+                except Exception as exc:
+                    self._resolve_abort(abort, error=exc)
+                else:
+                    self._resolve_abort(abort)
             else:
-                if isinstance(abort, _AbortRequest) and abort.force:
-                    try:
-                        if chain_id:
-                            discard_chain = getattr(
-                                self.engine,
-                                "discard_chain",
-                                None,
-                            )
-                            if not callable(discard_chain):
-                                raise RuntimeError(
-                                    "Engine does not expose discard_chain."
-                                )
-                            discarded = discard_chain(
-                                chain_id,
-                                expected_seq_id=seq_id,
-                            )
-                            changed = bool(discarded) or changed
-                    except Exception as exc:
-                        self._resolve_abort(abort, error=exc)
-                    else:
-                        self._resolve_abort(abort)
-                    continue
-                abort_request = getattr(
-                    self.engine, "abort_request", None
-                )
+                abort_request = getattr(self.engine, "abort_request", None)
                 if callable(abort_request):
-                    try:
-                        abort_request(
-                            seq_id, disposition=disposition
-                        )
-                    except TypeError:
-                        abort_request(seq_id)
-                    if latest_request_token == request_token:
-                        latest_request_tokens.pop(int(seq_id), None)
-                    if isinstance(abort, _AbortRequest):
-                        if abort.terminal is not None:
-                            abort.terminal.set()
-                        self._resolve_abort(abort)
-                    changed = True
+                    abort_request(seq_id, disposition=disposition)
                 elif disposition == "invalidate" and chain_id:
-                    invalidate_chain = getattr(
-                        self.engine, "invalidate_chain", None
-                    )
-                    if callable(invalidate_chain):
-                        invalidate_chain(chain_id)
-                        if latest_request_token == request_token:
-                            latest_request_tokens.pop(int(seq_id), None)
-                        if isinstance(abort, _AbortRequest):
-                            if abort.terminal is not None:
-                                abort.terminal.set()
-                            self._resolve_abort(abort)
-                        changed = True
+                    invalidate_chain = getattr(self.engine, "invalidate_chain", None)
+                    if not callable(invalidate_chain):
+                        continue
+                    invalidate_chain(chain_id)
+                else:
+                    continue
+                if latest_request_token == request_token:
+                    latest_request_tokens.pop(seq_id, None)
+                if abort.terminal is not None:
+                    abort.terminal.set()
+                self._resolve_abort(abort)
+                changed = True
 
     def _fail_pending_aborts(self, message: str) -> None:
         while True:
@@ -1088,8 +1026,6 @@ class AsyncEngineDispatcher:
                 abort = self._aborts.get_nowait()
             except queue.Empty:
                 return
-            if not isinstance(abort, _AbortRequest):
-                continue
             if abort.terminal is not None:
                 abort.terminal.set()
             self._resolve_abort(abort, error=RuntimeError(message))
@@ -1192,12 +1128,7 @@ class AsyncEngineDispatcher:
                 text = text[:stop_index]
                 finish_reason = "stop"
                 if request.chain_id is not None:
-                    try:
-                        self.engine.abort_request(
-                            seq_id, disposition="invalidate"
-                        )
-                    except TypeError:
-                        self.engine.abort_request(seq_id)
+                    self.engine.abort_request(seq_id, disposition="invalidate")
                     request.chain_status = "invalidated"
                     self._refresh_routing_snapshots()
             text_delta = text[request.emitted_text_len:]
@@ -1213,28 +1144,6 @@ class AsyncEngineDispatcher:
                     parser_raw_text_delta,
                 )
                 request.emitted_text_len = len(text)
-            self._mark_request_terminal(seq_id, request)
-            self._put(
-                request,
-                {
-                    "type": "final",
-                    "index": request.index,
-                    "text": text,
-                    "raw_text": parser_raw_text,
-                    "text_delta": text[request.emitted_text_len:],
-                    "finish_reason": finish_reason,
-                    "prompt_tokens": (
-                        request.prompt_token_count
-                        if request.prompt_token_count is not None
-                        else len(request.prompt_token_ids)
-                    ),
-                    "completion_tokens": len(completion_token_ids),
-                    "token_ids": completion_token_ids,
-                    "token_logprobs": token_logprobs,
-                    "top_logprobs": top_logprobs,
-                    "chain_id": request.chain_id,
-                    "chain_status": request.chain_status,
-                    "reused_tokens": request.reused_tokens,
-                    "prefilled_tokens": request.prefilled_tokens,
-                },
+            self._publish_final_event(
+                seq_id, request, text, parser_raw_text, finish_reason,
             )

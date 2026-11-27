@@ -16,7 +16,6 @@ LightLLM Python package or runtime.
 | `decode_stage2.py` | `lightllm/common/basemodel/triton_kernel/mla_att/decode_att/gqa_flash_decoding_stage2.py` | Removed runtime imports; caller supplies schedule/workspace; added zero-context padded-row behavior. |
 | `decode_schedule.py` | `lightllm/common/basemodel/triton_kernel/mla_att/decode_att/gqa_flash_decoding.py` | Rewritten around immutable config and caller-owned workspace; removed `infer_state`, global tuning, device inspection, and forward allocation. |
 | `copy_latent.py` | `lightllm/common/basemodel/triton_kernel/kv_copy/mla_copy_kv.py` | Added `slot_mapping < 0` padding mask, bounds protection, layout checks, and opt-in-once slot validation. |
-| `gather_latent.py` | `lightllm/models/deepseek2/triton_kernel/sample_kv.py` | Replaced modulo sampling with a padding-safe, ragged, request-indirected full-history gather into explicit packed outputs. |
 
 ## Contract
 

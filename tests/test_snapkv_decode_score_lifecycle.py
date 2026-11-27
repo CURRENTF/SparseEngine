@@ -42,7 +42,6 @@ class WorkerInfoTest(unittest.TestCase):
             enable_prefix_cache_offload=True,
             prefix_cache_host_size_gb=6.5,
             recurrent_state_max_bytes=1 << 30,
-            prefix_cache_max_recurrent_bytes=None,
             recurrent_state_pool_bytes=768 << 20,
             recurrent_state_bytes_per_row=16_384,
             recurrent_state_row_capacity=49_152,
@@ -61,7 +60,6 @@ class WorkerInfoTest(unittest.TestCase):
         self.assertIs(benchmark_config["enable_prefix_cache_offload"], True)
         self.assertEqual(benchmark_config["prefix_cache_host_size_gb"], 6.5)
         self.assertEqual(benchmark_config["recurrent_state_max_bytes"], 1 << 30)
-        self.assertIsNone(benchmark_config["prefix_cache_max_recurrent_bytes"])
         self.assertEqual(benchmark_config["prefix_cache_requested_max_blocks"], 8_192)
         self.assertEqual(benchmark_config["prefix_cache_max_blocks"], 4_096)
         self.assertEqual(benchmark_config["recurrent_state_pool_bytes"], 768 << 20)
@@ -112,7 +110,6 @@ def make_controller(
         decode_keep_tokens=keep,
         sparse_attn_score_dtype=score_dtype,
         tensor_parallel_size=1,
-        snapkv_num_full_layers=0,
         snapkv_decode_eviction=eviction,
         decode_eviction_interval=interval,
         pyramid_layer_ratios=(

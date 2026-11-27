@@ -391,9 +391,6 @@ class PrefixCacheMixin:
             int(seq.prefix_cache_hit_block_count),
         )
 
-    def _free_device_prefix_block(self, block: PrefixCacheBlock) -> None:
-        self._free_device_prefix_blocks([block])
-
     def _on_prefix_cache_reset(self) -> None:
         self._prefix_resident_weight_cache = None
         controller = getattr(self, "prefix_offload_controller", None)

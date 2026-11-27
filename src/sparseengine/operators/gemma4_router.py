@@ -135,18 +135,6 @@ class H20Gemma4RouterProfile:
         return H20Gemma4RouterProvider()
 
 
-class TorchGemma4RouterProvider(Gemma4RouterProvider):
-    """Explicit correctness oracle; never selected for production inference."""
-
-    name = "torch_oracle"
-
-    def topk(self, logits, per_expert_scale, top_k):
-        probabilities = torch.softmax(logits, dim=-1, dtype=torch.float32)
-        weights, ids = probabilities.topk(top_k, dim=-1)
-        weights.div_(weights.sum(-1, keepdim=True)).mul_(per_expert_scale[ids])
-        return weights, ids
-
-
 def resolve_gemma4_router_provider(
     spec: Gemma4RouterOpSpec, *, device_index: int | None = None
 ) -> Gemma4RouterProvider:
@@ -162,7 +150,6 @@ __all__ = [
     "Gemma4RouterOpSpec",
     "Gemma4RouterProvider",
     "H20Gemma4RouterProvider",
-    "TorchGemma4RouterProvider",
     "TritonGemma4RouterProvider",
     "resolve_gemma4_router_provider",
 ]

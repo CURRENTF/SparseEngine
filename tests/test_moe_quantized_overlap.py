@@ -59,7 +59,7 @@ def test_quantized_model_branches_overlap_eager_and_graph(tmp_path, model_kind, 
     from sparseengine.models.glm4_moe_lite import Glm4MoeLiteSparseMoeBlock
     from sparseengine.models.qwen3_5_moe import Qwen35MoeSparseMoeBlock
     from sparseengine.quantization.config import QuantizationConfig
-    from sparseengine.quantization.fp8 import fp8_blockwise_linear_reference
+    from fp8_reference import fp8_blockwise_linear_reference
     from tests.test_glm4_moe_lite import _config
     from tests.test_triton_fp8_operators import _reference_moe
 

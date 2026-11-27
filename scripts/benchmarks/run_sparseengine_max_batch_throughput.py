@@ -132,7 +132,6 @@ def _base_hparams(args: argparse.Namespace, method: str, batch_size: int) -> dic
                 "full_layer_kivi_group_size": args.full_layer_kivi_group_size,
                 "full_layer_kivi_residual_length": args.full_layer_kivi_residual_length,
                 "enable_full_layer_kivi_quant": not args.disable_full_layer_kivi_quant,
-                "enable_sparse_ref_fp8": False,
                 "cluster_metric": args.cluster_metric,
                 "use_compression": True,
                 "pool_kernel_size": args.pool_kernel_size,

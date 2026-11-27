@@ -592,7 +592,6 @@ def _same_provider_eager_model_runner(*args, **kwargs):
         # Each TP worker owns its own deserialized config. Changing the leader's
         # config alone would leave follower ranks trying to replay a graph.
         self.config.decode_graph = False
-        self.config.decode_graph_startup_capture = False
         return original_run(self, *run_args, **run_kwargs)
 
     ModelRunner.run = run_eager
@@ -635,7 +634,6 @@ def _run_decode_logits(
             # Providers are already prepared with Graph-compatible contracts.
             # Keep capacity profiling, but do not capture or replay any graphs.
             self.config.decode_graph = False
-            self.config.decode_graph_startup_capture = False
             original_warmup(self)
 
         LLM._warmup = eager_warmup

@@ -50,7 +50,8 @@ def _config(*, sparse_method: str = "", prefill_sparse_method=None):
         max_decoding_seqs=4,
         engine_prefill_chunk_size=8,
         max_model_len=32,
-        decode_graph_startup_capture=False,
+        decode_graph=False,
+        decode_graph_startup_capture_limit=32,
         sink_keep_tokens=2,
         decode_keep_tokens=8,
         recent_keep_tokens=6,
@@ -380,7 +381,7 @@ def test_deltakv_profile_budget_funds_fixed_pools_and_profile_requests(latent_bi
     # temporary budget omitted reconstruction scratch for eight decode rows.
     # Meta tensors exercise the real allocator without allocating GPU memory.
     from sparseengine.configs.groups import DeltaKVConfig
-    from sparseengine.engine.cache_manager.methods.deltakv_less_memory_cuda_graph import DeltaKVLessMemoryCudaGraphCacheManager
+    from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
 
     config = _config(sparse_method="deltakv")
     for key, value in vars(DeltaKVConfig()).items():
@@ -407,7 +408,7 @@ def test_deltakv_profile_budget_funds_fixed_pools_and_profile_requests(latent_bi
     slots = profiling_kv_slots(config)
     budget = profiling_kv_budget_bytes(config, slots)
     config.startup_cache_phase = "profiling"
-    manager = object.__new__(DeltaKVLessMemoryCudaGraphCacheManager)
+    manager = object.__new__(DeltaKVCacheManager)
     manager.config = config
     manager.hf_config = config.hf_config
     manager.device = torch.device("meta")

@@ -92,14 +92,6 @@ class Gemma4RotaryEmbedding(nn.Module):
         cos, sin = self.cos_sin_cache[positions].chunk(2, -1)
         return apply_rotary_emb(query, cos, sin), apply_rotary_emb(key, cos, sin)
 
-    def forward_query(
-        self,
-        positions: torch.Tensor,
-        query: torch.Tensor,
-    ) -> torch.Tensor:
-        cos, sin = self.cos_sin_cache[positions].chunk(2, -1)
-        return apply_rotary_emb(query, cos, sin)
-
 
 class _Gemma4QKVMixin:
     use_k_eq_v: bool

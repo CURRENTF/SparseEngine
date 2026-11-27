@@ -571,7 +571,7 @@ is needed, cite the original run artifact path directly.
 ## OmniKV Full-Layer Selection
 
 OmniKV full layers are model-specific. Use
-`python -m sparseengine.utils.select_omnikv_full_layers` before publishing a new model's
+`python3 scripts/compression/select_omnikv_full_layers.py` before publishing a new model's
 OmniKV or OmniKV-aligned DeltaKV regression numbers.
 
 The selector runs an offline decode-attention coverage calibration on a
@@ -583,7 +583,7 @@ Example for Qwen2.5-7B with six full layers:
 
 ```bash
 conda run -n <CONDA_ENV> --no-capture-output \
-  python -m sparseengine.utils.select_omnikv_full_layers \
+  python3 scripts/compression/select_omnikv_full_layers.py \
   --model-path <MODEL_ROOT>/Qwen2.5-7B-Instruct-1M \
   --longbench-root <LONGBENCH_ROOT> \
   --config-dir benchmark/long_bench/config \

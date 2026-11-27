@@ -5,15 +5,11 @@ import torch
 
 from sparseengine.kernels.triton.deltakv_kernels import (
     _validate_full_layer_kivi_decode_maps,
-    deltakv_less_memory_reconstruct_writeback_quantized,
     deltakv_l2_topk_blockwise,
     deltakv_materialize_sparse_view,
     deltakv_reconstruct_writeback_grouped_heads,
     deltakv_static_decode_plan,
-    full_layer_kivi_build_dense_decode_view,
     full_layer_kivi_flash_decode_stage1,
-    full_layer_kivi_flash_decode_stage1_grouped,
-    full_layer_kivi_flash_decode_stage1_token_map,
 )
 from sparseengine.kernels.triton.gqa_flash_decoding_stage1 import flash_decode_stage1 as gqa_flash_decode_stage1
 from sparseengine.kernels.triton.gqa_flash_decoding_stage1 import (
@@ -163,7 +159,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         self.assertTrue(torch.equal(got_idx, expected_idx))
 
     def test_streaming_cluster_helper_matches_whole_block_cluster(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+        from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
 
         torch.manual_seed(11)
         device = "cuda"
@@ -173,7 +169,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         existing_count = 2
         new_center_rel = torch.tensor([0, 4, 9, 13, 20], device=device, dtype=torch.long)
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.config = type(
             "Config",
             (),
@@ -195,7 +191,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
             return existing_centers.squeeze(0).index_select(0, slots.to(torch.long))
 
         manager._gather_sparse_ref_raw_kv_by_slots = gather_existing
-        ref_topk, ref_base = DeltaKVLessMemoryCacheManager._cluster_compress(
+        ref_topk, ref_base = DeltaKVCacheManager._cluster_compress(
             manager,
             layer_idx=7,
             kv_states=kv_states,
@@ -209,7 +205,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         base_chunks = []
         for start in (0, 6, 12, 18):
             end = min(n, start + 6)
-            topk, base = DeltaKVLessMemoryCacheManager._cluster_compress_against_centers(
+            topk, base = DeltaKVCacheManager._cluster_compress_against_centers(
                 manager,
                 kv_states=kv_states[:, start:end, :],
                 all_centers=all_centers,
@@ -401,196 +397,6 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         self.assertTrue(torch.equal(out_k, expected_k))
         self.assertTrue(torch.equal(out_v, raw_v))
 
-    def test_fused_quantized_reconstruct_matches_unpack_then_reconstruct(self):
-        torch.manual_seed(0)
-        device = "cuda"
-        dtype = torch.float16
-        num_tokens = 5
-        num_slots = 16
-        num_heads = 2
-        head_dim = 8
-        kv_dim = num_heads * head_dim
-        max_pos = 32
-
-        angles = torch.randn(max_pos, head_dim // 2, device=device, dtype=torch.float32) * 0.1
-        cos_sin = torch.cat([torch.cos(angles), torch.sin(angles)], dim=-1).to(dtype)
-
-        father_slots = torch.tensor(
-            [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5]],
-            device=device,
-            dtype=torch.int32,
-        )
-        slot_to_pos = torch.arange(num_slots, device=device, dtype=torch.int32)
-        out_slots = torch.tensor([8, 9, 10, 11, 12], device=device, dtype=torch.int32)
-        out_pos = torch.tensor([7, 9, 11, 13, 15], device=device, dtype=torch.int32)
-
-        residual_dim = 2 * kv_dim
-        for quant_bits in (2, 4):
-            for group_size in (residual_dim, 8):
-                with self.subTest(quant_bits=quant_bits, group_size=group_size):
-                    k_base = torch.randn(num_slots, num_heads, head_dim, device=device, dtype=dtype)
-                    v_base = torch.randn_like(k_base)
-                    k_ref = k_base.clone()
-                    v_ref = v_base.clone()
-                    k_fused = k_base.clone()
-                    v_fused = v_base.clone()
-                    k_norm_weight = torch.randn(head_dim, device=device, dtype=dtype)
-
-                    residual = torch.randn(num_tokens, residual_dim, device=device, dtype=dtype) * 0.2
-                    packed, scale, mn = triton_quantize_and_pack_along_last_dim(
-                        residual.unsqueeze(0).unsqueeze(0),
-                        group_size,
-                        quant_bits,
-                    )
-                    packed = packed.squeeze(0).squeeze(0).contiguous()
-                    scale = scale.squeeze(0).squeeze(0).contiguous()
-                    mn = mn.squeeze(0).squeeze(0).contiguous()
-
-                    latent_slots = torch.arange(num_tokens, device=device, dtype=torch.int32)
-                    packed_cache = torch.empty((num_slots, packed.shape[1]), device=device, dtype=torch.int32)
-                    scale_cache = torch.empty((num_slots, residual_dim // group_size), device=device, dtype=dtype)
-                    mn_cache = torch.empty((num_slots, residual_dim // group_size), device=device, dtype=dtype)
-                    packed_cache[latent_slots.long()] = packed
-                    scale_cache[latent_slots.long()] = scale
-                    mn_cache[latent_slots.long()] = mn
-
-                    kv_delta = unpack_quantized_to_16bit(
-                        packed.unsqueeze(0).unsqueeze(0),
-                        scale.unsqueeze(0).unsqueeze(0),
-                        mn.unsqueeze(0).unsqueeze(0),
-                        group_size,
-                        quant_bits,
-                    ).squeeze(0).squeeze(0)
-                    deltakv_reconstruct_writeback_grouped_heads(
-                        kv_delta=kv_delta,
-                        father_slots=father_slots,
-                        slot_to_pos=slot_to_pos,
-                        out_slots=out_slots,
-                        out_pos=out_pos,
-                        cos_sin=cos_sin,
-                        k_cache=k_ref,
-                        v_cache=v_ref,
-                        heads_per_program=2,
-                        k_norm_weight=k_norm_weight,
-                        k_norm_eps=1e-6,
-                    )
-                    deltakv_less_memory_reconstruct_writeback_quantized(
-                        packed_delta_cache=packed_cache,
-                        scale_cache=scale_cache,
-                        min_cache=mn_cache,
-                        latent_slots=latent_slots,
-                        father_slots=father_slots,
-                        slot_to_pos=slot_to_pos,
-                        out_slots=out_slots,
-                        out_pos=out_pos,
-                        cos_sin=cos_sin,
-                        k_cache=k_fused,
-                        v_cache=v_fused,
-                        quant_bits=quant_bits,
-                        group_size=group_size,
-                        heads_per_program=2,
-                        k_norm_weight=k_norm_weight,
-                        k_norm_eps=1e-6,
-                    )
-                    torch.cuda.synchronize()
-
-                    out = out_slots.long()
-                    self.assertTrue(torch.allclose(k_ref[out], k_fused[out], atol=2e-3, rtol=2e-3))
-                    self.assertTrue(torch.allclose(v_ref[out], v_fused[out], atol=4e-3, rtol=2e-3))
-
-    def test_fused_quantized_reconstruct_can_write_raw_cache(self):
-        torch.manual_seed(6)
-        device = "cuda"
-        dtype = torch.float16
-        num_tokens = 5
-        num_slots = 16
-        num_heads = 2
-        head_dim = 8
-        kv_dim = num_heads * head_dim
-        residual_dim = 2 * kv_dim
-        max_pos = 32
-        quant_bits = 4
-        group_size = 8
-
-        angles = torch.randn(max_pos, head_dim // 2, device=device, dtype=torch.float32) * 0.1
-        cos_sin = torch.cat([torch.cos(angles), torch.sin(angles)], dim=-1).to(dtype)
-        father_slots = torch.tensor(
-            [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5]],
-            device=device,
-            dtype=torch.int32,
-        )
-        slot_to_pos = torch.arange(num_slots, device=device, dtype=torch.int32)
-        out_slots = torch.tensor([8, 9, 10, 11, 12], device=device, dtype=torch.int32)
-        out_pos = torch.tensor([7, 9, 11, 13, 15], device=device, dtype=torch.int32)
-
-        k_base = torch.randn(num_slots, num_heads, head_dim, device=device, dtype=dtype)
-        v_base = torch.randn_like(k_base)
-        k_ref = k_base.clone()
-        v_ref = v_base.clone()
-        k_fused = k_base.clone()
-        v_fused = v_base.clone()
-
-        residual = torch.randn(num_tokens, residual_dim, device=device, dtype=dtype) * 0.2
-        packed, scale, mn = triton_quantize_and_pack_along_last_dim(
-            residual.unsqueeze(0).unsqueeze(0),
-            group_size,
-            quant_bits,
-        )
-        packed = packed.squeeze(0).squeeze(0).contiguous()
-        scale = scale.squeeze(0).squeeze(0).contiguous()
-        mn = mn.squeeze(0).squeeze(0).contiguous()
-        latent_slots = torch.arange(num_tokens, device=device, dtype=torch.int32)
-        packed_cache = torch.empty((num_slots, packed.shape[1]), device=device, dtype=torch.int32)
-        scale_cache = torch.empty((num_slots, residual_dim // group_size), device=device, dtype=dtype)
-        mn_cache = torch.empty((num_slots, residual_dim // group_size), device=device, dtype=dtype)
-        packed_cache[latent_slots.long()] = packed
-        scale_cache[latent_slots.long()] = scale
-        mn_cache[latent_slots.long()] = mn
-
-        kv_delta = unpack_quantized_to_16bit(
-            packed.unsqueeze(0).unsqueeze(0),
-            scale.unsqueeze(0).unsqueeze(0),
-            mn.unsqueeze(0).unsqueeze(0),
-            group_size,
-            quant_bits,
-        ).squeeze(0).squeeze(0)
-        deltakv_reconstruct_writeback_grouped_heads(
-            kv_delta=kv_delta,
-            father_slots=father_slots,
-            slot_to_pos=slot_to_pos,
-            out_slots=out_slots,
-            out_pos=out_pos,
-            cos_sin=cos_sin,
-            k_cache=k_ref,
-            v_cache=v_ref,
-            heads_per_program=2,
-            raw_k_cache=True,
-            store_raw_k=True,
-        )
-        deltakv_less_memory_reconstruct_writeback_quantized(
-            packed_delta_cache=packed_cache,
-            scale_cache=scale_cache,
-            min_cache=mn_cache,
-            latent_slots=latent_slots,
-            father_slots=father_slots,
-            slot_to_pos=slot_to_pos,
-            out_slots=out_slots,
-            out_pos=out_pos,
-            cos_sin=cos_sin,
-            k_cache=k_fused,
-            v_cache=v_fused,
-            quant_bits=quant_bits,
-            group_size=group_size,
-            heads_per_program=2,
-            raw_k_cache=True,
-            store_raw_k=True,
-        )
-        torch.cuda.synchronize()
-
-        out = out_slots.long()
-        self.assertTrue(torch.allclose(k_ref[out], k_fused[out], atol=2e-3, rtol=2e-3))
-        self.assertTrue(torch.allclose(v_ref[out], v_fused[out], atol=4e-3, rtol=2e-3))
-
     @unittest.skipUnless(hasattr(torch, "float8_e4m3fn"), "torch.float8_e4m3fn is required.")
     def test_reconstruct_grouped_heads_accepts_pre_rope_refs_and_k_norm(self):
         torch.manual_seed(4)
@@ -610,7 +416,6 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
             device=device,
             dtype=torch.int32,
         )
-        slot_to_pos = torch.arange(num_slots, device=device, dtype=torch.int32)
         out_slots = torch.tensor([10, 11, 12, 13, 14, 15], device=device, dtype=torch.int32)
         out_pos = torch.tensor([7, 9, 11, 13, 15, 17], device=device, dtype=torch.int32)
 
@@ -646,7 +451,6 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         deltakv_reconstruct_writeback_grouped_heads(
             kv_delta=kv_delta,
             father_slots=father_slots,
-            slot_to_pos=slot_to_pos,
             out_slots=out_slots,
             out_pos=out_pos,
             cos_sin=cos_sin,
@@ -682,7 +486,6 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
             device=device,
             dtype=torch.int32,
         )
-        slot_to_pos = torch.arange(num_slots, device=device, dtype=torch.int32)
         out_slots = torch.tensor([10, 11, 12, 13, 14], device=device, dtype=torch.int32)
         out_pos = torch.tensor([7, 9, 11, 13, 15], device=device, dtype=torch.int32)
 
@@ -701,14 +504,12 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         deltakv_reconstruct_writeback_grouped_heads(
             kv_delta=kv_delta,
             father_slots=father_slots,
-            slot_to_pos=slot_to_pos,
             out_slots=out_slots,
             out_pos=out_pos,
             cos_sin=cos_sin,
             k_cache=k_out,
             v_cache=v_out,
             heads_per_program=2,
-            raw_k_cache=True,
             store_raw_k=True,
         )
         torch.cuda.synchronize()
@@ -718,7 +519,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         self.assertTrue(torch.allclose(v_out[out], v_ref.to(dtype), atol=2e-3, rtol=2e-3))
 
     def test_full_layer_kivi_batched_store_matches_reference_pack(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+        from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
 
         torch.manual_seed(7)
         device = "cuda"
@@ -730,7 +531,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         head_dim = 64
         bits = 4
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.config = type("Config", (), {"full_layer_kv_quant_bits": bits, "full_layer_kivi_group_size": group_size})()
         manager.num_kv_heads = num_heads
         manager.head_dim = head_dim
@@ -751,7 +552,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         key_blocks = torch.randn(num_blocks, group_size, num_heads, head_dim, device=device, dtype=dtype)
         value_blocks = torch.randn_like(key_blocks)
 
-        DeltaKVLessMemoryCacheManager._store_full_layer_kivi_blocks(
+        DeltaKVCacheManager._store_full_layer_kivi_blocks(
             manager,
             l_idx=0,
             block_slots=block_slots,
@@ -773,7 +574,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         self.assertTrue(torch.allclose(manager.full_layer_kivi_value_mins[0, slots], mn_v))
 
     def test_full_prefill_kivi_materialize_chunks_block_store(self):
-        from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+        from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
 
         torch.manual_seed(13)
         device = "cuda"
@@ -784,7 +585,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         head_dim = 8
         total_tokens = num_blocks * group_size
 
-        manager = object.__new__(DeltaKVLessMemoryCacheManager)
+        manager = object.__new__(DeltaKVCacheManager)
         manager.config = type(
             "Config",
             (),
@@ -824,7 +625,7 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
             self.assertEqual(tuple(value.shape), expected_shape)
 
         manager._store_full_layer_kivi_blocks = record_store
-        DeltaKVLessMemoryCacheManager._full_layer_kivi_materialize_full_prefill_layer(manager, 3)
+        DeltaKVCacheManager._full_layer_kivi_materialize_full_prefill_layer(manager, 3)
 
         self.assertEqual(chunk_sizes, [2, 2, 1])
         self.assertIn(3, manager._full_layer_kivi_full_prefill_materialized_layers)
@@ -931,48 +732,13 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
 
         req_indices = torch.arange(batch, device=device, dtype=torch.int32)
         context_lens = torch.full((batch,), seq_len, device=device, dtype=torch.int32)
-        row_kivi_quantized_lens = torch.full((batch,), seq_len, device=device, dtype=torch.int32)
         num_blocks = (seq_len + block_seq - 1) // block_seq
         mid_ref = torch.empty((batch, num_heads, num_blocks, head_dim), device=device, dtype=torch.float32)
         lse_ref = torch.empty((batch, num_heads, num_blocks), device=device, dtype=torch.float32)
         mid_fused = torch.empty_like(mid_ref)
         lse_fused = torch.empty_like(lse_ref)
-        mid_grouped = torch.empty_like(mid_ref)
-        lse_grouped = torch.empty_like(lse_ref)
-        dense_k_view = torch.empty_like(dense_k)
-        dense_v_view = torch.empty_like(dense_v)
-        dense_req_to_tokens = torch.empty_like(req_to_tokens)
         score_ref = torch.full((batch, num_heads, seq_len), -1e20, device=device, dtype=torch.float32)
         score_fused = torch.full_like(score_ref, -1e20)
-        score_grouped = torch.full_like(score_ref, -1e20)
-
-        full_layer_kivi_build_dense_decode_view(
-            raw_k=raw_k,
-            raw_v=raw_v,
-            raw_slots_map=raw_slots_map,
-            kivi_block_slots_map=kivi_block_slots_map,
-            kivi_block_start_pos=kivi_block_start_pos,
-            key_packed=key_packed,
-            key_scales=key_scales,
-            key_mins=key_mins,
-            value_packed=value_packed,
-            value_scales=value_scales,
-            value_mins=value_mins,
-            row_kivi_quantized_lens=row_kivi_quantized_lens,
-            req_indices=req_indices,
-            context_lens=context_lens,
-            max_len_in_batch=seq_len,
-            dense_req_to_tokens=dense_req_to_tokens,
-            dense_k=dense_k_view,
-            dense_v=dense_v_view,
-            group_size=group_size,
-        )
-        torch.cuda.synchronize()
-
-        self.assertTrue(torch.equal(dense_req_to_tokens, req_to_tokens))
-        self.assertTrue(torch.allclose(dense_k_view, dense_k, atol=3e-2, rtol=3e-2))
-        self.assertTrue(torch.allclose(dense_v_view, dense_v, atol=3e-2, rtol=3e-2))
-
         gqa_flash_decode_stage1(
             q,
             dense_k,
@@ -1010,33 +776,6 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(mid_fused, mid_ref, atol=3e-2, rtol=3e-2))
         self.assertTrue(torch.allclose(lse_fused, lse_ref, atol=3e-2, rtol=3e-2))
-        full_layer_kivi_flash_decode_stage1_grouped(
-            q=q,
-            raw_k=raw_k,
-            raw_v=raw_v,
-            raw_slots_map=raw_slots_map,
-            kivi_block_slots_map=kivi_block_slots_map,
-            key_packed=key_packed,
-            key_scales=key_scales,
-            key_mins=key_mins,
-            value_packed=value_packed,
-            value_scales=value_scales,
-            value_mins=value_mins,
-            row_kivi_quantized_lens=row_kivi_quantized_lens,
-            req_indices=req_indices,
-            context_lens=context_lens,
-            max_len_in_batch=seq_len,
-            mid_out=mid_grouped,
-            mid_out_logsumexp=lse_grouped,
-            group_size=group_size,
-            kivi_start=sink,
-            block_seq=block_seq,
-        )
-        torch.cuda.synchronize()
-
-        self.assertTrue(torch.allclose(mid_grouped, mid_ref, atol=3e-2, rtol=3e-2))
-        self.assertTrue(torch.allclose(lse_grouped, lse_ref, atol=3e-2, rtol=3e-2))
-
         gqa_flash_decode_stage1_with_score(
             q,
             dense_k,
@@ -1077,34 +816,6 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
         self.assertTrue(torch.allclose(mid_fused, mid_ref, atol=3e-2, rtol=3e-2))
         self.assertTrue(torch.allclose(lse_fused, lse_ref, atol=3e-2, rtol=3e-2))
         self.assertTrue(torch.allclose(score_fused, score_ref, atol=3e-2, rtol=3e-2))
-        full_layer_kivi_flash_decode_stage1_grouped(
-            q=q,
-            raw_k=raw_k,
-            raw_v=raw_v,
-            raw_slots_map=raw_slots_map,
-            kivi_block_slots_map=kivi_block_slots_map,
-            key_packed=key_packed,
-            key_scales=key_scales,
-            key_mins=key_mins,
-            value_packed=value_packed,
-            value_scales=value_scales,
-            value_mins=value_mins,
-            row_kivi_quantized_lens=row_kivi_quantized_lens,
-            req_indices=req_indices,
-            context_lens=context_lens,
-            max_len_in_batch=seq_len,
-            mid_out=mid_grouped,
-            mid_out_logsumexp=lse_grouped,
-            group_size=group_size,
-            kivi_start=sink,
-            block_seq=block_seq,
-            attn_score=score_grouped,
-        )
-        torch.cuda.synchronize()
-
-        self.assertTrue(torch.allclose(mid_grouped, mid_ref, atol=3e-2, rtol=3e-2))
-        self.assertTrue(torch.allclose(lse_grouped, lse_ref, atol=3e-2, rtol=3e-2))
-        self.assertTrue(torch.allclose(score_grouped, score_ref, atol=3e-2, rtol=3e-2))
 
         max_kv_splits = 4
         target_tokens_per_split = 16
@@ -1206,206 +917,6 @@ class DeltaKVLessMemoryKernelTest(unittest.TestCase):
             (mid_fixed.data_ptr(), lse_fixed.data_ptr()),
             workspace_ptrs,
         )
-
-    def test_full_layer_kivi_token_map_flash_decode_stage1_matches_dense_stage1(self):
-        torch.manual_seed(8)
-        device = "cuda"
-        dtype = torch.float16
-        batch = 2
-        seq_len = 47
-        group_size = 32
-        num_heads = 14
-        num_kv_heads = 2
-        head_dim = 64
-        block_seq = 256
-        bits = 4
-        num_kivi_slots = 5
-
-        q = torch.randn(batch, num_heads, head_dim, device=device, dtype=dtype)
-        raw_k = torch.randn(12, num_kv_heads, head_dim, device=device, dtype=dtype)
-        raw_v = torch.randn_like(raw_k)
-        dense_k = torch.empty((batch * seq_len, num_kv_heads, head_dim), device=device, dtype=dtype)
-        dense_v = torch.empty_like(dense_k)
-        req_to_tokens = torch.empty((batch, seq_len), device=device, dtype=torch.int32)
-        raw_slots_map = torch.full((batch, seq_len), -1, device=device, dtype=torch.int32)
-        kivi_token_slots_map = torch.full_like(raw_slots_map, -1)
-        kivi_token_offsets_map = torch.full_like(raw_slots_map, -1)
-
-        key_packed = torch.empty(
-            num_kivi_slots,
-            num_kv_heads,
-            head_dim,
-            group_size // 8,
-            device=device,
-            dtype=torch.int32,
-        )
-        key_scales = torch.empty((num_kivi_slots, num_kv_heads, head_dim), device=device, dtype=dtype)
-        key_mins = torch.empty_like(key_scales)
-        value_packed = torch.empty(
-            num_kivi_slots,
-            num_kv_heads,
-            group_size,
-            head_dim // 8,
-            device=device,
-            dtype=torch.int32,
-        )
-        value_scales = torch.empty(
-            num_kivi_slots,
-            num_kv_heads,
-            group_size,
-            head_dim // group_size,
-            device=device,
-            dtype=dtype,
-        )
-        value_mins = torch.empty_like(value_scales)
-        key_dequant_blocks = []
-        value_dequant_blocks = []
-        for slot in range(num_kivi_slots):
-            key_block = torch.randn(group_size, num_kv_heads, head_dim, device=device, dtype=dtype)
-            value_block = torch.randn_like(key_block)
-            key_states = key_block.unsqueeze(0).permute(0, 2, 3, 1).contiguous()
-            packed_k, scale_k, mn_k = triton_quantize_and_pack_along_last_dim(key_states, group_size, bits)
-            key_packed[slot] = packed_k.squeeze(0)
-            key_scales[slot] = scale_k.squeeze(0).squeeze(-1)
-            key_mins[slot] = mn_k.squeeze(0).squeeze(-1)
-            value_states = value_block.unsqueeze(0).permute(0, 2, 1, 3).contiguous()
-            packed_v, scale_v, mn_v = triton_quantize_and_pack_along_last_dim(value_states, group_size, bits)
-            value_packed[slot] = packed_v.squeeze(0)
-            value_scales[slot] = scale_v.squeeze(0)
-            value_mins[slot] = mn_v.squeeze(0)
-            key_dequant_blocks.append(
-                unpack_quantized_to_16bit(
-                    key_packed[slot].unsqueeze(0),
-                    key_scales[slot].unsqueeze(0).unsqueeze(-1),
-                    key_mins[slot].unsqueeze(0).unsqueeze(-1),
-                    group_size,
-                    bits,
-                ).permute(0, 3, 1, 2).squeeze(0)
-            )
-            value_dequant_blocks.append(
-                unpack_quantized_to_16bit(
-                    value_packed[slot].unsqueeze(0),
-                    value_scales[slot].unsqueeze(0),
-                    value_mins[slot].unsqueeze(0),
-                    group_size,
-                    bits,
-                ).permute(0, 2, 1, 3).squeeze(0)
-            )
-        key_dequant_blocks = torch.stack(key_dequant_blocks, dim=0)
-        value_dequant_blocks = torch.stack(value_dequant_blocks, dim=0)
-
-        raw_positions = {
-            0: {0: 0, 1: 1, 4: 2, 19: 3, 46: 4},
-            1: {0: 5, 3: 6, 8: 7, 21: 8},
-        }
-        for b in range(batch):
-            for pos in range(seq_len):
-                dense_slot = b * seq_len + pos
-                req_to_tokens[b, pos] = dense_slot
-                raw_slot = raw_positions.get(b, {}).get(pos)
-                if raw_slot is not None:
-                    raw_slots_map[b, pos] = raw_slot
-                    dense_k[dense_slot] = raw_k[raw_slot]
-                    dense_v[dense_slot] = raw_v[raw_slot]
-                    continue
-                kivi_slot = (pos * 3 + b) % num_kivi_slots
-                local_offset = (pos * 5 + b * 7) % group_size
-                kivi_token_slots_map[b, pos] = kivi_slot
-                kivi_token_offsets_map[b, pos] = local_offset
-                dense_k[dense_slot] = key_dequant_blocks[kivi_slot, local_offset]
-                dense_v[dense_slot] = value_dequant_blocks[kivi_slot, local_offset]
-
-        req_indices = torch.arange(batch, device=device, dtype=torch.int32)
-        context_lens = torch.tensor([seq_len, seq_len - 3], device=device, dtype=torch.int32)
-        num_blocks = (seq_len + block_seq - 1) // block_seq
-        mid_ref = torch.empty((batch, num_heads, num_blocks, head_dim), device=device, dtype=torch.float32)
-        lse_ref = torch.empty((batch, num_heads, num_blocks), device=device, dtype=torch.float32)
-        mid_fused = torch.empty_like(mid_ref)
-        lse_fused = torch.empty_like(lse_ref)
-        score_ref = torch.full((batch, num_heads, seq_len), -1e20, device=device, dtype=torch.float32)
-        score_fused = torch.full_like(score_ref, -1e20)
-
-        gqa_flash_decode_stage1(
-            q,
-            dense_k,
-            dense_v,
-            req_to_tokens,
-            req_indices,
-            context_lens,
-            seq_len,
-            mid_ref,
-            lse_ref,
-            block_seq,
-        )
-        full_layer_kivi_flash_decode_stage1_token_map(
-            q=q,
-            raw_k=raw_k,
-            raw_v=raw_v,
-            raw_slots_map=raw_slots_map,
-            kivi_token_slots_map=kivi_token_slots_map,
-            kivi_token_offsets_map=kivi_token_offsets_map,
-            key_packed=key_packed,
-            key_scales=key_scales,
-            key_mins=key_mins,
-            value_packed=value_packed,
-            value_scales=value_scales,
-            value_mins=value_mins,
-            req_indices=req_indices,
-            context_lens=context_lens,
-            max_len_in_batch=seq_len,
-            mid_out=mid_fused,
-            mid_out_logsumexp=lse_fused,
-            group_size=group_size,
-            block_seq=block_seq,
-        )
-        torch.cuda.synchronize()
-
-        self.assertTrue(torch.allclose(mid_fused, mid_ref, atol=3e-2, rtol=3e-2))
-        self.assertTrue(torch.allclose(lse_fused, lse_ref, atol=3e-2, rtol=3e-2))
-
-        gqa_flash_decode_stage1_with_score(
-            q,
-            dense_k,
-            dense_v,
-            req_to_tokens,
-            req_indices,
-            context_lens,
-            seq_len,
-            mid_ref,
-            lse_ref,
-            score_ref,
-            block_seq,
-        )
-        full_layer_kivi_flash_decode_stage1_token_map(
-            q=q,
-            raw_k=raw_k,
-            raw_v=raw_v,
-            raw_slots_map=raw_slots_map,
-            kivi_token_slots_map=kivi_token_slots_map,
-            kivi_token_offsets_map=kivi_token_offsets_map,
-            key_packed=key_packed,
-            key_scales=key_scales,
-            key_mins=key_mins,
-            value_packed=value_packed,
-            value_scales=value_scales,
-            value_mins=value_mins,
-            req_indices=req_indices,
-            context_lens=context_lens,
-            max_len_in_batch=seq_len,
-            mid_out=mid_fused,
-            mid_out_logsumexp=lse_fused,
-            group_size=group_size,
-            block_seq=block_seq,
-            attn_score=score_fused,
-        )
-        torch.cuda.synchronize()
-
-        self.assertTrue(torch.allclose(mid_fused, mid_ref, atol=3e-2, rtol=3e-2))
-        self.assertTrue(torch.allclose(lse_fused, lse_ref, atol=3e-2, rtol=3e-2))
-        valid_score = torch.arange(seq_len, device=device).unsqueeze(0) < context_lens.unsqueeze(1)
-        valid_score = valid_score.unsqueeze(1).expand(batch, num_heads, seq_len)
-        self.assertTrue(torch.allclose(score_fused[valid_score], score_ref[valid_score], atol=3e-2, rtol=3e-2))
-
 
 if __name__ == "__main__":
     unittest.main()

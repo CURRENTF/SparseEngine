@@ -154,12 +154,3 @@ def test_minimax_snapkv_tp_ep_supports_chain_cache_with_decode_graph(tmp_path):
 
     assert config.resolved_prefix_cache_mode == "chain"
     assert config.enable_prefix_caching is True
-
-
-def test_snapkv_rejects_full_attention_layers(tmp_path):
-    with pytest.raises(ValueError, match="snapkv_num_full_layers.*must be 0"):
-        _make_config(
-            tmp_path,
-            sparse_method="snapkv",
-            snapkv_num_full_layers=1,
-        )

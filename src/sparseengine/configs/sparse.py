@@ -168,12 +168,6 @@ def _normalize_snapkv(config) -> None:
     _normalize_positive_int(config, "decode_eviction_interval", fallback=0)
     if config.sparse_method == "pyramidkv":
         config.snapkv_decode_eviction = True
-    _normalize_int_attr(config, "snapkv_num_full_layers")
-    if config.snapkv_num_full_layers != 0:
-        raise ValueError(
-            "snapkv_num_full_layers is unsupported and must be 0, got "
-            f"{config.snapkv_num_full_layers}."
-        )
 
 
 def _normalize_h2o(config) -> None:
@@ -413,10 +407,7 @@ def _normalize_rkv(config) -> None:
         if config.rkv_similarity_threshold != 0.5 or config.rkv_recent_similar_keep != 1:
             raise ValueError("R-KV vLLM scoring requires threshold=0.5 and the last similar representative; "
                              "remove legacy rkv_similarity_threshold/rkv_recent_similar_keep overrides.")
-        if config.rkv_redundancy_window != 0 or config.rkv_max_redundancy_tokens is not None:
-            raise ValueError("R-KV vLLM scoring uses the full resident domain with bounded row tiles; "
-                             "remove rkv_redundancy_window/rkv_max_redundancy_tokens overrides "
-                             "and configure rkv_score_chunk_mb instead.")
+
 
 def _normalize_skipkv(config) -> None:
     _normalize_positive_int(config, "skipkv_compression_interval", fallback=0)

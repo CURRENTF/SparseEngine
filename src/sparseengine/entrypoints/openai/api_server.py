@@ -8,29 +8,7 @@ from fastapi import FastAPI
 
 from sparseengine.config import Config
 from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
-from sparseengine.entrypoints.openai.dispatcher import RequestHandle
-from sparseengine.entrypoints.openai.dispatcher import _ActiveRequest
-from sparseengine.entrypoints.openai.protocol.chat import ChatCompletionRequest
-from sparseengine.entrypoints.openai.protocol.chat import ChatContentPart
-from sparseengine.entrypoints.openai.protocol.chat import ChatMessage
-from sparseengine.entrypoints.openai.protocol.completion import CompletionRequest
-from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheDeleteSubtreeRequest
-from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheInspectRequest
-from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheMatchRequest
-from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCachePruneRequest
-from sparseengine.entrypoints.openai.protocol.prefix_cache import PrefixCacheSetEvictionPriorityRequest
-from sparseengine.entrypoints.openai.protocol.responses import ResponseReasoning
-from sparseengine.entrypoints.openai.protocol.responses import ResponseRequest
 from sparseengine.entrypoints.openai.reasoning import detect_reasoning_capabilities
-from sparseengine.entrypoints.openai.reasoning import ReasoningCapabilities
-from sparseengine.entrypoints.openai.render import _chat_content_text
-from sparseengine.entrypoints.openai.render import _chat_prompt
-from sparseengine.entrypoints.openai.render import _chat_request_prompt
-from sparseengine.entrypoints.openai.render import _chat_template_role
-from sparseengine.entrypoints.openai.render import _response_prompt
-from sparseengine.entrypoints.openai.render import resolve_chat_template_kwargs
-from sparseengine.entrypoints.openai.render import resolve_chat_tools
-from sparseengine.entrypoints.openai.render import validate_chat_template_kwargs
 from sparseengine.entrypoints.openai.routes.chat import router as chat_router
 from sparseengine.entrypoints.openai.routes.completion import router as completion_router
 from sparseengine.entrypoints.openai.routes.models import router as models_router
@@ -38,41 +16,9 @@ from sparseengine.entrypoints.openai.routes.prefix_cache import router as prefix
 from sparseengine.entrypoints.openai.routes.responses import router as responses_router
 from sparseengine.entrypoints.openai.routes.worker import router as worker_router
 from sparseengine.entrypoints.openai.sampling import _coerce_cli_value
-from sparseengine.entrypoints.openai.sampling import _field_was_set
-from sparseengine.entrypoints.openai.sampling import _find_stop_index
-from sparseengine.entrypoints.openai.sampling import _normalize_prompts
-from sparseengine.entrypoints.openai.sampling import _normalize_stop
-from sparseengine.entrypoints.openai.sampling import _safe_stream_text_len
-from sparseengine.entrypoints.openai.sampling import _sampling_params_from_request
-from sparseengine.entrypoints.openai.sampling import _sampling_params_from_response_request
-from sparseengine.entrypoints.openai.serving.base import _chat_logprobs
-from sparseengine.entrypoints.openai.serving.base import _completion_logprobs
-from sparseengine.entrypoints.openai.serving.base import _model_dump_json
-from sparseengine.entrypoints.openai.serving.base import _sse
-from sparseengine.entrypoints.openai.serving.base import _tokens_per_second
-from sparseengine.entrypoints.openai.serving.base import _wait_final
-from sparseengine.entrypoints.openai.serving.base import _write_request_log
-from sparseengine.entrypoints.openai.serving.chat import _chat_completion_response
-from sparseengine.entrypoints.openai.serving.chat import _chat_message
-from sparseengine.entrypoints.openai.serving.chat import _chat_completion_stream
-from sparseengine.entrypoints.openai.serving.chat import _stream_include_usage
-from sparseengine.entrypoints.openai.serving.chat import _validate_chat_request
 from sparseengine.entrypoints.openai.serving.response_parsing import TransformersResponseParser
-from sparseengine.entrypoints.openai.serving.completion import _completion_response
-from sparseengine.entrypoints.openai.serving.completion import _completion_stream
-from sparseengine.entrypoints.openai.serving.completion import _validate_request
-from sparseengine.entrypoints.openai.serving.prefix_cache import _encode_prefix_cache_text
-from sparseengine.entrypoints.openai.serving.prefix_cache import _prefix_cache_match_token_ids_from_request
-from sparseengine.entrypoints.openai.serving.prefix_cache import _prefix_cache_token_ids_from_request
-from sparseengine.entrypoints.openai.serving.prefix_cache import _run_prefix_cache_control
-from sparseengine.entrypoints.openai.serving.responses import _response_output_items
-from sparseengine.entrypoints.openai.serving.responses import _response_response
-from sparseengine.entrypoints.openai.serving.responses import _response_stream
-from sparseengine.entrypoints.openai.serving.responses import _validate_response_request
-from sparseengine.entrypoints.openai.serving.worker import _worker_tags
 from sparseengine.llm import LLM
 from sparseengine.method_registry import normalize_sparse_method
-from sparseengine.utils.log import logger
 
 
 UNSUPPORTED_SERVING_METHOD_PREFIXES = ("deltakv",)

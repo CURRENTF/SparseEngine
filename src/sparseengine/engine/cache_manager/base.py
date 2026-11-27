@@ -1259,12 +1259,6 @@ class CacheManager(ABC):
         temp_slots = None
         if self.has_prefill_staging_view(layer_idx):
             active_slots, req_indices, context_lens, temp_slots = self.get_prefill_staging_view(layer_idx)
-        elif self.has_full_layer_quantized_view(layer_idx):
-            active_slots, req_indices, context_lens = self.build_full_layer_quantized_view(
-                layer_idx,
-                selection.req_indices,
-                selection.context_lens,
-            )
         else:
             active_slots = self._default_active_slots_for_selection(layer_idx, selection)
             req_indices = selection.req_indices
@@ -1573,19 +1567,6 @@ class CacheManager(ABC):
         """Return (active_slots, req_indices, context_lens, temp_slots) for prefill staging."""
         raise NotImplementedError
 
-    def has_full_layer_quantized_view(self, layer_idx: int) -> bool:
-        """Whether a full-attention layer should read a reconstructed quantized KV view."""
-        return False
-
-    def build_full_layer_quantized_view(
-        self,
-        layer_idx: int,
-        req_indices: torch.Tensor,
-        context_lens: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return (active_slots, local_req_indices, context_lens) for quantized full layers."""
-        raise NotImplementedError
-
     def build_decode_view(
         self,
         layer_idx: int,
@@ -1609,23 +1590,16 @@ class CacheManager(ABC):
         num_heads: int,
         num_kv_heads: int,
     ) -> DecodeComputeView:
-        if self.has_full_layer_quantized_view(layer_idx):
-            active_slots, req_indices, context_lens = self.build_full_layer_quantized_view(
-                layer_idx,
-                selection.req_indices,
-                selection.context_lens,
-            )
-        else:
-            active_slots = self._default_active_slots_for_selection(layer_idx, selection)
-            active_slots, req_indices, context_lens = self.build_decode_view(
-                layer_idx,
-                q,
-                active_slots,
-                selection.req_indices,
-                selection.context_lens,
-                num_heads=num_heads,
-                num_kv_heads=num_kv_heads,
-            )
+        active_slots = self._default_active_slots_for_selection(layer_idx, selection)
+        active_slots, req_indices, context_lens = self.build_decode_view(
+            layer_idx,
+            q,
+            active_slots,
+            selection.req_indices,
+            selection.context_lens,
+            num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
+        )
         payload, active_slots, req_indices, context_lens = (
             self.get_layer_compute_payload(
                 layer_idx,

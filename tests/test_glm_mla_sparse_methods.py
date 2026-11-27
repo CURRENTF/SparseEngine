@@ -214,7 +214,6 @@ def test_snapkv_score_budget_trigger_preserves_mla_latent_slot_payloads():
     runtime.num_recent = 1
     runtime.decode_keep_tokens = 2
     runtime.config = SimpleNamespace(
-        snapkv_num_full_layers=0,
         pyramid_layer_ratios=None,
         pool_kernel_size=1,
     )
@@ -358,7 +357,6 @@ def test_snapkv_latent_score_handoff_preserves_final_window_and_accumulation():
     manager, payload = _latent_snap_family_manager(SnapKVCacheManager, row_len=8)
     manager.config = SimpleNamespace(
         sparse_method="snapkv",
-        snapkv_num_full_layers=0,
         observation_window_size=2,
         sink_keep_tokens=1,
         recent_keep_tokens=1,

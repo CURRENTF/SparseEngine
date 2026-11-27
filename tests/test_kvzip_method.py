@@ -29,7 +29,7 @@ def _manager(*, profiling=False, head_slots=False, cuda=False, **overrides):
         sparse_attn_score_dtype="float32", obs_layer_ids=[], full_attention_layers=[],
         parallel_topology=SimpleNamespace(attn_tp_size=1),
         max_num_seqs_in_batch=1, max_decoding_seqs=1,
-        decode_graph_startup_capture=False,
+        decode_graph=False,
         kv_cache_layout="head_slots" if head_slots else "token",
     )
     vars(config).update(overrides)
@@ -78,7 +78,7 @@ def test_profiling_capacity_admits_warmup_without_consuming_replay_reserve(monke
                         lambda config: [(graph_batch, 0)])
     manager = _manager(profiling=True, max_num_batched_tokens=12,
                        max_num_seqs_in_gpu=graph_batch, kvzip_token_budget=budget,
-                       decode_graph_startup_capture=graph)
+                       decode_graph=graph)
     config = manager.config
     runtime = RuntimeState(config, manager)
     lengths = capacity.profiling_prefill_chunk_lengths(config)

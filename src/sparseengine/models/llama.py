@@ -25,14 +25,6 @@ from sparseengine.utils.context import get_context
 from sparseengine.utils.log import logger
 
 
-def _get_rope_theta(config: Any) -> float:
-    return resolve_rope_theta(config)
-
-
-def _get_rope_scaling(config: Any) -> tuple[tuple[str, object], ...] | None:
-    return resolve_rope_scaling(config, model_name="Llama")
-
-
 class LlamaAttention(nn.Module):
     def __init__(
         self,
@@ -108,13 +100,6 @@ class LlamaAttention(nn.Module):
         cache_manager = context.cache_manager
         layer_idx = context.now_layer_idx
         cache_manager.save_raw_kv_if_needed(layer_idx, k, v)
-        debug_layers = os.getenv("SPARSEENGINE_DEBUG_CAPTURE_PRE_ROPE_LAYERS")
-        if debug_layers:
-            wanted = {int(part) for part in debug_layers.split(",") if part.strip()}
-            if int(layer_idx) in wanted:
-                self.debug_last_pre_rope_positions = positions.detach().clone()
-                self.debug_last_pre_rope_k = k.detach().clone()
-                self.debug_last_pre_rope_v = v.detach().clone()
         q, k = self.rotary_emb(positions, q, k)
         cache_manager.save_rope_kv_if_needed(layer_idx, k, v)
         o = self.attn(q, k, v)
@@ -180,8 +165,8 @@ class LlamaDecoderLayer(nn.Module):
             max_position=resolve_rope_max_position(config, model_name="Llama"),
             head_dim=head_dim,
             qkv_bias=getattr(config, "attention_bias", False),
-            rope_theta=_get_rope_theta(config),
-            rope_scaling=_get_rope_scaling(config),
+            rope_theta=resolve_rope_theta(config),
+            rope_scaling=resolve_rope_scaling(config, model_name="Llama"),
             proj_chunk_size=getattr(config, "mlp_chunk_size", 16384),
             quantization=quantization,
         )

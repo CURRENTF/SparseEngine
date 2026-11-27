@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from sparseengine.kernels.triton.h2o_score import h2o_headwise_softmax_accumulate
+from sparseengine.kernels.triton.h2o_score import h2o_headwise_softmax_accumulate_rows
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -28,10 +28,16 @@ def test_mla_singleton_head_accumulation_masks_ragged_rows(width):
                 history[layer, row, length - 1] = torch.nan
             logits[layer, row, length:] = torch.nan
 
-    h2o_headwise_softmax_accumulate(
+    row_metadata = torch.tensor(
+        [
+            [[history[layer, row].data_ptr(), length] for row, length in enumerate(layer_lengths)]
+            for layer, layer_lengths in enumerate(lengths)
+        ],
+        dtype=torch.int64, device="cuda",
+    )
+    h2o_headwise_softmax_accumulate_rows(
         logits[..., :width].unsqueeze(2),
-        history,
-        torch.tensor(lengths, dtype=torch.int32, device="cuda"),
+        row_metadata,
         softmax_scale=scale,
     )
     torch.testing.assert_close(history, expected, atol=1e-6, rtol=1e-5)

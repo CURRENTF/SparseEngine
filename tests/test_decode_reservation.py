@@ -301,8 +301,7 @@ def test_snapkv_window_cost_ignores_output_limit(tokens):
     from sparseengine.engine.cache_manager.methods.snapkv import SnapKVCacheManager
     manager = object.__new__(SnapKVCacheManager)
     manager.config = SimpleNamespace(sparse_method='snapkv', sink_keep_tokens=2,
-                                     decode_keep_tokens=4, recent_keep_tokens=2,
-                                     snapkv_num_full_layers=0)
+                                     decode_keep_tokens=4, recent_keep_tokens=2)
     manager.kv_transformer_layer_indices = lambda: [0]
     manager.kv_layer_index = lambda i: i
     manager.chain_physical_residency = lambda seq_id: (8,)
@@ -351,7 +350,7 @@ def test_periodic_compaction_window_matches_append_before_eviction(resident, tok
     manager = object.__new__(SnapKVCacheManager)
     manager.config = SimpleNamespace(
         sparse_method=method, sink_keep_tokens=1, recent_keep_tokens=1,
-        decode_keep_tokens=2, pyramid_layer_ratios=[1.0], snapkv_num_full_layers=0,
+        decode_keep_tokens=2, pyramid_layer_ratios=[1.0],
         decode_eviction_interval=2, snapkv_decode_eviction=True,
     )
     manager.kv_transformer_layer_indices = lambda: [0]
@@ -388,9 +387,9 @@ def test_pyramid_prompt_admission_does_not_charge_future_decode_peak():
 
 
 def make_kivi_manager(seqs, *, sink=8, residual=32, group=32):
-    from sparseengine.engine.cache_manager.methods.deltakv_less_memory import DeltaKVLessMemoryCacheManager
+    from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
 
-    manager = object.__new__(DeltaKVLessMemoryCacheManager)
+    manager = object.__new__(DeltaKVCacheManager)
     manager.config = SimpleNamespace(
         sink_keep_tokens=sink, recent_keep_tokens=32,
         full_layer_kv_quant_bits=4, full_layer_kivi_group_size=group,
@@ -472,7 +471,7 @@ def test_kivi_bounded_raw_pool_keeps_two_decode_windows_reserved():
 def test_deltakv_latent_reservation_does_not_consume_prefill_raw_slots():
     # A block compression needs many latent slots but only one raw append.
     # Ledger-only tests miss RuntimeState collapsing these distinct pools.
-    from sparseengine.engine.cache_manager.methods.deltakv_base import DeltaKVCacheManager
+    from sparseengine.engine.cache_manager.methods.deltakv_runtime import DeltaKVCacheManager
     from sparseengine.engine.runtime_state import RuntimeState
 
     seq = Sequence([1] * 263, SamplingParams(max_tokens=10))
@@ -492,6 +491,7 @@ def test_deltakv_latent_reservation_does_not_consume_prefill_raw_slots():
     manager._num_free_slots_deltakv_latent = 1024
     manager._deltakv_centers_capacity = 128
     manager._deltakv_centers_reserved_total = 0
+    manager._deltakv_latent_reserved_by_seq = {}
     runtime = RuntimeState(manager.config, manager)
 
     assert runtime.decode_reservations.acquire(seq)

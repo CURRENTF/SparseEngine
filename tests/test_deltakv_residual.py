@@ -105,10 +105,9 @@ def test_model_key_transform_reconstruction_and_graph():
     fathers = torch.tensor([[0, 1], [1, 2], [2, 3], [0, 3], [1, 3]], device=device, dtype=torch.int32)
     slots = torch.tensor([5, 6, 7, 8, -1], device=device, dtype=torch.int32)
     positions = torch.tensor([4, 17, 32, 63, -1], device=device, dtype=torch.int32)
-    slot_positions = torch.zeros(12, device=device, dtype=torch.int32)
     def run():
         manager._deltakv_reconstruct_writeback(
-            kv_delta=delta, father_slots=fathers, slot_to_pos=slot_positions,
+            kv_delta=delta, father_slots=fathers,
             out_slots=slots, out_pos=positions, cos_sin=rope.text_rope.cos_sin_cache,
             k_cache=k, v_cache=v, l_idx=0,
         )

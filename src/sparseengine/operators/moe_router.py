@@ -204,7 +204,7 @@ class MiniMaxBiasedSigmoidRouterProvider(MoeRouterProvider):
     def binding_metadata(self) -> dict[str, object]:
         return {
             **super().binding_metadata(),
-            "kernel_path": "triton.minimax_m2_router.topk_biased_sigmoid",
+            "kernel_path": "triton.moe_biased_sigmoid.topk_biased_sigmoid",
             "routing_contract": "minimax_m2_biased_sigmoid",
         }
 
@@ -220,14 +220,18 @@ class MiniMaxBiasedSigmoidRouterProvider(MoeRouterProvider):
             raise ValueError("MiniMax biased-sigmoid routing requires correction_bias.")
         if routed_scaling_factor != 1.0:
             raise ValueError("MiniMax biased-sigmoid routing does not accept route scaling.")
-        from sparseengine.kernels.triton.minimax_m2_router import (
-            topk_biased_sigmoid,
-        )
+        if router_logits.ndim == 2 and (router_logits.shape[1], spec.top_k) != (256, 8):
+            raise ValueError(
+                "MiniMax M2.7 router requires num_experts=256 and top_k=8, got "
+                f"num_experts={router_logits.shape[1]} and top_k={spec.top_k}."
+            )
+        from sparseengine.kernels.triton.moe_biased_sigmoid import topk_biased_sigmoid
 
         return topk_biased_sigmoid(
             router_logits,
             correction_bias,
             top_k=spec.top_k,
+            normalization_epsilon=0.0,
         )
 
 

@@ -872,10 +872,6 @@ def test_model_runner_runtime_rebuild_resolves_graph_shapes_locally():
             return_value=(),
         ),
         patch(
-            "sparseengine.engine.model_runner._decode_cuda_graph_max_real_batch_size",
-            return_value=8,
-        ),
-        patch(
             "sparseengine.engine.model_runner._resolve_decode_cuda_graph_capture_sizes",
             return_value=(1, 8),
         ),

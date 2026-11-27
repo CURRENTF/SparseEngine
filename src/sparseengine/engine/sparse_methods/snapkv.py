@@ -410,10 +410,7 @@ class ScoredCompactionRuntime(PassThroughRuntime):
         is_prefill: bool,
     ) -> int | None:
         del is_prefill
-        kv_layer_idx = self._kv_layer_index(layer_idx)
-        if kv_layer_idx < self.config.snapkv_num_full_layers:
-            return None
-        return self._sparse_layer_budget(kv_layer_idx)
+        return self._sparse_layer_budget(self._kv_layer_index(layer_idx))
 
     def _sparse_layer_budget(self, kv_layer_idx: int) -> int:
         del kv_layer_idx

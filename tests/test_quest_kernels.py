@@ -1128,7 +1128,6 @@ def test_mla_store_updates_fused_quest_bounds_incrementally() -> None:
         (4, 257, 1, 1, 576, torch.bfloat16),
         (2, 259, 34, 1, 129, torch.bfloat16),
         (1, 37, 6, 2, 65, torch.float16),
-        (2, 37, 8, 2, 96, torch.float32),
     ],
 )
 def test_general_page_scores_preserve_dimension_tails_and_head_tiles(
@@ -1139,13 +1138,10 @@ def test_general_page_scores_preserve_dimension_tails_and_head_tiles(
     The D128 test cannot observe K-loop accumulation or heads beyond one MMA
     tile. A float64 oracle here independently specifies the reduction formula.
     """
-    from sparseengine.kernels.triton.quest_page_score import (
-        score_quest_pages_tensorcore,
-        score_quest_pages_vector,
-    )
+    from sparseengine.kernels.triton.quest_page_score import score_quest_pages_tensorcore
 
     if torch.cuda.get_device_capability() < (8, 0):
-        pytest.skip("Paired matrix-product validation requires SM80+")
+        pytest.skip("Matrix-product scoring requires SM80+")
     torch.manual_seed(47)
     q = torch.randn(batch, heads, dim, device="cuda", dtype=dtype)
     center = torch.randn(pages, kv_heads, dim, device="cuda", dtype=dtype)
@@ -1155,16 +1151,10 @@ def test_general_page_scores_preserve_dimension_tails_and_head_tiles(
         torch.randperm(pages, device="cuda", dtype=torch.int32) for _ in range(batch)
     ])
     slots[:, -1] = -1
-    functions = [score_quest_pages_vector]
-    if dtype != torch.float32:
-        functions.append(score_quest_pages_tensorcore)
-    captured = []
-    for fn in functions:
-        fn(q, high, low, slots)
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            output = fn(q, high, low, slots)
-        captured.append((graph, output))
+    score_quest_pages_tensorcore(q, high, low, slots)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        output = score_quest_pages_tensorcore(q, high, low, slots)
     for iteration in range(3):
         q.normal_()
         if iteration == 1:
@@ -1186,10 +1176,8 @@ def test_general_page_scores_preserve_dimension_tails_and_head_tiles(
                 bounds.append((pos + neg).amax(0))
             expected.append(torch.stack(bounds).amax(0))
         expected = torch.stack(expected)
-        for graph, output in captured:
-            graph.replay()
-            rtol, atol = (2e-5, 1e-4) if dtype == torch.float32 else (0.008, 0.02)
-            torch.testing.assert_close(output, expected, rtol=rtol, atol=atol)
+        graph.replay()
+        torch.testing.assert_close(output, expected, rtol=0.008, atol=0.02)
 
 
 @CUDA_REQUIRED

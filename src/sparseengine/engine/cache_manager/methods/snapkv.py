@@ -455,16 +455,15 @@ class SnapKVCacheManager(CacheManager):
                 int(config.decode_reservation_tokens),
                 int(config.decode_eviction_interval),
             )
-            full_layers = int(getattr(config, "snapkv_num_full_layers", 0))
             use_prefill_staging = self._pyramidkv_can_use_full_prefill_staging()
             layer_slot_weights = [
                 int(self.max_model_len)
-                if kv_idx < full_layers or not use_prefill_staging
+                if not use_prefill_staging
                 else min(
                     int(self.max_model_len),
                     self._pyramidkv_layer_budget(layer_idx) + decode_horizon,
                 )
-                for kv_idx, layer_idx in enumerate(kv_layer_ids)
+                for layer_idx in kv_layer_ids
             ]
             base_slots, resolved_layer_slots, row_slot_map_bytes = (
                 resolve_snapkv_cache_capacity(
@@ -778,12 +777,6 @@ class SnapKVCacheManager(CacheManager):
                 if local_layer < len(existing_slots_by_layer)
                 else 0
             )
-            kv_layer_idx = self.kv_layer_index(layer_idx)
-            is_full_layer = (
-                method in ("snapkv", "pyramidkv")
-                and kv_layer_idx
-                < int(getattr(self.config, "snapkv_num_full_layers", 0))
-            )
             budget = None
             trigger_len = None
             periodic_eviction = (
@@ -793,9 +786,9 @@ class SnapKVCacheManager(CacheManager):
                     and bool(getattr(self.config, "snapkv_decode_eviction", False))
                 )
             )
-            if method == "pyramidkv" and not is_full_layer:
+            if method == "pyramidkv":
                 budget = self._pyramidkv_layer_budget(layer_idx)
-            elif method == "snapkv" and not is_full_layer:
+            elif method == "snapkv":
                 budget = (
                     int(self.config.sink_keep_tokens)
                     + int(self.config.decode_keep_tokens)
@@ -1229,11 +1222,6 @@ class SnapKVCacheManager(CacheManager):
         window = int(getattr(self.config, "observation_window_size", 0) or 0)
         if window <= 0:
             return 0
-        if (
-            int(getattr(self.config, "snapkv_num_full_layers", 0) or 0)
-            >= int(self.num_kv_layers)
-        ):
-            return 0
         is_chain_resume = (
             getattr(seq, "chain_status", "") == "resumed"
             and not bool(getattr(seq, "is_recompute_replay", False))
@@ -1271,10 +1259,6 @@ class SnapKVCacheManager(CacheManager):
         else:
             needs_score = False
             for layer_idx in self.kv_transformer_layer_indices():
-                if self.kv_layer_index(layer_idx) < int(
-                    getattr(self.config, "snapkv_num_full_layers", 0) or 0
-                ):
-                    continue
                 final_physical_len = (
                     self.chain_physical_kv_len(layer_idx, int(seq.seq_id))
                     + (
@@ -1337,8 +1321,6 @@ class SnapKVCacheManager(CacheManager):
             ) from exc
 
     def _prefill_score_layer_budget(self, layer_idx: int) -> int | None:
-        if self.kv_layer_index(layer_idx) < int(getattr(self.config, "snapkv_num_full_layers", 0) or 0):
-            return None
         if self.config.sparse_method == "pyramidkv":
             if self.config.pyramid_layer_ratios is None:
                 return None
@@ -3548,116 +3530,6 @@ class SnapKVCacheManager(CacheManager):
         for layer_id in self.kv_transformer_layer_indices():
             self.layer_batch_states[layer_id].max_context_len = int(max_context_lens[layer_id])
 
-    def _prepare_decode_static_uniform(
-        self,
-        seqs: list[Sequence],
-        input_ids: torch.Tensor,
-        positions: torch.Tensor,
-        slot_mapping: torch.Tensor,
-        context_lens: torch.Tensor,
-        req_indices: torch.Tensor,
-    ):
-        real_batch_size = len(seqs)
-        graph_batch_size = int(input_ids.numel())
-        input_ids_list = [seq.decode_input_token for seq in seqs]
-        positions_list = [seq.decode_input_position for seq in seqs]
-        seq_ids = [seq.seq_id for seq in seqs]
-        layer_ids = self.kv_transformer_layer_indices()
-        first_layer = int(layer_ids[0])
-        row_indices = [self.seq_id_to_row[first_layer][sid] for sid in seq_ids]
-        if self.validate_runtime_invariants:
-            first_row_lens = tuple(
-                int(self.row_seq_lens[first_layer][row_idx])
-                for row_idx in row_indices
-            )
-            for layer_id in layer_ids[1:]:
-                layer_rows = tuple(
-                    int(self.seq_id_to_row[layer_id].get(sid, -1))
-                    for sid in seq_ids
-                )
-                if layer_rows != tuple(row_indices):
-                    raise RuntimeError(
-                        "Uniform static decode requires identical request rows across KV layers: "
-                        f"first_layer={first_layer} rows={tuple(row_indices)} "
-                        f"layer={layer_id} layer_rows={layer_rows}."
-                    )
-                layer_row_lens = tuple(
-                    int(self.row_seq_lens[layer_id][row_idx])
-                    for row_idx in layer_rows
-                )
-                if layer_row_lens != first_row_lens:
-                    raise RuntimeError(
-                        "Uniform static decode requires identical row lengths across KV layers: "
-                        f"first_layer={first_layer} lengths={first_row_lens} "
-                        f"layer={layer_id} layer_lengths={layer_row_lens}."
-                    )
-
-        cur_lens = self.row_seq_lens[first_layer][row_indices]
-        if len(cur_lens) > 0 and int(max(cur_lens)) + 1 > int(self.max_model_len):
-            raise RuntimeError(
-                "KV row length exceeds max_model_len in uniform prepare_decode_static: "
-                f"max_cur_len={int(max(cur_lens))} max_model_len={int(self.max_model_len)}"
-            )
-        if any(int(self._num_free_slots[layer_id]) < real_batch_size for layer_id in layer_ids):
-            raise RuntimeError(
-                "Out of KV cache slots in uniform prepare_decode_static: "
-                f"need={real_batch_size} free={min(int(self._num_free_slots[layer_id]) for layer_id in layer_ids)}"
-            )
-
-        if self.validate_runtime_invariants:
-            free_ptrs = tuple(
-                int(self._num_free_slots[layer_id]) for layer_id in layer_ids
-            )
-            if any(ptr != free_ptrs[0] for ptr in free_ptrs[1:]):
-                raise RuntimeError(
-                    "Uniform static decode requires aligned per-layer free-stack pointers: "
-                    f"layers={layer_ids} ptrs={free_ptrs}."
-                )
-
-        ptr = int(self._num_free_slots[first_layer])
-        new_slots_batch = self.free_slots_stack[first_layer][ptr - real_batch_size : ptr]
-        for layer_id in layer_ids:
-            self._num_free_slots[layer_id] -= real_batch_size
-
-        rows_gpu = torch.tensor(row_indices, dtype=torch.long, device=self.device)
-        cols_gpu = torch.tensor(cur_lens, dtype=torch.long, device=self.device)
-        kv_layers_gpu = torch.tensor(
-            [self.kv_layer_index(layer_id) for layer_id in layer_ids],
-            dtype=torch.long,
-            device=self.device,
-        )
-        self.buffer_req_to_token_slots_tensor[
-            kv_layers_gpu[:, None],
-            rows_gpu[None, :],
-            cols_gpu[None, :],
-        ] = new_slots_batch.to(torch.int32).unsqueeze(0)
-        for layer_id in layer_ids:
-            self.row_seq_lens[layer_id][row_indices] += 1
-        real_context_lens = self.row_seq_lens[first_layer][row_indices]
-        real_max_context_len = int(max(real_context_lens)) if row_indices else 0
-
-        input_ids[:real_batch_size].copy_(torch.tensor(input_ids_list, dtype=torch.int64, device=self.device))
-        positions[:real_batch_size].copy_(torch.tensor(positions_list, dtype=torch.int64, device=self.device))
-        slot_mapping[:real_batch_size].copy_(new_slots_batch)
-        context_lens[:real_batch_size].copy_(torch.tensor(real_context_lens, dtype=torch.int32, device=self.device))
-        req_indices[:real_batch_size].copy_(torch.tensor(row_indices, dtype=torch.int32, device=self.device))
-        if graph_batch_size > real_batch_size:
-            input_ids[real_batch_size:].fill_(int(input_ids_list[0]))
-            positions[real_batch_size:].fill_(int(positions_list[0]))
-            slot_mapping[real_batch_size:].fill_(-1)
-            context_lens[real_batch_size:].fill_(int(real_context_lens[0]))
-            req_indices[real_batch_size:].fill_(int(row_indices[0]))
-
-        for layer_id in layer_ids:
-            state = self.layer_batch_states[layer_id]
-            state.slot_mapping = slot_mapping
-            state.context_lens = context_lens
-            state.max_context_len = real_max_context_len
-            state.req_indices = req_indices
-        self._decode_static_state_binding_key = None
-        self.validate_decode_cuda_graph_slot_mappings()
-        return input_ids, positions, None
-
     def _allocate_decode_batch_all_layers(
         self,
         seq_ids: list[int],
@@ -4046,18 +3918,6 @@ class SnapKVCacheManager(CacheManager):
             input_ids_list = [seq.decode_input_token for seq in seqs]
             positions_list = [seq.decode_input_position for seq in seqs]
             seq_ids = [seq.seq_id for seq in seqs]
-
-            if self._uniform_decode_metadata:
-                result = self._prepare_decode_static_uniform(
-                    seqs,
-                    input_ids,
-                    positions,
-                    slot_mapping,
-                    context_lens,
-                    req_indices,
-                )
-                if result is not None:
-                    return result
 
             input_ids[:real_batch_size].copy_(torch.tensor(input_ids_list, dtype=torch.int64, device=self.device))
             positions[:real_batch_size].copy_(torch.tensor(positions_list, dtype=torch.int64, device=self.device))

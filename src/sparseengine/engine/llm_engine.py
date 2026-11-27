@@ -562,7 +562,7 @@ class LLMEngine:
         *,
         respect_runtime_capacity: bool = False,
     ) -> int:
-        if not bool(getattr(self.config, "decode_graph_startup_capture", False)):
+        if not self.config.decode_graph:
             return prompt_offset
         startup_plan = build_decode_cuda_graph_startup_plan(self.config)
         sequential_plan = set()
@@ -1553,23 +1553,6 @@ class LLMEngine:
         seq.token_ids[-1] = int(token_id)
         seq.last_token = int(token_id)
 
-    def debug_hidden_states(self) -> dict[int, torch.Tensor]:
-        snapshots = self.model_runner.call("debug_hidden_states_cpu")
-        if not isinstance(snapshots, dict) or not all(
-            isinstance(layer_idx, int) and isinstance(tensor, torch.Tensor)
-            for layer_idx, tensor in snapshots.items()
-        ):
-            raise RuntimeError(
-                f"Rank 0 did not return hidden-state snapshots: {snapshots!r}."
-            )
-        return snapshots
-
-    def debug_moe_states(self) -> dict[int, dict[str, torch.Tensor]]:
-        snapshots = self.model_runner.call("debug_moe_states_cpu")
-        if not isinstance(snapshots, dict):
-            raise RuntimeError(f"Rank 0 did not return MoE snapshots: {snapshots!r}.")
-        return snapshots
-
     def worker_info(
         self,
         served_model_name: str | None = None,
@@ -1596,7 +1579,6 @@ class LLMEngine:
             "observation_window_size",
             "snapkv_decode_eviction",
             "decode_eviction_interval",
-            "snapkv_num_full_layers",
             "sparse_prefill_score_mode",
             "prefill_sparse_method",
             "flashprefill_v2_k_block_m",
@@ -1633,7 +1615,6 @@ class LLMEngine:
             "decode_graph",
             "decode_graph_capture_sampling",
             "decode_graph_capture_sizes",
-            "decode_graph_startup_capture",
             "decode_graph_startup_capture_limit",
             "enable_prefix_caching",
             "prefix_cache_mode",
@@ -1645,7 +1626,6 @@ class LLMEngine:
             "enable_prefix_cache_offload",
             "prefix_cache_host_size_gb",
             "recurrent_state_max_bytes",
-            "prefix_cache_max_recurrent_bytes",
             "recurrent_state_pool_bytes",
             "recurrent_state_bytes_per_row",
             "recurrent_state_row_capacity",

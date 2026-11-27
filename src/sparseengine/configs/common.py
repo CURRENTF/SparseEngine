@@ -90,16 +90,9 @@ def _coerce_optional_positive_int(name: str, value: Any) -> int | None:
 
 def _resolve_long_prefill_offload_threshold(configured: Any) -> int:
     raw = os.getenv("SPARSEENGINE_LONG_PREFILL_OFFLOAD_MIN_TOKENS")
-    legacy_raw = os.getenv("SPARSEENGINE_DEFERRED_PREFILL_MIN_TOKENS")
-    if raw is not None and legacy_raw is not None and raw != legacy_raw:
-        raise ValueError(
-            "SPARSEENGINE_LONG_PREFILL_OFFLOAD_MIN_TOKENS and "
-            "SPARSEENGINE_DEFERRED_PREFILL_MIN_TOKENS are both set with different values."
-        )
-    value = raw if raw is not None else legacy_raw
     resolved = _coerce_optional_positive_int(
         "long_prefill_offload_threshold",
-        configured if value is None else value,
+        configured if raw is None else raw,
     )
     if resolved is None:
         raise ValueError("long_prefill_offload_threshold must be a positive integer.")

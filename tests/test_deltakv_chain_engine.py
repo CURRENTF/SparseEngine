@@ -32,8 +32,7 @@ def test_deltakv_chain_pressure():
             deltakv_sparse_decode_backend="custom", enable_prefix_caching=True, prefix_cache_mode="chain",
             max_model_len=4096, max_num_batched_tokens=2048, engine_prefill_chunk_size=128,
             max_num_seqs_in_batch=2, max_decoding_seqs=2, max_num_seqs_in_gpu=3,
-            gpu_memory_utilization=0.8, decode_graph=True, decode_graph_capture_sizes=[1, 2],
-            decode_graph_startup_capture=True)
+            gpu_memory_utilization=0.8, decode_graph=True, decode_graph_capture_sizes=[1, 2])
         result["config"] = config
         llm = LLM(os.environ["SPARSEENGINE_TEST_MODEL"], **config)
         cm = llm.model_runner.cache_manager

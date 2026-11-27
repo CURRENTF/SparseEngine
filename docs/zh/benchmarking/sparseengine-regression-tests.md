@@ -500,7 +500,7 @@ conda run -n <CONDA_ENV> --no-capture-output \
 
 ## OmniKV Full-Layer Selection
 
-OmniKV full layer 与模型相关。发布新模型的 OmniKV 或与 OmniKV 对齐的 DeltaKV regression 数值前，使用 `python -m sparseengine.utils.select_omnikv_full_layers`。
+OmniKV full layer 与模型相关。发布新模型的 OmniKV 或与 OmniKV 对齐的 DeltaKV regression 数值前，使用 `python3 scripts/compression/select_omnikv_full_layers.py`。
 
 selector 在 LongBench task 上运行离线 decode-attention coverage calibration，选择 `--num-full-layers` 个 layer，并把选中的 layer 字符串写入 `selected_full_layers.json`。这不是 online runtime mode：必须将该字符串作为 `full_attention_layers` 传回。
 
@@ -508,7 +508,7 @@ Qwen2.5-7B 选择六个 full layer 的示例：
 
 ```bash
 conda run -n <CONDA_ENV> --no-capture-output \
-  python -m sparseengine.utils.select_omnikv_full_layers \
+  python3 scripts/compression/select_omnikv_full_layers.py \
   --model-path <MODEL_ROOT>/Qwen2.5-7B-Instruct-1M \
   --longbench-root <LONGBENCH_ROOT> \
   --config-dir benchmark/long_bench/config \

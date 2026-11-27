@@ -62,9 +62,6 @@ def _normalize_deltakv_quantization(config) -> None:
             "full_layer_kv_quant_bits must be 0, 2, or 4, "
             f"got {config.full_layer_kv_quant_bits}."
         )
-    _normalize_float_attr(config, "full_layer_cluster_ratio", fallback=0.0)
-    if config.full_layer_cluster_ratio < 0.0:
-        raise ValueError(f"full_layer_cluster_ratio must be >= 0, got {config.full_layer_cluster_ratio}.")
     _normalize_int_attr(config, "deltakv_latent_quant_bits", fallback=0)
     if config.deltakv_latent_quant_bits not in (0, 2, 4):
         raise ValueError(f"deltakv_latent_quant_bits must be 0, 2, or 4, got {config.deltakv_latent_quant_bits}.")
@@ -96,19 +93,6 @@ def _normalize_full_layer_kivi(config) -> None:
             f"got {config.full_layer_kivi_decode_num_warps}."
         )
     _normalize_positive_int(config, "full_layer_kivi_decode_num_stages", fallback=3)
-    config.enable_full_layer_kivi_fused_decode = bool(config.enable_full_layer_kivi_fused_decode)
-    config.enable_full_layer_kivi_grouped_decode = bool(config.enable_full_layer_kivi_grouped_decode)
-    config.enable_full_layer_kivi_dense_decode = bool(config.enable_full_layer_kivi_dense_decode)
-    if config.enable_full_layer_kivi_fused_decode:
-        raise ValueError(
-            "enable_full_layer_kivi_fused_decode was removed; full-layer KIVI decode now "
-            "uses the direct packed backend."
-        )
-    if config.enable_full_layer_kivi_grouped_decode:
-        raise ValueError(
-            "enable_full_layer_kivi_grouped_decode was removed; full-layer KIVI decode now "
-            "uses the direct packed backend."
-        )
 
 
 def _normalize_deltakv_capacity(config) -> None:
@@ -185,8 +169,6 @@ def validate_deltakv_runtime(config) -> None:
                 f"DeltaKV for {config.model_spec.name} requires a compatible "
                 "deltakv_checkpoint_path. Use sparse_method='' to run vanilla inference."
             )
-        if bool(getattr(config, "enable_sparse_ref_fp8", False)):
-            raise ValueError("enable_sparse_ref_fp8 was removed from the slim DeltaKV runtime.")
         if use_compression and config.deltakv_checkpoint_path is None and not config.allow_missing_deltakv_path:
             raise ValueError(
                 "DeltaKV requires deltakv_checkpoint_path for compressor sparse layers. "

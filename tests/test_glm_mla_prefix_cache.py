@@ -43,7 +43,6 @@ def _latent_chain_manager(manager_type, method: str):
         recent_keep_tokens=1,
         decode_keep_tokens=2,
         observation_window_size=2,
-        snapkv_num_full_layers=0,
         sparse_attn_score_dtype="float32",
         pool_kernel_size=1,
         pyramid_layer_ratios=None,
@@ -59,8 +58,6 @@ def _latent_chain_manager(manager_type, method: str):
         rkv_alpha=0.5,
         rkv_similarity_threshold=0.0,
         rkv_recent_similar_keep=0,
-        rkv_max_redundancy_tokens=16,
-        rkv_redundancy_window=0,
     )
     storage = MlaLatentStorage(
         kv_lora_rank=512,
@@ -279,7 +276,7 @@ def test_h2o_chain_resume_preserves_aligned_scores_and_cleans_side_state():
     manager._h2o_scores[(0, owner.seq_id)] = torch.tensor(
         [1.0, 9.0, 2.0, 8.0, 0.0, 0.0]
     )
-    manager.evict_after_prefill([owner])
+    manager.compact_final_prefill_for_decode([owner])
     assert manager.row_seq_lens[0].tolist() == [4]
     resident_slots = manager.buffer_req_to_token_slots[0][0, :4].clone().long()
     payload = storage.layer_payload(0)
@@ -333,7 +330,7 @@ def test_h2o_chain_resume_preserves_aligned_scores_and_cleans_side_state():
         new_len=6,
         weight=1.0,
     )
-    manager.evict_after_prefill([resumed])
+    manager.compact_final_prefill_for_decode([resumed])
     final_slots = manager.buffer_req_to_token_slots[0][
         resumed_row, :4
     ].clone().long()

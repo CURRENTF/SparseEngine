@@ -133,13 +133,6 @@ class DeltaKVLessMemoryCudaGraphCacheManager(DeltaKVLessMemoryCacheManager):
             self._ensure_decode_static_plan_buffers(graph_batch_size, k_max, max_s, device)
             self._ensure_materialized_sparse_view_capacity(graph_batch_size, max_s, device)
 
-        if self._full_layer_quant_enabled():
-            static_cap = getattr(self, "_decode_static_max_context_len", None)
-            if static_cap is None:
-                static_cap = getattr(self.full_layer_batch_states, "max_context_len", None)
-            if static_cap is not None and int(static_cap) > 0:
-                self._ensure_full_layer_quant_decode_workspace(graph_batch_size, int(static_cap))
-
     def _ensure_materialized_sparse_view_capacity(self, batch_size: int, width: int, device: torch.device) -> None:
         batch_size = int(batch_size)
         width = int(width)
@@ -337,55 +330,6 @@ class DeltaKVLessMemoryCudaGraphCacheManager(DeltaKVLessMemoryCacheManager):
                 f"capacity={int(base_slots.numel())}, requested={total}."
             )
         return base_slots[:total]
-
-    def _full_layer_quant_temp_cache_needs_alloc(self, num_slots: int) -> bool:
-        num_slots = max(1, int(num_slots))
-        k_cache = getattr(self, "_full_layer_quant_k_cache", None)
-        v_cache = getattr(self, "_full_layer_quant_v_cache", None)
-        return (
-            k_cache is None
-            or v_cache is None
-            or k_cache.device.type != "cuda"
-            or v_cache.device.type != "cuda"
-            or int(k_cache.shape[0]) < num_slots
-            or int(v_cache.shape[0]) < num_slots
-        )
-
-    def _ensure_full_layer_quant_temp_cache(self, num_slots: int):
-        num_slots = max(1, int(num_slots))
-        if self._full_layer_quant_temp_cache_needs_alloc(num_slots):
-            self._raise_if_capture_allocation("full-layer quant temp cache", (num_slots, self.num_kv_heads, self.head_dim))
-            self._full_layer_quant_k_cache = torch.empty(
-                num_slots,
-                self.num_kv_heads,
-                self.head_dim,
-                dtype=self.hf_config.dtype,
-                device=self.device,
-            )
-            self._full_layer_quant_v_cache = torch.empty_like(self._full_layer_quant_k_cache)
-            return
-        return super()._ensure_full_layer_quant_temp_cache(num_slots)
-
-    def _ensure_full_layer_quant_decode_workspace(self, batch_size: int, max_len: int):
-        batch_size = max(1, int(batch_size))
-        max_len = max(1, int(max_len))
-        if self._is_cuda_graph_capturing():
-            total_slots = batch_size * max_len
-            if self._full_layer_quant_temp_cache_needs_alloc(total_slots):
-                self._raise_if_capture_allocation("full-layer quant decode KV", (total_slots, self.num_kv_heads, self.head_dim))
-            active = getattr(self, "_full_layer_quant_active_slots", None)
-            if active is None or int(active.shape[0]) < batch_size or int(active.shape[1]) < max_len:
-                self._raise_if_capture_allocation("full-layer quant active slots", (batch_size, max_len))
-            local_req = getattr(self, "_full_layer_quant_local_req", None)
-            if local_req is None or int(local_req.numel()) < batch_size:
-                self._raise_if_capture_allocation("full-layer quant local req", (batch_size,))
-            positions = getattr(self, "_full_layer_quant_positions", None)
-            if positions is None or int(positions.numel()) < max_len:
-                self._raise_if_capture_allocation("full-layer quant positions", (max_len,))
-            out_slots = getattr(self, "_full_layer_quant_out_slots", None)
-            if out_slots is None or int(out_slots.numel()) < total_slots:
-                self._raise_if_capture_allocation("full-layer quant out slots", (total_slots,))
-        return super()._ensure_full_layer_quant_decode_workspace(batch_size, max_len)
 
     def _ensure_deltakv_postrope_dummy_slot(self) -> torch.Tensor:
         """Reserve one stable scratch slot used to mask invalid padded entries."""
