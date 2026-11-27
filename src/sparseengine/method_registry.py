@@ -603,6 +603,29 @@ def request_logical_length_limit(config) -> int | None:
     return int(config.max_model_len)
 
 
+def resolve_decode_context_capacity(config) -> int:
+    """Return the context capacity required by the decode attention provider."""
+    capacity = int(config.max_model_len)
+    if normalize_sparse_method(config.sparse_method) != "quest":
+        return capacity
+    page_size = int(config.quest_chunk_size)
+    token_budget = int(config.quest_token_budget)
+    page_budget = max(3, token_budget // page_size)
+    return min(capacity, max(token_budget, page_budget * page_size, page_size))
+
+
+def validate_prefix_prune_keep_tokens(config, keep_tokens: int) -> None:
+    """Validate method-specific keep budgets before enqueueing a prune job."""
+    if normalize_sparse_method(config.sparse_method) != "quest":
+        return
+    page_size = int(config.prefix_cache_block_size)
+    if int(keep_tokens) % page_size:
+        raise ValueError(
+            "QuEST prefix pruning requires keep_tokens to be page aligned: "
+            f"keep_tokens={keep_tokens} page_size={page_size}."
+        )
+
+
 def is_deltakv_method(method: str | None) -> bool:
     return normalize_sparse_method(method) == "deltakv"
 

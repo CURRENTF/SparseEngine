@@ -15,6 +15,7 @@ from sparseengine.engine.decode_graph_contract import (
     DecodeGraphState,
 )
 from sparseengine.engine.sequence import Sequence
+from sparseengine.env import graph_capture_diagnostics_enabled
 from sparseengine.method_registry import decode_graph_path_id
 from sparseengine.utils.context import get_context, set_context
 from sparseengine.utils.log import logger
@@ -205,6 +206,8 @@ class DecodeCudaGraphRunner:
         self,
         state: DecodeCudaGraphState,
         seqs: list[Sequence],
+        *,
+        moe_token_metadata=(None, None),
     ) -> tuple[torch.Tensor, torch.Tensor]:
         prepare_decode_graph_step = getattr(
             self.runtime_state,
@@ -240,6 +243,7 @@ class DecodeCudaGraphRunner:
             cache_manager=self.cache_manager,
             seqs=seqs,
             recurrent_state_manager=self.recurrent_state_manager,
+            moe_token_metadata=moe_token_metadata,
         )
         self.cache_manager.set_decode_static_max_context_len(
             int(state.capture_context_capacity)
@@ -305,7 +309,7 @@ class DecodeCudaGraphRunner:
                 "max_context_len": sparse_state.max_context_len,
                 "active_compressed_indices": sparse_state.active_compressed_indices,
                 "global_req_indices": sparse_state.global_req_indices,
-                "deltakv_free_temp_slots": sparse_state.deltakv_free_temp_slots,
+                "release_temp_slots": sparse_state.release_temp_slots,
             }
         return refs
 
@@ -359,7 +363,7 @@ class DecodeCudaGraphRunner:
         ctx = get_context()
         ctx.sparse_controller = self.sparse_controller
 
-        diagnostic = os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1"
+        diagnostic = graph_capture_diagnostics_enabled()
         started = perf_counter()
 
         def mark(stage: str) -> None:
@@ -456,6 +460,7 @@ class DecodeCudaGraphRunner:
         *,
         capture_sampling: bool = False,
         replay_after_capture: bool = True,
+        moe_token_metadata=(None, None),
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         if not seqs:
             raise ValueError("decode_graph requires a non-empty decode batch.")
@@ -480,7 +485,7 @@ class DecodeCudaGraphRunner:
             or (force_eager_for_seqs is not None and force_eager_for_seqs(seqs))
         ):
             self.force_eager_count += 1
-            return self.run_eager_static(seqs), None
+            return self.run_eager_static(seqs, moe_token_metadata=moe_token_metadata), None
 
         graph_batch_size = self.dp_batch_capacity or self._select_graph_batch_size(real_batch_size)
         graph_path_id = self._graph_path_id()
@@ -494,13 +499,15 @@ class DecodeCudaGraphRunner:
         )
         self.last_state_key = state.key
         self.last_real_batch_size = real_batch_size
-        if os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1" and state.graph is None:
+        if graph_capture_diagnostics_enabled() and state.graph is None:
             logger.info(
                 "CUDA Graph capture diagnostic: pid={} method={} batch={} stage=static_prepare_begin.",
                 os.getpid(), self.method, state.key.batch_size,
             )
-        input_ids, positions = self._prepare_static_step(state, seqs)
-        if os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1" and state.graph is None:
+        input_ids, positions = self._prepare_static_step(
+            state, seqs, moe_token_metadata=moe_token_metadata
+        )
+        if graph_capture_diagnostics_enabled() and state.graph is None:
             logger.info(
                 "CUDA Graph capture diagnostic: pid={} method={} batch={} stage=static_prepare_done.",
                 os.getpid(), self.method, state.key.batch_size,
@@ -536,7 +543,9 @@ class DecodeCudaGraphRunner:
         token_ids = state.token_ids[:real_batch_size] if state.token_ids is not None else None
         return logits, token_ids
 
-    def run_eager_static(self, seqs: list[Sequence]) -> torch.Tensor | None:
+    def run_eager_static(
+        self, seqs: list[Sequence], *, moe_token_metadata=(None, None)
+    ) -> torch.Tensor | None:
         """Run decode eagerly through the same static-compatible path used by graphs."""
         if not seqs:
             raise ValueError("static decode requires a non-empty decode batch.")
@@ -555,7 +564,9 @@ class DecodeCudaGraphRunner:
         )
         self.last_state_key = state.key
         self.last_real_batch_size = real_batch_size
-        input_ids, positions = self._prepare_static_step(state, seqs)
+        input_ids, positions = self._prepare_static_step(
+            state, seqs, moe_token_metadata=moe_token_metadata
+        )
         graph_state = state.decode_state
         if graph_state is None:
             raise RuntimeError("Decode graph state was released before static execution.")

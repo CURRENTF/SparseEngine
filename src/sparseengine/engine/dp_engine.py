@@ -17,6 +17,7 @@ from transformers import AutoTokenizer
 from sparseengine.config import Config
 from sparseengine.engine.chain_cache import ChainOwnerMismatchError, ChainRoutingSnapshot
 from sparseengine.engine.model_runner import select_master_port
+from sparseengine.env import dp_rpc_timeout_s
 from sparseengine.utils.log import logger
 
 
@@ -145,9 +146,7 @@ class DPAttentionEngine:
         pending = {self._connections[rank]: rank for rank in ranks}
         results = {}
         errors = []
-        deadline = time.monotonic() + float(
-            os.getenv("SPARSEENGINE_DP_RPC_TIMEOUT_S", "1800")
-        )
+        deadline = time.monotonic() + dp_rpc_timeout_s()
         while pending:
             ready = wait(list(pending), timeout=1)
             if not ready and (

@@ -9,6 +9,7 @@ from functools import wraps
 
 import torch
 import sparseengine.platforms as platforms
+from sparseengine.env import env_float, env_is_one
 from sparseengine.utils.log import logger
 
 class Profiler:
@@ -16,13 +17,13 @@ class Profiler:
         self.times = defaultdict(float)
         self.counts = defaultdict(int)
         self.enabled = False
-        self.nvtx_enabled = os.environ.get("SPARSEENGINE_NVTX", "0") == "1"
+        self.nvtx_enabled = env_is_one("SPARSEENGINE_NVTX")
         self._no_trace = nullcontext()
         self.rank = 0
         # 通过环境变量开启设备同步，以准确测量设备耗时；保留旧 CUDA 名称兼容。
         self.device_sync = (
-            os.environ.get("SPARSEENGINE_SYNC_DEVICE", "0") == "1"
-            or os.environ.get("CUDA_SYNC_SENGINE", "0") == "1"
+            env_is_one("SPARSEENGINE_SYNC_DEVICE")
+            or env_is_one("CUDA_SYNC_SENGINE")
         )
 
     def trace(self, name: str):
@@ -167,4 +168,4 @@ class CpuTiming:
         return wrapped
 
 
-cpu_timing = CpuTiming(float(os.environ.get("SPARSEENGINE_CPU_TIMING_INTERVAL_S", "0")))
+cpu_timing = CpuTiming(env_float("SPARSEENGINE_CPU_TIMING_INTERVAL_S", 0.0))

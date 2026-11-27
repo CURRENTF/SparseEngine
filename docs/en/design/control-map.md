@@ -32,6 +32,11 @@ worker probes, not a router-owned chain map. Rank 0 retains compact logical
 token IDs only to preserve exact BPE identity for text continuations; the
 history is capacity-bounded and is not part of the physical KV payload.
 
+`StandardCacheManager` and `QuestCacheManager` share
+`cache_manager/prefix_cache_mixin.py` for Radix lookup, attachment, pruning,
+eviction, and offload scheduling. Each manager owns its physical payloads and
+allocation. QuEST also owns page alignment and page min/max metadata.
+
 ## Runtime Flow
 
 ```mermaid
@@ -86,8 +91,8 @@ flowchart TD
 | Streaming window | `streamingllm`, `attention-sink`, `attention_sink` | Physical eviction to sink + recent tokens. | `streamingllm.py`, `standard.py`-style mechanics |
 | SnapKV / PyramidKV | `snapkv`, `pyramidkv` | Physical eviction after score-based keep selection; PyramidKV changes per-layer budgets. | `cache_manager/methods/snapkv.py`, `sparse_methods/snapkv.py` |
 | OmniKV | `omnikv` | Logical masking/view building from observation-layer scores. `full_attention_layers=auto` resolves a model profile that may be shared with DeltaKV; unregistered models should be calibrated with `python -m sparseengine.utils.select_omnikv_full_layers`. | `cache_manager/methods/omnikv/manager.py`, `sparse_methods/dynamic.py`, `omnikv_fused.py` |
-| QuEST | `quest` | Query-aware decode page/chunk selection; persistent page metadata and native view construction remain cache-manager/provider owned. | `cache_manager/methods/quest.py`, `sparse_methods/passthrough.py` |
-| DeltaKV | `deltakv` | Compressor-backed hybrid cache: sparse full/reference pool plus compressed latent state. Registered models may share OmniKV's `full_attention_layers=auto` profile. | `cache_manager/methods/deltakv*.py`, `sparse_methods/dynamic.py`, `deltakv_kernels.py` |
+| QuEST | `quest` | Query-aware decode page/chunk selection; persistent page metadata and native view construction remain cache-manager/provider owned. | `cache_manager/methods/quest.py`, `sparse_methods/quest.py` |
+| DeltaKV | `deltakv` | Compressor-backed hybrid cache: sparse full/reference pool plus compressed latent state. Registered models may share OmniKV's `full_attention_layers=auto` profile. | `cache_manager/methods/deltakv_runtime.py`, `deltakv_base.py`, `deltakv_less_memory.py`, `sparse_methods/dynamic.py`, `deltakv_kernels.py` |
 
 ## State Ownership Contracts
 
@@ -113,7 +118,7 @@ flowchart TD
 | File | Why it is hard | How to approach it |
 | --- | --- | --- |
 | `src/sparseengine/engine/cache_manager/methods/deltakv_less_memory.py` | Very large direct-residual/full-layer-KIVI/static-graph implementation. | Treat as several logical regions: allocation, prefill staging, full-layer KIVI, sparse raw/ref views, static decode plan, reconstruction/writeback. Add tests around the region touched. |
-| `src/sparseengine/engine/cache_manager/methods/deltakv.py` | Compressor-backed V4 path combines clustering, latent storage, full pool, staging, reconstruction, and graph hooks. | Avoid cosmetic edits. Change only with focused native runtime and kernel tests. |
+| `src/sparseengine/engine/cache_manager/methods/deltakv_runtime.py`, `deltakv_base.py` | The runtime composes the chain and CUDA Graph lifecycle with the compressor-backed cache. The base owns allocation, staging, and reconstruction. | Run focused native runtime and kernel tests for the affected path. |
 | `src/sparseengine/engine/sparse_methods/dynamic.py` | OmniKV and DeltaKV share observation-layer scoring but differ in logical selection and physical payload semantics. | Preserve the shared score lifecycle; keep pool/reconstruction ownership in each cache manager. |
 | `src/sparseengine/engine/sparse_methods/snapkv.py` | SnapKV and PyramidKV share scored compaction while using different layer budgets and triggers. | Reuse only the common lifecycle and preserve method-specific boundary behavior. |
 | `src/sparseengine/layers/attention.py` | Small enough, but high blast radius because every method passes through it. | Keep it method-agnostic. Prefer adding a cache-manager hook over adding a branch here. |
@@ -210,8 +215,7 @@ These are control-restoring tasks, not urgent correctness fixes:
    modules.
 3. Keep repo docs focused on stable contracts and runbooks. Do not add local
    experiment ledgers to repo docs.
-4. Avoid splitting the giant DeltaKV cache managers until a functional change
-   touches the exact region. When splitting, preserve tests around allocation,
-   staging, graph metadata, and reconstruction separately.
+4. Preserve DeltaKV coverage for allocation, staging, graph metadata, and
+   reconstruction when changing those paths.
 5. Keep `docs/en/configuration/runtime-parameter-semantics.md` synchronized whenever method
    aliases, graph support, or public knobs change.

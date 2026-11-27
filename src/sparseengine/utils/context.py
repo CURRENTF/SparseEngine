@@ -29,16 +29,22 @@ def set_context(
     cache_manager=None,
     seqs=None,
     recurrent_state_manager=None,
+    *,
+    moe_token_metadata=(None, None),
 ):
-    global _CONTEXT
+    """Start a forward step, retaining allocated decode workspace until reset."""
     _CONTEXT.attention_validation_scope = object()
     _CONTEXT.is_prefill = is_prefill
     _CONTEXT.cu_seqlens_q = cu_seqlens_q
     _CONTEXT.now_layer_idx = 0
     _CONTEXT.cache_manager = cache_manager
     _CONTEXT.recurrent_state_manager = recurrent_state_manager
+    _CONTEXT.sparse_controller = None
+    _CONTEXT.sparse_config = None
     _CONTEXT.seqs = seqs
     _CONTEXT.multimodal_image_groups = None
+    _CONTEXT.moe_token_capacity, _CONTEXT.moe_token_sizes = moe_token_metadata
+
 
 def reset_context():
     global _CONTEXT

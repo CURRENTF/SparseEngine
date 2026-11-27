@@ -297,6 +297,6 @@ def resolve_gate_up_swiglu_provider(
 ) -> GateUpSwiGLUProvider:
     platform = platforms.current_platform
     if device_index is None:
-        device_index = torch.cuda.current_device() if platform.is_cuda_alike() else 0
+        device_index = device_runtime.current_device_index(platform=platform)
     caps = platform.get_device_caps(int(device_index))
     return OpResolver(GATE_UP_SWIGLU_REGISTRY).resolve(spec, caps).provider

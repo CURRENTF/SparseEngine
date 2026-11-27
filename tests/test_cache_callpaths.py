@@ -7,6 +7,7 @@ import torch
 from cache_contracts.cases import RADIX_CASES, make_radix
 from cache_contracts.ownership import RadixHarness
 from sparseengine.engine.async_scheduling.execution import AsyncExecution, DeviceResult
+from sparseengine.engine.async_scheduling.output_pool import HostOutputPool
 from sparseengine.platforms import device_runtime
 from test_radix_cache_contract import materialize, request
 
@@ -133,8 +134,11 @@ def test_async_slot_snapshot_survives_allocator_reuse_and_discards_cancelled_rec
     a = object.__new__(AsyncExecution)
     a.runner = SimpleNamespace(cache_manager=m)
     a.completed = 0
-    a.results = {1: DeviceResult([live, cancelled], True, object(), torch.tensor([7, 8]),
-                                None, None, records, [])}
+    a.output_pool = HostOutputPool()
+    a.results = {1: DeviceResult(
+        seqs=[live, cancelled], is_prefill=True, event=object(), tokens=torch.tensor([7, 8]),
+        inputs=None, logprobs=None, prefix_records=records, keepalive=[], output_buffers=[],
+    )}
     monkeypatch.setattr(device_runtime, 'synchronize_event', lambda event: None)
     assert a.collect(1, discarded=(cancelled.seq_id,))[0] == [7, 8]
     blocks = list(m.prefix_cache.blocks.values())

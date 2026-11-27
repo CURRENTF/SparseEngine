@@ -32,6 +32,21 @@ def _optional_platform() -> Platform | None:
         return None
 
 
+def current_device_index(default: int = 0, *, platform: Platform | None = None) -> int:
+    if platform is None:
+        platform = _optional_platform()
+    if platform is not None and platform.is_cuda_alike():
+        return torch.cuda.current_device()
+    return default
+
+
+def default_device() -> torch.device:
+    platform = _optional_platform()
+    if platform is None:
+        return torch.device("cpu")
+    return platform.get_device(current_device_index(platform=platform))
+
+
 def supports_pin_memory() -> bool:
     platform = _optional_platform()
     return bool(platform is not None and platform.supports_pin_memory())

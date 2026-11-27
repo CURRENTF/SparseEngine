@@ -24,6 +24,11 @@ dispatcher 在构造 stream 前确认 admission；smart-router affinity 来自�
 continuation 的准确 BPE identity 而保留紧凑逻辑 token ID；该历史有容量上限，
 且不属于物理 KV payload。
 
+`StandardCacheManager` 和 `QuestCacheManager` 共用
+`cache_manager/prefix_cache_mixin.py`，由它负责 Radix 查找、挂载、裁剪、驱逐和
+offload 调度。各 CacheManager 管理各自的物理 payload 和分配，QuEST 同时负责
+页对齐及每页的 min/max 元数据。
+
 ## Runtime 流程
 
 ```mermaid
@@ -78,8 +83,8 @@ flowchart TD
 | Streaming window | `streamingllm`, `attention-sink`, `attention_sink` | 物理淘汰，只保留 sink 加 recent token。 | `streamingllm.py`、`standard.py` 风格机制 |
 | SnapKV / PyramidKV | `snapkv`, `pyramidkv` | 基于 score 的 keep selection 后执行 physical eviction；PyramidKV 改变 per-layer budget。 | `cache_manager/methods/snapkv.py`, `sparse_methods/snapkv.py` |
 | OmniKV | `omnikv` | 根据 observation-layer score 构建 logical mask/view。`full_attention_layers=auto` 会解析可与 DeltaKV 共享的模型 profile；未登记模型应使用 `python -m sparseengine.utils.select_omnikv_full_layers` 校准。 | `cache_manager/methods/omnikv/manager.py`, `sparse_methods/dynamic.py`, `omnikv_fused.py` |
-| QuEST | `quest` | Query-aware decode page/chunk selection；持久 page metadata 和原生 view 构造仍由 CacheManager/provider 持有。 | `cache_manager/methods/quest.py`, `sparse_methods/passthrough.py` |
-| DeltaKV | `deltakv` | 基于 compressor 的 hybrid cache：sparse full/reference pool 加 compressed latent state；已登记模型可与 OmniKV 共用 `full_attention_layers=auto` profile。 | `cache_manager/methods/deltakv*.py`, `sparse_methods/dynamic.py`, `deltakv_kernels.py` |
+| QuEST | `quest` | Query-aware decode page/chunk selection；持久 page metadata 和原生 view 构造仍由 CacheManager/provider 持有。 | `cache_manager/methods/quest.py`, `sparse_methods/quest.py` |
+| DeltaKV | `deltakv` | 基于 compressor 的 hybrid cache：sparse full/reference pool 加 compressed latent state；已登记模型可与 OmniKV 共用 `full_attention_layers=auto` profile。 | `cache_manager/methods/deltakv_runtime.py`, `deltakv_base.py`, `deltakv_less_memory.py`, `sparse_methods/dynamic.py`, `deltakv_kernels.py` |
 
 ## 状态所有权 Contract
 
@@ -98,7 +103,7 @@ flowchart TD
 | 文件 | 难点 | 处理方式 |
 | --- | --- | --- |
 | `src/sparseengine/engine/cache_manager/methods/deltakv_less_memory.py` | 体量很大的 direct-residual/full-layer-KIVI/static-graph 实现。 | 将其视为多个逻辑区域：allocation、prefill staging、full-layer KIVI、sparse raw/ref view、static decode plan、reconstruction/writeback。围绕改动区域添加测试。 |
-| `src/sparseengine/engine/cache_manager/methods/deltakv.py` | Compressor-backed V4 path 同时包含 clustering、latent storage、full pool、staging、reconstruction 和 graph hook。 | 避免外观性修改；改动时运行有针对性的原生 runtime 和 kernel 测试。 |
+| `src/sparseengine/engine/cache_manager/methods/deltakv_runtime.py`, `deltakv_base.py` | Runtime 将 chain 和 CUDA Graph 生命周期接入基于 compressor 的缓存，base 负责 allocation、staging 和 reconstruction。 | 针对改动路径运行原生 runtime 和 kernel 测试。 |
 | `src/sparseengine/engine/sparse_methods/dynamic.py` | OmniKV 与 DeltaKV 共用观察层打分，但选择结果和物理缓存格式不同。 | 保持共同的打分流程；缓存池和数据重建仍由各自 CacheManager 负责。 |
 | `src/sparseengine/engine/sparse_methods/snapkv.py` | SnapKV 与 PyramidKV 共用打分压缩流程，但逐层预算和触发条件不同。 | 只复用确实相同的流程，保留各方法自己的边界行为。 |
 | `src/sparseengine/layers/attention.py` | 文件不大，但所有方法都经过它，因此影响范围很大。 | 保持与方法无关。优先增加通用 CacheManager hook，不要直接增加方法分支。 |
@@ -182,5 +187,5 @@ CUDA_VISIBLE_DEVICES=<GPU> PYTHONPATH=$PWD:$PWD/src python \
 1. 在 cache-manager 创建过程针对 DeltaKV variant 修改 `config.sparse_method` 之前，增加 immutable `requested_sparse_method` 或 run-info 字段，使 log 和 artifact 更易解释。
 2. 明确 cache manager 中的 RoPE 所有权。Qwen3 theta/dtype 修复说明 cache manager 需要清晰持有 RoPE 或相关 position module。
 3. 让仓库文档专注于稳定 contract 和 runbook，不要添加本地 experiment ledger。
-4. 在功能改动触及具体区域前，不要拆分巨大的 DeltaKV cache manager。拆分时，应分别保留 allocation、staging、graph metadata 和 reconstruction 测试。
+4. 修改 DeltaKV 的 allocation、staging、graph metadata 或 reconstruction 时，保留相应的测试覆盖。
 5. 方法 alias、graph support 或 public 参数变化时，保持 `docs/zh/configuration/runtime-parameter-semantics.md` 同步。

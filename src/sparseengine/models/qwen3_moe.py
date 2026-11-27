@@ -172,8 +172,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
             local_hit_count = local_mask.sum()
             self.debug_last_local_hit_count = (
                 local_hit_count
-                if torch.cuda.is_available()
-                and torch.cuda.is_current_stream_capturing()
+                if device_runtime.is_stream_capturing()
                 else int(local_hit_count.item())
             )
 

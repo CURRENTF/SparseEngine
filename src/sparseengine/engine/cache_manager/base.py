@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import hashlib
 from collections import deque
 from dataclasses import dataclass, fields, is_dataclass
@@ -22,6 +21,7 @@ from sparseengine.engine.prefill import (
     PREFILL_EXECUTION_RAW_OFFLOAD,
 )
 from sparseengine.engine.sequence import Sequence
+from sparseengine.env import allow_large_prefill_chunk
 from sparseengine.method_registry import (
     SUPPORTED_SPARSE_METHODS,
     decode_graph_path_id,
@@ -30,6 +30,7 @@ from sparseengine.method_registry import (
 )
 from sparseengine.kernels.triton.store_kvcache import store_kvcache
 import sparseengine.platforms as platforms
+from sparseengine.platforms import device_runtime
 from sparseengine.models.layout import resolve_attention_qk_head_dim
 from sparseengine.utils.log import logger, log_level
 from sparseengine.utils.profiler import profiler
@@ -500,6 +501,9 @@ class CacheManager(ABC):
         self._raw_offload_prefill_phases: dict[int, bool] = {}
         self._attention_key_materializers: dict[int, AttentionKeyMaterializer] = {}
 
+    def load_external_assets(self) -> None:
+        """Load method-specific assets after model layers have been bound."""
+
     def synchronize_prefix_cache_delete_plan(
         self,
         local_plan: dict[str, object],
@@ -531,7 +535,7 @@ class CacheManager(ABC):
         platform = getattr(self, "platform", None)
         if platform is not None:
             return platform.is_stream_capturing()
-        return bool(torch.cuda.is_available() and torch.cuda.is_current_stream_capturing())
+        return device_runtime.is_stream_capturing()
 
     @staticmethod
     def create(
@@ -671,7 +675,7 @@ class CacheManager(ABC):
             hf_config, total_memory_bytes=total, tensor_parallel_size=self.tp_size,
             gpu_memory_utilization=config.gpu_memory_utilization,
         )
-        allow_large_prefill_chunk = os.getenv("SPARSEENGINE_ALLOW_LARGE_PREFILL_CHUNK", "0") == "1"
+        allow_large_chunk = allow_large_prefill_chunk()
         prefill_policy = getattr(config, "prefill_schedule_policy", None)
         if estimated_max_tokens <= 0:
             raise RuntimeError(
@@ -692,6 +696,13 @@ class CacheManager(ABC):
                 f"engine_prefill_chunk_size={engine_prefill_chunk_size}, "
                 f"long_prefill_offload_threshold={long_prefill_offload_threshold}."
             )
+        if not hasattr(config, "requested_engine_prefill_chunk_size"):
+            config.requested_engine_prefill_chunk_size = engine_prefill_chunk_size
+        if not hasattr(config, "requested_long_prefill_offload_threshold"):
+            config.requested_long_prefill_offload_threshold = long_prefill_offload_threshold
+        if not hasattr(config, "requested_max_num_batched_tokens"):
+            config.requested_max_num_batched_tokens = int(config.max_num_batched_tokens)
+
         if (
             prefill_policy == "long_bs1full_short_batch"
             and long_prefill_offload_threshold > estimated_max_tokens
@@ -702,7 +713,7 @@ class CacheManager(ABC):
                 f"estimated_max_tokens={estimated_max_tokens} "
                 f"(prefill_schedule_policy={prefill_policy!r})"
             )
-            if allow_large_prefill_chunk:
+            if allow_large_chunk:
                 logger.warning(
                     "{}; continuing because SPARSEENGINE_ALLOW_LARGE_PREFILL_CHUNK=1. "
                     "This is an explicit experiment override and may OOM.",
@@ -721,7 +732,7 @@ class CacheManager(ABC):
                     estimated_max_tokens,
                 )
 
-        if estimated_max_tokens < config.max_num_batched_tokens and not allow_large_prefill_chunk:
+        if estimated_max_tokens < config.max_num_batched_tokens and not allow_large_chunk:
             logger.warning(
                 f"Estimated max_num_batched_tokens ({estimated_max_tokens}) is smaller than config "
                 f"({config.max_num_batched_tokens}). Updating to avoid OOM."

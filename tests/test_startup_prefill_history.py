@@ -4,15 +4,43 @@ import pytest
 import torch
 
 from glm_test_helpers import _glm_config, _single_rank_parallel_context
+from sparseengine.engine.cache_manager.head_slots import HeadSlotCacheManager
 from sparseengine.engine.cache_manager.storage import (
     ExplicitKVStorage,
     HeterogeneousExplicitKVStorage,
     MlaLatentStorage,
 )
 from sparseengine.engine.startup import prefill_history
+from sparseengine.models.layout import RuntimeLayout
 from sparseengine.platforms.cpu import CpuPlatform
 from sparseengine.platforms.interface import AllocatorStats
 from sparseengine.utils.context import get_context, set_context
+
+
+def test_head_slot_history_keeps_requested_configuration_and_slot_units(monkeypatch):
+    monkeypatch.setattr("sparseengine.platforms._current_platform", CpuPlatform())
+    config = SimpleNamespace(
+        sparse_method="snapkv",
+        prefill_sparse_method="snapkv",
+        head_slot_budgets=[8, 8],
+        num_kvcache_slots=12,
+        kv_cache_layout="head_slots",
+        attention_cache_layout="explicit_kv",
+        runtime_layout=RuntimeLayout.dense(2),
+        hf_config=SimpleNamespace(
+            num_hidden_layers=2, num_key_value_heads=2, head_dim=16, dtype=torch.float32,
+        ),
+        max_model_len=16,
+        max_num_seqs_in_gpu=2,
+    )
+    owner = object.__new__(HeadSlotCacheManager)
+    history = owner.create_prefill_history_manager(config, _single_rank_parallel_context())
+
+    assert (config.sparse_method, config.prefill_sparse_method) == ("snapkv", "snapkv")
+    assert config.head_slot_budgets == [8, 8]
+    assert config.num_kvcache_slots == 12
+    assert not history.compression_enabled
+    assert history.config.num_kvcache_slots == 24
 
 
 @pytest.mark.parametrize("layout", ["explicit", "mla", "heterogeneous"])

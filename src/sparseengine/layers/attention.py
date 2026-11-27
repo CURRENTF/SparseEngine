@@ -1,10 +1,13 @@
-import os
-
 import torch
 from torch import nn
 
 from sparseengine.engine.cache_manager import ExplicitKVPayload
-from sparseengine.layers.attention_backend import TritonAttentionBackend
+from sparseengine.env import debug_decode_bounds_enabled
+from sparseengine.layers.attention_backend import (
+    TritonAttentionBackend,
+    debug_check_prefill_bounds,
+    maybe_run_fake_prefill,
+)
 from sparseengine.operators.decode_attention import (
     PreparedDecodeAttentionLaunchOp,
     PreparedDecodeAttentionOp,
@@ -14,6 +17,7 @@ from sparseengine.operators.prefill_attention import (
     PrefillAttentionRunResult,
     PreparedPrefillAttentionOp,
 )
+from sparseengine.platforms import device_runtime
 from sparseengine.utils.context import get_context
 
 from sparseengine.engine.sparse_controller import SparseController
@@ -36,11 +40,16 @@ class Attention(nn.Module):
         self.head_dim = head_dim
         self.scale = scale
         self.num_kv_heads = num_kv_heads
-        self.attention_backend = TritonAttentionBackend()
+        self.attention_backend = None
         self.full_attention_provider = None
         self.prefill_op = prefill_op
         self.decode_op = decode_op
         self.decode_launch_op = decode_launch_op
+
+    def _get_attention_backend(self):
+        if self.attention_backend is None:
+            self.attention_backend = TritonAttentionBackend()
+        return self.attention_backend
 
     def forward(
         self,
@@ -80,12 +89,17 @@ class Attention(nn.Module):
                 max_context_len = prefill_meta.max_context_len
                 if max_context_len is not None:
                     max_input_len = int(max_context_len)
-                elif torch.cuda.is_available() and torch.cuda.is_current_stream_capturing():
+                elif device_runtime.is_stream_capturing():
                     max_input_len = int(prefill_meta.active_slots.shape[1])
                 else:
                     max_input_len = prefill_meta.context_lens.max().item()
 
-                fake_output = self.attention_backend.maybe_run_fake_prefill(
+                backend = self.attention_backend
+                fake_prefill = (
+                    backend.maybe_run_fake_prefill if backend is not None
+                    else maybe_run_fake_prefill
+                )
+                fake_output = fake_prefill(
                     q,
                     prefill_view,
                     chunk_lens=chunk_lens,
@@ -95,7 +109,7 @@ class Attention(nn.Module):
                 if fake_output is not None:
                     o = fake_output
                 elif self.prefill_op is None:
-                    o = self.attention_backend.run_prefill(
+                    o = self._get_attention_backend().run_prefill(
                         q,
                         prefill_view,
                         b_start_loc=b_start_loc,
@@ -103,7 +117,11 @@ class Attention(nn.Module):
                         max_input_len=max_input_len,
                     )
                 else:
-                    self.attention_backend.debug_check_prefill_bounds(
+                    check_bounds = (
+                        backend.debug_check_prefill_bounds if backend is not None
+                        else debug_check_prefill_bounds
+                    )
+                    check_bounds(
                         q,
                         prefill_view,
                         chunk_lens=chunk_lens,
@@ -159,11 +177,8 @@ class Attention(nn.Module):
 
                 if (
                     decode_meta.active_slots.dim() == 2
-                    and os.environ.get("SENGINE_DEBUG_DECODE_BOUNDS", "0") == "1"
-                    and not (
-                        torch.cuda.is_available()
-                        and torch.cuda.is_current_stream_capturing()
-                    )
+                    and debug_decode_bounds_enabled()
+                    and not device_runtime.is_stream_capturing()
                 ):
                     slot_table_len = decode_meta.slot_table_token_capacity
                     actual_max_len = (
@@ -230,8 +245,9 @@ class Attention(nn.Module):
                     num_seq_blocks = (
                         max_len_in_batch + block_seq - 1
                     ) // block_seq
+                    backend = self._get_attention_backend()
                     workspace_provider = getattr(
-                        self.attention_backend,
+                        backend,
                         "get_decode_workspace",
                         None,
                     )
@@ -251,7 +267,7 @@ class Attention(nn.Module):
                             self.head_dim,
                             q.device,
                         )
-                    o = self.attention_backend.run_decode(
+                    o = backend.run_decode(
                         q,
                         decode_view,
                         mid_o=mid_o,

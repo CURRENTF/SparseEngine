@@ -13,6 +13,7 @@ from sparseengine.operators.indexed_host_copy import (
     scatter_prefill_current,
     gather_rows,
 )
+from sparseengine.platforms import device_runtime
 from sparseengine.utils.context import get_context
 
 from .capacity import fit_omnikv_host_slots, plan_omnikv_pools
@@ -159,9 +160,11 @@ class OmniKVCacheManager(StandardCacheManager):
         self.selected_rows = torch.arange(
             self.max_buffer_rows, dtype=torch.int32, device=self.device
         )
-        self.prefetch_stream = torch.cuda.Stream(device=self.device)
-        self.selection_done = torch.cuda.Event()
-        self.layer_ready = {i: torch.cuda.Event() for i in self.selected_staging}
+        self.prefetch_stream = device_runtime.new_stream(self.device)
+        if self.prefetch_stream is None:
+            raise RuntimeError("OmniKV offload requires device streams.")
+        self.selection_done = device_runtime.new_event(self.device)
+        self.layer_ready = {i: device_runtime.new_event(self.device) for i in self.selected_staging}
         self._selection_pending = False
         if not self.config.prefill_sparse_method:
             next_layer = None
@@ -270,8 +273,8 @@ class OmniKVCacheManager(StandardCacheManager):
 
     @contextmanager
     def selection_stream(self):
-        self.prefetch_stream.wait_stream(torch.cuda.current_stream(self.device))
-        with torch.cuda.stream(self.prefetch_stream):
+        self.prefetch_stream.wait_stream(device_runtime.current_stream(self.device))
+        with device_runtime.stream_context(self.prefetch_stream):
             yield
 
     def prefetch_selections(self, selections):
@@ -350,7 +353,7 @@ class OmniKVCacheManager(StandardCacheManager):
             )
         kv_idx = self.kv_layer_index(layer_idx)
         storage = self.attention_cache_storage
-        stream = torch.cuda.current_stream(self.device)
+        stream = device_runtime.current_stream(self.device)
         if kv_idx in storage.full_layers:
             # The next observer reuses the shared raw score buffer.
             if self._selection_pending:
@@ -422,7 +425,7 @@ class OmniKVCacheManager(StandardCacheManager):
             )
         prefetched = self._prefill_prefetched_layer == layer_idx
         if prefetched:
-            torch.cuda.current_stream(self.device).wait_event(self.layer_ready[kv_idx])
+            device_runtime.current_stream(self.device).wait_event(self.layer_ready[kv_idx])
             self._prefill_prefetched_layer = None
         for component, (current, destination) in enumerate(
             zip((k_current, v_current), self.prefill_staging)
@@ -493,5 +496,5 @@ class OmniKVCacheManager(StandardCacheManager):
     def on_forward_end(self, seqs, is_prefill):
         if self.offload_enabled:
             # Join every captured fork and protect staging before the next step.
-            torch.cuda.current_stream(self.device).wait_stream(self.prefetch_stream)
+            device_runtime.current_stream(self.device).wait_stream(self.prefetch_stream)
         return super().on_forward_end(seqs, is_prefill)

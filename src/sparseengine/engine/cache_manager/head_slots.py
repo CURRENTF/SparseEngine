@@ -1,5 +1,6 @@
 """Exclusive chain cache with independently allocated KV-head slots."""
 
+from copy import copy
 from dataclasses import dataclass
 
 import numpy as np
@@ -463,6 +464,7 @@ class HeadSlotCacheManager(CacheManager):
         return int(self.config.num_kvcache_slots) // self.num_kv_heads
 
     def create_prefill_history_manager(self, config, parallel_context):
+        config = copy(config)
         config.sparse_method, config.prefill_sparse_method = "", None
         config.head_slot_budgets = None
         return HeadSlotPrefillHistoryCacheManager(config, parallel_context)

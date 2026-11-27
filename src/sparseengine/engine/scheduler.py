@@ -1,7 +1,7 @@
-import os
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 from sparseengine.config import Config
 from sparseengine.engine.prefill import (
@@ -12,9 +12,18 @@ from sparseengine.engine.prefill import (
 )
 from sparseengine.engine.sequence import Sequence, SequenceStatus
 from sparseengine.engine.runtime_state import MemoryOracle
+from sparseengine.env import debug_slots_enabled
 from sparseengine.sampling_params import resolve_eos_token_ids
 from sparseengine.utils.log import logger
 from sparseengine.utils.profiler import cpu_timing
+
+
+@dataclass
+class _PrefillFailures:
+    deferred_prompt: tuple[Sequence, str, int, int] | None = None
+    atomic_step: tuple[Sequence, int, int] | None = None
+    capacity: tuple[Sequence, int, int, int] | None = None
+    final_window: tuple[Sequence, int, int] | None = None
 
 
 class Scheduler:
@@ -376,7 +385,7 @@ class Scheduler:
                 f"decode_progress_checkpoint={victim.decode_progress_checkpoint} "
                 f"free_slots={physical_free_count} reserved_prefill={reserved_prefill}."
             )
-        debug_slots = os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1"
+        debug_slots = debug_slots_enabled()
         if debug_slots:
             logger.info(
                 "preempt seq_id={} prompt_len={} num_tokens={} prefetched={} free_slots_before={} waiting_before={} decoding_before={}",
@@ -534,16 +543,7 @@ class Scheduler:
     def _schedule_impl(
         self, *, allow_prefill_reclaim: bool = True, allow_decode_reclaim: bool = True,
     ) -> tuple[list[Sequence], bool, list[Sequence]]:
-        """
-        核心调度逻辑。
-        返回：(本次要运行的序列列表, 是否是 Prefill 阶段, 本次被抢占的序列列表)
-        
-        注意：目前为了简化算子实现，单次 step 不支持 Prefill 和 Decode 混合。
-        """
-        scheduled_seqs = []
-        preempted_seqs = []
-        num_batched_seqs = 0
-        num_batched_tokens = 0
+        """Select one prefill or decode batch, reclaiming capacity when needed."""
         decode_reservation_failure = self.memory_oracle.reserve_decode_windows(self.decoding, self.waiting)
         if (decode_reservation_failure is not None and allow_decode_reclaim
                 and self.decode_capacity_reclaimer is not None):
@@ -552,62 +552,99 @@ class Scheduler:
         if decode_reservation_failure is not None and len(self.decoding) > 1:
             self.decoding.remove(decode_reservation_failure)
             return self._preempt_decode_victim(
-                decode_reservation_failure, scheduled_seqs, preempted_seqs,
+                decode_reservation_failure, [], [],
                 physical_free_count=self.memory_oracle.num_free_slots,
                 reserved_prefill=self._reserved_prefill_tokens(),
             )
 
-        # Decide decode affinity before querying unused prefill capacity.
-        self._phase_reason = "prefill_priority"
-        overdue = False
-        if self.favor_min_decoding_seqs:
-            overdue = any(time.monotonic() - since >= 60.0
-                          for since in self._prefill_wait_since.values())
-            self._phase_reason = (
-                "prefill_wait_timeout" if overdue else
-                "prefill_continue" if self.phase == "prefill" else "decode_below_threshold"
-            )
-            if self.phase == "decode" and not overdue and decode_reservation_failure is None:
-                batch = self._eligible_decode_batch()
-                if batch and (not self.waiting or len(batch) >= self.favor_min_decoding_seqs):
-                    self._phase_reason = "no_prefill" if not self.waiting else "decode_affinity"
-                    return batch, False, []
+        decode_batch, overdue = self._try_schedule_decode_affinity(decode_reservation_failure)
+        if decode_batch:
+            return decode_batch, False, []
 
-        # 逻辑可用空间计数器，用于在本轮调度中预估显存占用
         physical_free_count = self.memory_oracle.num_free_slots
         if self.waiting:
             reserved_prefill = self._reserved_prefill_tokens()
             prompt_logical_free_count = max(
-                0,
-                int(self.memory_oracle.prompt_admission_free_slots())
-                - reserved_prefill,
+                0, int(self.memory_oracle.prompt_admission_free_slots()) - reserved_prefill,
             )
-            step_free_count = int(
-                self.memory_oracle.prefill_step_free_slots()
-            )
-            admission_budgets = dict(
-                self.memory_oracle.prompt_admission_budgets(
-                    self.waiting,
-                    self.engine_prefill_chunk_size,
-                )
-            )
-            margin_batched_tokens = (
-                self.memory_oracle.prefill_batched_tokens_margin()
-            )
+            step_free_count = int(self.memory_oracle.prefill_step_free_slots())
+            admission_budgets = dict(self.memory_oracle.prompt_admission_budgets(
+                self.waiting, self.engine_prefill_chunk_size,
+            ))
+            margin_batched_tokens = self.memory_oracle.prefill_batched_tokens_margin()
         else:
-            reserved_prefill = 0
-            prompt_logical_free_count = 0
-            step_free_count = int(physical_free_count)
-            admission_budgets = {}
-            margin_batched_tokens = 0
+            reserved_prefill = prompt_logical_free_count = margin_batched_tokens = 0
+            step_free_count, admission_budgets = int(physical_free_count), {}
+        # Snapshot decode capacity before prefill selection can change it.
         decode_logical_free_count = max(0, int(self.memory_oracle.decode_step_free_slots()))
+
+        prefill_batch, failures = self._schedule_prefill_pass(
+            physical_free_count=physical_free_count, reserved_prefill=reserved_prefill,
+            prompt_logical_free_count=prompt_logical_free_count, step_free_count=step_free_count,
+            admission_budgets=admission_budgets, margin_batched_tokens=margin_batched_tokens,
+            overdue=overdue,
+        )
+        if prefill_batch:
+            return prefill_batch, True, []
+
+        # A partial prefill may free capacity before the sole decode runs.
+        if decode_reservation_failure is not None:
+            self.decoding.remove(decode_reservation_failure)
+            return self._preempt_decode_victim(
+                decode_reservation_failure, [], [],
+                physical_free_count=physical_free_count, reserved_prefill=reserved_prefill,
+            )
+
+        self._phase_reason = "prefill_unavailable" if self.waiting else "no_prefill"
+        decode_batch, blocked_decode_victim = self._schedule_decode_pass(decode_logical_free_count)
+        if decode_batch:
+            return decode_batch, False, []
+        return self._handle_empty_schedule(
+            blocked_decode_victim, failures,
+            physical_free_count=physical_free_count, reserved_prefill=reserved_prefill,
+            step_free_count=step_free_count, allow_prefill_reclaim=allow_prefill_reclaim,
+            allow_decode_reclaim=allow_decode_reclaim,
+        )
+
+    def _try_schedule_decode_affinity(
+        self, decode_reservation_failure: Sequence | None,
+    ) -> tuple[list[Sequence], bool]:
+        """Check whether decode can keep running or waiting prefill has timed out."""
+        self._phase_reason = "prefill_priority"
+        if not self.favor_min_decoding_seqs:
+            return [], False
+
+        overdue = any(
+            time.monotonic() - since >= 60.0 for since in self._prefill_wait_since.values()
+        )
+        self._phase_reason = (
+            "prefill_wait_timeout" if overdue else
+            "prefill_continue" if self.phase == "prefill" else "decode_below_threshold"
+        )
+        if self.phase == "decode" and not overdue and decode_reservation_failure is None:
+            batch = self._eligible_decode_batch()
+            if batch and (not self.waiting or len(batch) >= self.favor_min_decoding_seqs):
+                self._phase_reason = "no_prefill" if not self.waiting else "decode_affinity"
+                return batch, False
+        return [], overdue
+
+    def _schedule_prefill_pass(
+        self,
+        *,
+        physical_free_count: int,
+        reserved_prefill: int,
+        prompt_logical_free_count: int,
+        step_free_count: int,
+        admission_budgets: dict[str, int],
+        margin_batched_tokens: int,
+        overdue: bool,
+    ) -> tuple[list[Sequence], _PrefillFailures]:
+        scheduled_seqs: list[Sequence] = []
+        num_batched_tokens = 0
         prefill_allocation_budgets = (
             self._step_allocation_budgets(is_prefill=True) if self.waiting else None
         )
-        deferred_prompt_failure: tuple[Sequence, str, int, int] | None = None
-        blocked_prefill_step_failure: tuple[Sequence, int, int] | None = None
-        blocked_prefill_capacity_failure: tuple[Sequence, int, int, int] | None = None
-        blocked_final_prefill_window_failure: tuple[Sequence, int, int] | None = None
+        failures = _PrefillFailures()
         charged_shared_resources: dict[str, set[object]] = {}
 
         if overdue:
@@ -616,8 +653,6 @@ class Scheduler:
                 self.waiting, key=lambda seq: self._prefill_wait_since[seq.seq_id]
             ))
 
-        # --- 阶段 1: Prefill 调度 ---
-        # Affinity may already have selected decode above.
         prefill_mode_order: list[tuple[int, str, object]] = []
         replay_waiting = [seq for seq in self.waiting if seq.is_recompute_replay]
         if self.waiting and not (replay_waiting and self.decoding):
@@ -643,7 +678,7 @@ class Scheduler:
                         scheduled_seqs=scheduled_seqs,
                         step_free_count=step_free_count,
                         num_batched_tokens=num_batched_tokens,
-                        num_batched_seqs=num_batched_seqs,
+                        num_batched_seqs=len(scheduled_seqs),
                         margin_batched_tokens=margin_batched_tokens,
                     )
                 ):
@@ -707,160 +742,47 @@ class Scheduler:
                             min_final > 0
                             and remaining_prefill_tokens <= min_final
                             and proposed_prefill_tokens < remaining_prefill_tokens
-                            and blocked_final_prefill_window_failure is None
+                            and failures.final_window is None
                         ):
-                            blocked_final_prefill_window_failure = (
+                            failures.final_window = (
                                 seq,
                                 int(min_final),
                                 int(proposed_prefill_tokens),
                             )
-                        if candidate_step_free_count <= 0 and step_free_count > 0:
-                            if blocked_prefill_capacity_failure is None:
-                                blocked_prefill_capacity_failure = (
-                                    seq,
-                                    int(remaining_prefill_tokens),
-                                    int(candidate_step_free_count),
-                                    int(step_free_count),
-                                )
+                        if candidate_step_free_count <= 0 and step_free_count > 0 and failures.capacity is None:
+                            failures.capacity = (
+                                seq,
+                                int(remaining_prefill_tokens),
+                                int(candidate_step_free_count),
+                                int(step_free_count),
+                            )
                         if target_mode == PREFILL_EXECUTION_FULL:
                             available = min(
                                 self.max_num_batched_tokens - num_batched_tokens,
                                 candidate_step_free_count,
                             )
-                            blocked_prefill_step_failure = (seq, int(remaining_prefill_tokens), int(available))
+                            failures.atomic_step = (seq, int(remaining_prefill_tokens), int(available))
                         logger.debug(f'{can_prefill_tokens=} 结束 schedule prefill 请求')
                         self.waiting.append(seq)
                         continue
 
-                    # 逻辑显存分配检查：如果是新序列的起始，检查是否能容纳完整的 Prompt 长度。
-                    # 采用保守策略：预先逻辑占位整个 Prompt，即使后续可能会有稀疏逐出。
-                    # 只要我想尽可能地持续生成某个序列，那就应该提前都申请出来
                     if seq.num_prefilled_tokens == 0:
-                        raw_costs = self.memory_oracle.prompt_admission_costs(seq)
-                        shared_costs_fn = getattr(
-                            self.memory_oracle, "prompt_admission_shared_costs", None
+                        remaining_logical_free = self._try_admit_new_prompt(
+                            seq, scheduled_seqs, failures,
+                            physical_free_count=physical_free_count,
+                            reserved_prefill=reserved_prefill,
+                            prompt_logical_free_count=prompt_logical_free_count,
+                            admission_budgets=admission_budgets,
+                            charged_shared_resources=charged_shared_resources,
                         )
-                        shared_costs = (
-                            shared_costs_fn(seq) if callable(shared_costs_fn) else {}
-                        )
-                        costs = dict(raw_costs)
-                        for name, resources in shared_costs.items():
-                            already_charged = charged_shared_resources.get(name, set())
-                            costs[name] = int(costs.get(name, 0)) - sum(
-                                int(cost)
-                                for resource_id, cost in resources.items()
-                                if resource_id in already_charged
-                            )
-                            if costs[name] < 0:
-                                raise RuntimeError(
-                                    "Shared prompt admission costs exceed the raw budget cost: "
-                                    f"budget={name} raw={raw_costs.get(name, 0)} adjusted={costs[name]}."
-                                )
-                        failed = None
-                        for name, need in costs.items():
-                            free = int(admission_budgets.get(name, 0) or 0)
-                            if free < int(need):
-                                failed = (name, int(need), free)
-                                break
-                        if failed is not None:
-                            action = self.memory_oracle.prompt_admission_failure_action()
-                            name, need, free = failed
-                            if action == "defer":
-                                if deferred_prompt_failure is None:
-                                    deferred_prompt_failure = (seq, name, need, free)
-                                if seq.seq_id not in self._admission_defer_warned_seq_ids:
-                                    logger.warning(
-                                        "Prompt admission deferred because the current batch/KV budget is saturated. "
-                                        f"seq_id={seq.seq_id} prompt_len={seq.num_prompt_tokens} "
-                                        f"failed_budget={name} need={need} free={free} "
-                                        f"waiting={len(self.waiting) + 1} decoding={len(self.decoding)} "
-                                        f"scheduled_prefill={len(scheduled_seqs)} free_slots={physical_free_count} "
-                                        f"reserved_prefill={reserved_prefill}. "
-                                        "This usually means batch size is too large for the current KV budget."
-                                    )
-                                    if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1" and len(self.decoding) == 0:
-                                        live_seq_slots = self.memory_oracle.debug_live_seq_slots()
-                                        live_seq_items = sorted(
-                                            ((int(seq_id), int(n_slots)) for seq_id, n_slots in live_seq_slots.items()),
-                                            key=lambda x: (-x[1], x[0]),
-                                        )[:16]
-                                        waiting_seq_ids_all = [int(s.seq_id) for s in self.waiting]
-                                        decoding_seq_ids_all = [int(s.seq_id) for s in self.decoding]
-                                        scheduled_seq_ids_all = [int(s.seq_id) for s in scheduled_seqs]
-                                        known_seq_ids = (
-                                            set(waiting_seq_ids_all)
-                                            | set(decoding_seq_ids_all)
-                                            | set(scheduled_seq_ids_all)
-                                        )
-                                        zombie_seq_ids = sorted(
-                                            int(seq_id)
-                                            for seq_id in live_seq_slots
-                                            if int(seq_id) not in known_seq_ids
-                                        )[:16]
-                                        logger.info(
-                                            "defer_with_no_decoding seq_id={} need={} free={} free_slots={} reserved_prefill={} "
-                                            "scheduled_prefill={} waiting_seq_ids={} scheduled_seq_ids={} zombie_seq_ids={} "
-                                            "live_seq_slots={}",
-                                            seq.seq_id,
-                                            int(need),
-                                            int(free),
-                                            int(physical_free_count),
-                                            int(reserved_prefill),
-                                            len(scheduled_seqs),
-                                            waiting_seq_ids_all[:16],
-                                            scheduled_seq_ids_all[:16],
-                                            zombie_seq_ids,
-                                            live_seq_items,
-                                        )
-                                    self._admission_defer_warned_seq_ids.add(seq.seq_id)
-                                self.waiting.append(seq)
-                                continue
-                            self._raise_prompt_admission_failure(
-                                seq,
-                                name,
-                                need,
-                                free,
-                                physical_free_count=physical_free_count,
-                                reserved_prefill=reserved_prefill,
-                                logical_free_count=prompt_logical_free_count,
-                                admission_budgets=admission_budgets,
-                            )
-                        self._admission_defer_warned_seq_ids.discard(seq.seq_id)
-                        for name, need in costs.items():
-                            admission_budgets[name] = int(admission_budgets.get(name, 0) or 0) - int(need)
-                        # Admission hooks may acquire residency before raising.
-                        # Keep cancellation responsible for releasing that ownership.
-                        seq.status = SequenceStatus.RUNNING
-                        self.memory_oracle.on_prompt_admitted(seq, raw_costs)
-                        if int(getattr(seq, "prefix_cache_hit_len", 0) or 0) > 0:
-                            seq.num_prefilled_tokens = int(seq.prefix_cache_hit_len)
-                        logical_need = int(
-                            self.memory_oracle.prompt_logical_reservation_cost(seq)
-                        )
-                        logical_need -= sum(
-                            int(cost)
-                            for name, resources in shared_costs.items()
-                            for resource_id, cost in resources.items()
-                            if resource_id in charged_shared_resources.get(name, set())
-                        )
-                        if prompt_logical_free_count < logical_need:
-                            # Fail fast: admission budgets should already account for reserved prefill headroom.
-                            # Reaching this branch usually means a cache-manager-specific budget mismatch.
-                            raise RuntimeError(
-                                "Prompt admission budget mismatch after reservation check. "
-                                f"cache_manager={type(self.memory_oracle).__name__} prompt_len={seq.num_prompt_tokens} "
-                                f"logical_need={logical_need} logical_free={prompt_logical_free_count} "
-                                f"budgets={admission_budgets} costs={costs} "
-                                f"free_slots={physical_free_count} reserved_prefill={reserved_prefill}"
-                            )
-                        prompt_logical_free_count -= int(logical_need)
-                        for name, resources in shared_costs.items():
-                            charged_shared_resources.setdefault(name, set()).update(resources)
+                        if remaining_logical_free is None:
+                            self.waiting.append(seq)
+                            continue
+                        prompt_logical_free_count = remaining_logical_free
 
                     # 设置当前 Chunk 属性并标记状态
                     logger.debug(f'Add chunk prefill with {can_prefill_tokens} tokens.')
                     seq.current_chunk_size = can_prefill_tokens
-                    num_batched_seqs += 1
                     num_batched_tokens += can_prefill_tokens
                     prefill_reservation_cost = self.memory_oracle.prefill_step_reservation_cost(
                         seq,
@@ -875,31 +797,127 @@ class Scheduler:
 
             finally:
                 self.waiting.extendleft(reversed(skipped_prefill))
+        return scheduled_seqs, failures
 
-        # 如果有 Prefill 请求被选中，直接返回，本次 step 只跑 Prefill。
-        if scheduled_seqs:
-            return scheduled_seqs, True, []
-
-        # A partial prefill may release capacity through compaction. Give it
-        # the opportunity to finish before declaring a sole decode unable to run.
-        if decode_reservation_failure is not None:
-            self.decoding.remove(decode_reservation_failure)
-            return self._preempt_decode_victim(
-                decode_reservation_failure, scheduled_seqs, preempted_seqs,
+    def _try_admit_new_prompt(
+        self,
+        seq: Sequence,
+        scheduled_seqs: list[Sequence],
+        failures: _PrefillFailures,
+        *,
+        physical_free_count: int,
+        reserved_prefill: int,
+        prompt_logical_free_count: int,
+        admission_budgets: dict[str, int],
+        charged_shared_resources: dict[str, set[object]],
+    ) -> int | None:
+        """Reserve the full prompt and return the remaining logical slots, or defer."""
+        raw_costs = self.memory_oracle.prompt_admission_costs(seq)
+        shared_costs_fn = getattr(
+            self.memory_oracle, "prompt_admission_shared_costs", None
+        )
+        shared_costs = (
+            shared_costs_fn(seq) if callable(shared_costs_fn) else {}
+        )
+        costs = dict(raw_costs)
+        for name, resources in shared_costs.items():
+            already_charged = charged_shared_resources.get(name, set())
+            costs[name] = int(costs.get(name, 0)) - sum(
+                int(cost)
+                for resource_id, cost in resources.items()
+                if resource_id in already_charged
+            )
+            if costs[name] < 0:
+                raise RuntimeError(
+                    "Shared prompt admission costs exceed the raw budget cost: "
+                    f"budget={name} raw={raw_costs.get(name, 0)} adjusted={costs[name]}."
+                )
+        failed = None
+        for name, need in costs.items():
+            free = int(admission_budgets.get(name, 0) or 0)
+            if free < int(need):
+                failed = (name, int(need), free)
+                break
+        if failed is not None:
+            action = self.memory_oracle.prompt_admission_failure_action()
+            name, need, free = failed
+            if action == "defer":
+                failure = (seq, name, need, free)
+                if failures.deferred_prompt is None:
+                    failures.deferred_prompt = failure
+                if seq.seq_id not in self._admission_defer_warned_seq_ids:
+                    logger.warning(
+                        "Prompt admission deferred because the current batch/KV budget is saturated. "
+                        f"seq_id={seq.seq_id} prompt_len={seq.num_prompt_tokens} "
+                        f"failed_budget={name} need={need} free={free} "
+                        f"waiting={len(self.waiting) + 1} decoding={len(self.decoding)} "
+                        f"scheduled_prefill={len(scheduled_seqs)} free_slots={physical_free_count} "
+                        f"reserved_prefill={reserved_prefill}. "
+                        "This usually means batch size is too large for the current KV budget."
+                    )
+                    if not self.decoding:
+                        self._log_debug_slot_snapshot(
+                            failure, scheduled_seqs,
+                            physical_free_count=physical_free_count,
+                            reserved_prefill=reserved_prefill,
+                            deadlock=False,
+                        )
+                    self._admission_defer_warned_seq_ids.add(seq.seq_id)
+                return None
+            self._raise_prompt_admission_failure(
+                seq,
+                name,
+                need,
+                free,
                 physical_free_count=physical_free_count,
                 reserved_prefill=reserved_prefill,
+                logical_free_count=prompt_logical_free_count,
+                admission_budgets=admission_budgets,
             )
+        self._admission_defer_warned_seq_ids.discard(seq.seq_id)
+        for name, need in costs.items():
+            admission_budgets[name] = int(admission_budgets.get(name, 0) or 0) - int(need)
+        # Admission hooks may acquire residency before raising.
+        # Keep cancellation responsible for releasing that ownership.
+        seq.status = SequenceStatus.RUNNING
+        self.memory_oracle.on_prompt_admitted(seq, raw_costs)
+        if int(seq.prefix_cache_hit_len or 0) > 0:
+            seq.num_prefilled_tokens = int(seq.prefix_cache_hit_len)
+        logical_need = int(
+            self.memory_oracle.prompt_logical_reservation_cost(seq)
+        )
+        logical_need -= sum(
+            int(cost)
+            for name, resources in shared_costs.items()
+            for resource_id, cost in resources.items()
+            if resource_id in charged_shared_resources.get(name, set())
+        )
+        if prompt_logical_free_count < logical_need:
+            # Fail fast: admission budgets should already account for reserved prefill headroom.
+            # Reaching this branch usually means a cache-manager-specific budget mismatch.
+            raise RuntimeError(
+                "Prompt admission budget mismatch after reservation check. "
+                f"cache_manager={type(self.memory_oracle).__name__} prompt_len={seq.num_prompt_tokens} "
+                f"logical_need={logical_need} logical_free={prompt_logical_free_count} "
+                f"budgets={admission_budgets} costs={costs} "
+                f"free_slots={physical_free_count} reserved_prefill={reserved_prefill}"
+            )
+        prompt_logical_free_count -= int(logical_need)
+        for name, resources in shared_costs.items():
+            charged_shared_resources.setdefault(name, set()).update(resources)
+        return prompt_logical_free_count
 
-        self._phase_reason = "prefill_unavailable" if self.waiting else "no_prefill"
-        # --- 阶段 2: Decode 调度 ---
-        # 只有在没有 Prefill 任务时才处理增量生成任务。
+    def _schedule_decode_pass(
+        self, decode_logical_free_count: int,
+    ) -> tuple[list[Sequence], Sequence | None]:
+        scheduled_seqs: list[Sequence] = []
         decode_scan_budget = len(self.decoding)
         decode_allocation_budgets = self._step_allocation_budgets(is_prefill=False)
         blocked_decode_victim: Sequence | None = None
         while (
             self.decoding
             and decode_scan_budget > 0
-            and num_batched_seqs < self.max_decoding_seqs
+            and len(scheduled_seqs) < self.max_decoding_seqs
         ):
             seq = self.decoding.popleft()
             decode_scan_budget -= 1
@@ -915,155 +933,24 @@ class Scheduler:
             decode_reservation_cost = int(self.memory_oracle.decode_step_reservation_cost(seq))
             if (candidate_decode_free < decode_reservation_cost
                     or self._max_step_allocation_tokens(seq, 1, decode_allocation_budgets) == 0):
-                if decode_logical_free_count > 0:
-                    if blocked_decode_victim is None:
-                        blocked_decode_victim = seq
-                    self.decoding.append(seq)
-                    continue
-                if scheduled_seqs:
-                    # The current step still has useful work. Keep this request
-                    # queued and run the partial decode batch before considering
-                    # preemption; otherwise a fourth request can fail the whole
-                    # step after three requests have already reserved its last
-                    # three writable KV slots.
-                    if blocked_decode_victim is None:
-                        blocked_decode_victim = seq
-                    self.decoding.append(seq)
+                if decode_logical_free_count <= 0 and not scheduled_seqs:
+                    blocked_decode_victim = seq
+                    self.decoding.appendleft(seq)
                     break
-                blocked_decode_victim = seq
-                self.decoding.appendleft(seq)
-                break
-            else:
-                # Reserve the cache-manager-specific decode capacity for this step.
-                decode_logical_free_count -= decode_reservation_cost
-                self._charge_step_allocations(seq, 1, decode_allocation_budgets)
-                num_batched_seqs += 1
-                scheduled_seqs.append(seq)
-                # logger.debug('Add a decode req.')
+                if blocked_decode_victim is None:
+                    blocked_decode_victim = seq
+                self.decoding.append(seq)
+                if decode_logical_free_count <= 0:
+                    # Execute the partial batch before considering preemption.
+                    break
+                continue
+
+            decode_logical_free_count -= decode_reservation_cost
+            self._charge_step_allocations(seq, 1, decode_allocation_budgets)
+            scheduled_seqs.append(seq)
 
         if not scheduled_seqs:
-            if blocked_decode_victim is not None:
-                # Held windows and replay tokens need no renewal, but can still
-                # lack writable KV. Reclaim IDLE chains before active owners.
-                if (allow_decode_reclaim and self.decode_capacity_reclaimer is not None
-                        and self._reclaim_decode_capacity(blocked_decode_victim) is None):
-                    return self._schedule_impl(
-                        allow_prefill_reclaim=allow_prefill_reclaim,
-                        allow_decode_reclaim=False,
-                    )
-                try:
-                    self.decoding.remove(blocked_decode_victim)
-                except ValueError:
-                    pass
-                return self._preempt_decode_victim(
-                    blocked_decode_victim,
-                    scheduled_seqs,
-                    preempted_seqs,
-                    physical_free_count=physical_free_count,
-                    reserved_prefill=reserved_prefill,
-                )
-            if (
-                not self.decoding and self.waiting and allow_prefill_reclaim
-                and self.prefill_capacity_reclaimer is not None
-                and (deferred_prompt_failure is not None or step_free_count <= 0
-                     or blocked_prefill_capacity_failure is not None)
-            ):
-                if getattr(self, "_async_inflight", 0):
-                    from sparseengine.engine.async_scheduling.execution import AsyncDrainRequired
-                    raise AsyncDrainRequired("Prefill capacity reclaim requires completed in-flight KV users")
-                # A row/reservation can block one admitted chain even while
-                # global append capacity remains available.
-                failure = deferred_prompt_failure or blocked_prefill_capacity_failure
-                seq = failure[0] if failure else self.waiting[0]
-                if self.prefill_capacity_reclaimer(seq):
-                    return self._schedule_impl(
-                        allow_prefill_reclaim=False,
-                        allow_decode_reclaim=allow_decode_reclaim,
-                    )
-            if blocked_prefill_step_failure is not None and not self.decoding:
-                seq, need, free = blocked_prefill_step_failure
-                raise RuntimeError(
-                    "Prefill candidate requires an atomic prefill step but cannot fit. "
-                    f"cache_manager={type(self.memory_oracle).__name__} "
-                    f"seq_id={seq.seq_id} prompt_len={seq.num_prompt_tokens} "
-                    f"remaining_prefill_tokens={need} available_step_tokens={free} "
-                    f"engine_prefill_chunk_size={self.engine_prefill_chunk_size} "
-                    f"max_num_batched_tokens={self.max_num_batched_tokens}. "
-                    "Increase the raw KV budget / max_num_batched_tokens or reduce short-batch size."
-                )
-            if blocked_final_prefill_window_failure is not None and not self.decoding:
-                seq, min_final, available = blocked_final_prefill_window_failure
-                raise RuntimeError(
-                    "Final prefill score window cannot fit in the effective step budget. "
-                    f"cache_manager={type(self.memory_oracle).__name__} "
-                    f"seq_id={seq.seq_id} prompt_len={seq.num_prompt_tokens} "
-                    f"remaining_prefill_tokens={seq.num_prompt_tokens - seq.num_prefilled_tokens} "
-                    f"required_final_window={min_final} available_step_tokens={available} "
-                    f"engine_prefill_chunk_size={self.engine_prefill_chunk_size} "
-                    f"max_num_batched_tokens={self.max_num_batched_tokens}."
-                )
-            if blocked_prefill_capacity_failure is not None and not self.decoding:
-                seq, need, seq_free, global_free = blocked_prefill_capacity_failure
-                raise RuntimeError(
-                    "No prefill candidate can use the remaining cache capacity. "
-                    f"cache_manager={type(self.memory_oracle).__name__} seq_id={seq.seq_id} "
-                    f"prompt_len={seq.num_prompt_tokens} remaining_prefill_tokens={need} "
-                    f"candidate_step_free={seq_free} global_step_free={global_free} "
-                    f"free_slots={physical_free_count} reserved_prefill={reserved_prefill} "
-                    f"waiting={len(self.waiting)} decoding={len(self.decoding)}. "
-                    "This usually means the only remaining capacity belongs to another sequence's partial page; "
-                    "reduce concurrency or free a decode sequence first."
-                )
-            if deferred_prompt_failure is not None and not self.decoding:
-                seq, name, need, free = deferred_prompt_failure
-                if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1":
-                    waiting_seq_ids_all = [int(s.seq_id) for s in self.waiting]
-                    decoding_seq_ids_all = [int(s.seq_id) for s in self.decoding]
-                    scheduled_seq_ids_all = [int(s.seq_id) for s in scheduled_seqs]
-                    live_seq_slots = self.memory_oracle.debug_live_seq_slots()
-                    live_seq_items = sorted(
-                        ((int(seq_id), int(n_slots)) for seq_id, n_slots in live_seq_slots.items()),
-                        key=lambda x: (-x[1], x[0]),
-                    )[:16]
-                    waiting_prompt_lens = [int(s.num_prompt_tokens) for s in list(self.waiting)[:8]]
-                    known_seq_ids = (
-                        set(waiting_seq_ids_all)
-                        | set(decoding_seq_ids_all)
-                        | set(scheduled_seq_ids_all)
-                    )
-                    zombie_seq_ids = sorted(
-                        int(seq_id)
-                        for seq_id in live_seq_slots
-                        if int(seq_id) not in known_seq_ids
-                    )[:16]
-                    logger.info(
-                        "deferred_deadlock seq_id={} failed_budget={} need={} free={} free_slots={} reserved_prefill={} "
-                        "waiting_prompt_lens={} waiting_seq_ids={} decoding_seq_ids={} scheduled_seq_ids={} "
-                        "zombie_seq_ids={} live_seq_slots={}",
-                        seq.seq_id,
-                        name,
-                        int(need),
-                        int(free),
-                        int(physical_free_count),
-                        int(reserved_prefill),
-                        waiting_prompt_lens,
-                        waiting_seq_ids_all[:16],
-                        decoding_seq_ids_all[:16],
-                        scheduled_seq_ids_all[:16],
-                        zombie_seq_ids,
-                        live_seq_items,
-                    )
-                raise RuntimeError(
-                    "All prompt admissions were deferred and no runnable work remains. "
-                    f"cache_manager={type(self.memory_oracle).__name__} seq_id={seq.seq_id} "
-                    f"prompt_len={seq.num_prompt_tokens} failed_budget={name} need={need} free={free} "
-                    f"free_slots={physical_free_count} reserved_prefill={reserved_prefill} "
-                    f"waiting={len(self.waiting)} decoding={len(self.decoding)}. "
-                    "Reduce batch size/max_num_seqs_in_batch/max_num_batched_tokens, "
-                    "or shorten the prompt / generation budget."
-                )
-            return [], False, preempted_seqs
-            
+            return scheduled_seqs, blocked_decode_victim
         # 将被选中的 Decode 序列放回 running 队列以保持顺序
         self.decoding.extendleft(reversed(scheduled_seqs))
         if blocked_decode_victim is not None:
@@ -1076,7 +963,176 @@ class Scheduler:
             except ValueError:
                 pass
             self.decoding.appendleft(blocked_decode_victim)
-        return scheduled_seqs, False, preempted_seqs
+        return scheduled_seqs, blocked_decode_victim
+
+    def _handle_empty_schedule(
+        self,
+        blocked_decode_victim: Sequence | None,
+        failures: _PrefillFailures,
+        *,
+        physical_free_count: int,
+        reserved_prefill: int,
+        step_free_count: int,
+        allow_prefill_reclaim: bool,
+        allow_decode_reclaim: bool,
+    ) -> tuple[list[Sequence], bool, list[Sequence]]:
+        if blocked_decode_victim is not None:
+            # Held windows and replay tokens need no renewal, but can still
+            # lack writable KV. Reclaim IDLE chains before active owners.
+            if (allow_decode_reclaim and self.decode_capacity_reclaimer is not None
+                    and self._reclaim_decode_capacity(blocked_decode_victim) is None):
+                return self._schedule_impl(
+                    allow_prefill_reclaim=allow_prefill_reclaim,
+                    allow_decode_reclaim=False,
+                )
+            try:
+                self.decoding.remove(blocked_decode_victim)
+            except ValueError:
+                pass
+            return self._preempt_decode_victim(
+                blocked_decode_victim,
+                [],
+                [],
+                physical_free_count=physical_free_count,
+                reserved_prefill=reserved_prefill,
+            )
+        if (
+            not self.decoding and self.waiting and allow_prefill_reclaim
+            and self.prefill_capacity_reclaimer is not None
+            and (failures.deferred_prompt is not None or step_free_count <= 0
+                 or failures.capacity is not None)
+        ):
+            if getattr(self, "_async_inflight", 0):
+                from sparseengine.engine.async_scheduling.execution import AsyncDrainRequired
+                raise AsyncDrainRequired("Prefill capacity reclaim requires completed in-flight KV users")
+            # A row/reservation can block one admitted chain even while
+            # global append capacity remains available.
+            failure = failures.deferred_prompt or failures.capacity
+            seq = failure[0] if failure else self.waiting[0]
+            if self.prefill_capacity_reclaimer(seq):
+                return self._schedule_impl(
+                    allow_prefill_reclaim=False,
+                    allow_decode_reclaim=allow_decode_reclaim,
+                )
+        if self.decoding:
+            return [], False, []
+        if failures.atomic_step is not None:
+            seq, need, free = failures.atomic_step
+            raise RuntimeError(
+                "Prefill candidate requires an atomic prefill step but cannot fit. "
+                f"cache_manager={type(self.memory_oracle).__name__} "
+                f"seq_id={seq.seq_id} prompt_len={seq.num_prompt_tokens} "
+                f"remaining_prefill_tokens={need} available_step_tokens={free} "
+                f"engine_prefill_chunk_size={self.engine_prefill_chunk_size} "
+                f"max_num_batched_tokens={self.max_num_batched_tokens}. "
+                "Increase the raw KV budget / max_num_batched_tokens or reduce short-batch size."
+            )
+        if failures.final_window is not None:
+            seq, min_final, available = failures.final_window
+            raise RuntimeError(
+                "Final prefill score window cannot fit in the effective step budget. "
+                f"cache_manager={type(self.memory_oracle).__name__} "
+                f"seq_id={seq.seq_id} prompt_len={seq.num_prompt_tokens} "
+                f"remaining_prefill_tokens={seq.num_prompt_tokens - seq.num_prefilled_tokens} "
+                f"required_final_window={min_final} available_step_tokens={available} "
+                f"engine_prefill_chunk_size={self.engine_prefill_chunk_size} "
+                f"max_num_batched_tokens={self.max_num_batched_tokens}."
+            )
+        if failures.capacity is not None:
+            seq, need, seq_free, global_free = failures.capacity
+            raise RuntimeError(
+                "No prefill candidate can use the remaining cache capacity. "
+                f"cache_manager={type(self.memory_oracle).__name__} seq_id={seq.seq_id} "
+                f"prompt_len={seq.num_prompt_tokens} remaining_prefill_tokens={need} "
+                f"candidate_step_free={seq_free} global_step_free={global_free} "
+                f"free_slots={physical_free_count} reserved_prefill={reserved_prefill} "
+                f"waiting={len(self.waiting)} decoding={len(self.decoding)}. "
+                "This usually means the only remaining capacity belongs to another sequence's partial page; "
+                "reduce concurrency or free a decode sequence first."
+            )
+        if failures.deferred_prompt is not None:
+            seq, name, need, free = failures.deferred_prompt
+            self._log_debug_slot_snapshot(
+                failures.deferred_prompt, [],
+                physical_free_count=physical_free_count, reserved_prefill=reserved_prefill,
+                deadlock=True,
+            )
+            raise RuntimeError(
+                "All prompt admissions were deferred and no runnable work remains. "
+                f"cache_manager={type(self.memory_oracle).__name__} seq_id={seq.seq_id} "
+                f"prompt_len={seq.num_prompt_tokens} failed_budget={name} need={need} free={free} "
+                f"free_slots={physical_free_count} reserved_prefill={reserved_prefill} "
+                f"waiting={len(self.waiting)} decoding={len(self.decoding)}. "
+                "Reduce batch size/max_num_seqs_in_batch/max_num_batched_tokens, "
+                "or shorten the prompt / generation budget."
+            )
+        return [], False, []
+
+    def _log_debug_slot_snapshot(
+        self,
+        failure: tuple[Sequence, str, int, int],
+        scheduled_seqs: list[Sequence],
+        *,
+        physical_free_count: int,
+        reserved_prefill: int,
+        deadlock: bool,
+    ) -> None:
+        if not debug_slots_enabled():
+            return
+        seq, name, need, free = failure
+        waiting_seq_ids_all = [int(s.seq_id) for s in self.waiting]
+        decoding_seq_ids_all = [int(s.seq_id) for s in self.decoding]
+        scheduled_seq_ids_all = [int(s.seq_id) for s in scheduled_seqs]
+        live_seq_slots = self.memory_oracle.debug_live_seq_slots()
+        live_seq_items = sorted(
+            ((int(seq_id), int(n_slots)) for seq_id, n_slots in live_seq_slots.items()),
+            key=lambda x: (-x[1], x[0]),
+        )[:16]
+        known_seq_ids = (
+            set(waiting_seq_ids_all)
+            | set(decoding_seq_ids_all)
+            | set(scheduled_seq_ids_all)
+        )
+        zombie_seq_ids = sorted(
+            int(seq_id)
+            for seq_id in live_seq_slots
+            if int(seq_id) not in known_seq_ids
+        )[:16]
+        if deadlock:
+            waiting_prompt_lens = [int(s.num_prompt_tokens) for s in list(self.waiting)[:8]]
+            logger.info(
+                "deferred_deadlock seq_id={} failed_budget={} need={} free={} free_slots={} reserved_prefill={} "
+                "waiting_prompt_lens={} waiting_seq_ids={} decoding_seq_ids={} scheduled_seq_ids={} "
+                "zombie_seq_ids={} live_seq_slots={}",
+                seq.seq_id,
+                name,
+                int(need),
+                int(free),
+                int(physical_free_count),
+                int(reserved_prefill),
+                waiting_prompt_lens,
+                waiting_seq_ids_all[:16],
+                decoding_seq_ids_all[:16],
+                scheduled_seq_ids_all[:16],
+                zombie_seq_ids,
+                live_seq_items,
+            )
+            return
+        logger.info(
+            "defer_with_no_decoding seq_id={} need={} free={} free_slots={} reserved_prefill={} "
+            "scheduled_prefill={} waiting_seq_ids={} scheduled_seq_ids={} zombie_seq_ids={} "
+            "live_seq_slots={}",
+            seq.seq_id,
+            int(need),
+            int(free),
+            int(physical_free_count),
+            int(reserved_prefill),
+            len(scheduled_seqs),
+            waiting_seq_ids_all[:16],
+            scheduled_seq_ids_all[:16],
+            zombie_seq_ids,
+            live_seq_items,
+        )
 
     @cpu_timing.timed
     def postprocess(

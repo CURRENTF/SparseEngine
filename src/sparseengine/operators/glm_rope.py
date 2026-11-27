@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import torch
 
+from sparseengine.platforms import device_runtime
 import sparseengine.platforms as platforms
 from sparseengine.operators.registry import (
     OpRegistry, OpResolver, PortfolioPolicy, ProviderRole, SupportResult,
@@ -87,7 +88,7 @@ class TritonGlmRopeProvider(GlmRopeProvider):
 def resolve_glm_rope_provider(*, activation_dtype, heads, rotary_dim, device_index=None):
     platform = platforms.current_platform
     if device_index is None:
-        device_index = torch.cuda.current_device() if platform.is_cuda_alike() else 0
+        device_index = device_runtime.current_device_index(platform=platform)
     spec = GlmRopeSpec(activation_dtype, int(heads), int(rotary_dim))
     return OpResolver(GLM_ROPE_REGISTRY).resolve(
         spec, platform.get_device_caps(int(device_index)), op_spec=spec,

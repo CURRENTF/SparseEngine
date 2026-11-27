@@ -5,6 +5,8 @@ from abc import abstractmethod
 import torch
 
 from sparseengine.engine.cache_manager import SparseSelection
+from sparseengine.env import env_bool
+from sparseengine.platforms import device_runtime
 from sparseengine.utils.log import logger
 from sparseengine.utils.profiler import profiler
 
@@ -276,7 +278,7 @@ class OmniKVRuntime(DynamicSelectionRuntime):
         buffers = self._omnikv_decode_selection_buffers.get(key)
         if buffers is not None:
             return buffers
-        if device.type == "cuda" and torch.cuda.is_current_stream_capturing():
+        if device.type == "cuda" and device_runtime.is_stream_capturing():
             raise RuntimeError(
                 "OmniKV decode CUDA graph capture requires selection buffers "
                 "to be allocated by the eager capture warmup."
@@ -518,6 +520,16 @@ class OmniKVRuntime(DynamicSelectionRuntime):
 
 
 class DeltaKVRuntime(DynamicSelectionRuntime):
+    def __init__(self, config, cache_manager):
+        super().__init__(config, cache_manager)
+        self.dynamic_deltakv_topk_tiebreak = env_bool(
+            "SPARSEENGINE_DELTAKV_DETERMINISTIC_TOPK_TIEBREAK",
+            strict=True,
+        )
+        self.sparse_config["dynamic_deltakv_topk_tiebreak"] = (
+            self.dynamic_deltakv_topk_tiebreak
+        )
+
     def build_prefill_selection(
         self,
         request: PrefillSelectionRequest,
@@ -576,7 +588,7 @@ class DeltaKVRuntime(DynamicSelectionRuntime):
             active_compressed_indices=state.active_compressed_indices,
             global_req_indices=state.global_req_indices,
             chunk_lens=chunk_lens,
-            release_temp_slots=state.deltakv_free_temp_slots,
+            release_temp_slots=state.release_temp_slots,
         )
 
     def _normalize_decode_scores(
@@ -758,7 +770,7 @@ class DeltaKVRuntime(DynamicSelectionRuntime):
                 target_state.context_lens = obs_state.context_lens
                 target_state.req_indices = obs_state.req_indices
                 target_state.global_req_indices = obs_state.req_indices
-                target_state.deltakv_free_temp_slots = (
+                target_state.release_temp_slots = (
                     layer_idx == target_layers[-1]
                 )
 

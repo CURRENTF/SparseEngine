@@ -1,28 +1,11 @@
 from __future__ import annotations
 
-import os
-
 import torch
 
 from sparseengine.engine.sequence import Sequence
+from sparseengine.env import env_bool, env_optional_str
 
 from .deltakv_less_memory import DeltaKVLessMemoryCacheManager
-
-
-_TRUE_VALUES = {"1", "true", "yes", "on"}
-_FALSE_VALUES = {"0", "false", "no", "off"}
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return bool(default)
-    normalized = value.strip().lower()
-    if normalized in _TRUE_VALUES:
-        return True
-    if normalized in _FALSE_VALUES:
-        return False
-    raise ValueError(f"{name} must be a boolean value, got {value!r}.")
 
 
 class DeltaKVLessMemoryCudaGraphCacheManager(DeltaKVLessMemoryCacheManager):
@@ -40,7 +23,7 @@ class DeltaKVLessMemoryCudaGraphCacheManager(DeltaKVLessMemoryCacheManager):
         return None
 
     def decode_graph_force_eager(self) -> bool:
-        return _env_bool("SPARSEENGINE_DELTAKV_CUDAGRAPH_FORCE_EAGER", False)
+        return env_bool("SPARSEENGINE_DELTAKV_CUDAGRAPH_FORCE_EAGER", strict=True)
 
     @classmethod
     def profiling_kv_budget_bytes(cls, config, num_slots: int, slot_bytes_per_layer: int) -> int:
@@ -57,7 +40,7 @@ class DeltaKVLessMemoryCudaGraphCacheManager(DeltaKVLessMemoryCacheManager):
         if not bool(getattr(config, "decode_graph", False)):
             return 0
 
-        env_value = os.getenv("SPARSEENGINE_DELTAKV_CUDAGRAPH_RESERVE_BYTES")
+        env_value = env_optional_str("SPARSEENGINE_DELTAKV_CUDAGRAPH_RESERVE_BYTES")
         if env_value is None:
             return 0
 

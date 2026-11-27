@@ -17,6 +17,7 @@ from .passthrough import PassThroughRuntime
 class H2ORuntime(PassThroughRuntime):
     def __init__(self, config, cache_manager):
         super().__init__(config, cache_manager)
+        self.decode_score_dtype = torch.float32
         self._mla_reduced_decode_score = (
             getattr(config, "attention_cache_layout", "explicit_kv") == "mla_latent"
         )
@@ -141,7 +142,7 @@ class H2ORuntime(PassThroughRuntime):
         shape = (num_kv_layers, batch_size, width)
         needs_alloc = (
             buffer is None
-            or buffer.dtype != self.snapkv_decode_score_dtype
+            or buffer.dtype != self.decode_score_dtype
             or buffer.device != self.device
             or int(buffer.shape[0]) < num_kv_layers
             or int(buffer.shape[1]) < batch_size
@@ -150,7 +151,7 @@ class H2ORuntime(PassThroughRuntime):
         if needs_alloc:
             buffer = torch.empty(
                 shape,
-                dtype=self.snapkv_decode_score_dtype,
+                dtype=self.decode_score_dtype,
                 device=self.device,
             )
             self._h2o_decode_attn_score_buffers[key] = buffer

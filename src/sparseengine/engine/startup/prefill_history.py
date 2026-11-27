@@ -79,6 +79,7 @@ def profile_prefill_history(runner):
     history_factory = getattr(runner.cache_manager, "create_prefill_history_manager", None)
     if callable(history_factory):
         manager = history_factory(config, runner.parallel_context)
+        config = manager.config
     else:
         config.sparse_method = ""
         config.prefill_sparse_method = None

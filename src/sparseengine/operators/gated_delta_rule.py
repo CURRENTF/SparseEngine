@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import torch
 
+from sparseengine.platforms import device_runtime
 import sparseengine.platforms as platforms
 from sparseengine.kernels.external.flashinfer.gdn import (
     FLASHINFER_GDN_PREFILL_CAPABILITIES,
@@ -449,7 +450,7 @@ def prepare_gated_delta_rule_op(
 ) -> PreparedGatedDeltaRuleOp:
     platform = platforms.current_platform
     if device_index is None:
-        device_index = torch.cuda.current_device() if platform.is_cuda_alike() else 0
+        device_index = device_runtime.current_device_index(platform=platform)
     caps = platform.get_device_caps(int(device_index))
     resolved = OpResolver(GATED_DELTA_RULE_REGISTRY).resolve(spec, caps)
     logger.info(

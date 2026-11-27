@@ -473,7 +473,7 @@ def _tensor_fp8_shared_decode_profile(profile, cuda_graph):
     platform = platforms.current_platform
     if not platform.is_cuda_alike():
         return False
-    caps = platform.get_device_caps(torch.cuda.current_device())
+    caps = platform.get_device_caps(device_runtime.current_device_index(platform=platform))
     if caps.platform != PlatformEnum.CUDA or caps.compute_capability != (9, 0) or not device_name_contains(caps.device_name, "H100"):
         return False
     import triton
@@ -1605,6 +1605,7 @@ class Qwen3Fp8MoeDispatchPlan(MoeDispatchPlan):
             (128, 128, 2048, 384, 8, 2, 1),
         }
     )
+    PROFILED_GRAPH_TOOLCHAIN = ("2.11.0+cu130", "3.6.0", "0.6.17")
 
     @classmethod
     def atomic_provider_names(cls, spec: MoeOpSpec) -> tuple[str, ...]:
@@ -1640,6 +1641,7 @@ class Qwen3Fp8MoeDispatchPlan(MoeDispatchPlan):
         from importlib.metadata import version
 
         triton = TritonUpGateFp8MoeProvider()
+        torch_version, triton_version, flashinfer_version = self.PROFILED_GRAPH_TOOLCHAIN
         # Keep the existing profile's toolchain and graph domain. Within it,
         # use one packed-weight route for both single- and multi-request work.
         profiled_graph = (
@@ -1647,9 +1649,9 @@ class Qwen3Fp8MoeDispatchPlan(MoeDispatchPlan):
             and spec.cuda_graph
             and spec.activation_dtype == torch.bfloat16
             and spec.scale_dtype == torch.float32
-            and torch.__version__ == "2.11.0+cu130"
-            and version("triton") == "3.6.0"
-            and version("flashinfer-python") == "0.6.17"
+            and torch.__version__ == torch_version
+            and version("triton") == triton_version
+            and version("flashinfer-python") == flashinfer_version
         )
         if spec.tp_size != 1 or profiled_graph:
             return (
@@ -1882,7 +1884,7 @@ def resolve_moe_provider(
 ) -> MoeProvider:
     platform = platforms.current_platform
     if device_index is None:
-        device_index = torch.cuda.current_device() if platform.is_cuda_alike() else 0
+        device_index = device_runtime.current_device_index(platform=platform)
     caps = platform.get_device_caps(int(device_index))
     return OpResolver(MOE_REGISTRY).resolve(
         spec,

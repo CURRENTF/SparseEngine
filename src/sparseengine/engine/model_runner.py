@@ -28,6 +28,14 @@ from sparseengine.distributed.topology import parallel_group_ranks
 from sparseengine.engine.sparse_methods.base import AuxiliaryPrefillRequest
 from sparseengine.engine.sequence import Sequence
 from sparseengine.engine.async_scheduling.execution import AsyncExecution, DeviceLogprobs
+from sparseengine.env import (
+    debug_runtime_enabled,
+    debug_slots_enabled,
+    env_is_one,
+    env_optional_str,
+    tp_rpc_ack_timeout_s,
+    tp_rpc_status_timeout_s,
+)
 from sparseengine.models.qwen2 import Qwen2ForCausalLM
 from sparseengine.models.deepseek_v4 import DeepseekV4ForCausalLM
 from sparseengine.models.llama import LlamaForCausalLM
@@ -51,13 +59,9 @@ from sparseengine.utils.loader import load_model, sync_deltakv_config_from_check
 from sparseengine.utils.process_title import set_engine_process_title
 
 from sparseengine.engine.cache_manager import CacheManager
-from sparseengine.engine.cache_manager.base import _debug_tensor_summary
+from sparseengine.engine import prefix_prune_executor, runner_diagnostics
 from sparseengine.engine.decode_cuda_graph import DecodeCudaGraphRunner
 from sparseengine.engine.prefix_cache_coordinator import PrefixCacheCoordinator
-from sparseengine.engine.prefix_prune import (
-    normalize_prefix_prune_ranges,
-    validate_prefix_prune_request,
-)
 from sparseengine.engine.chain_cache import ChainAdmissionPlan, ChainCacheCoordinator
 from sparseengine.engine.recurrent_state_manager import RecurrentStateManager, RecurrentStateSpec
 from sparseengine.engine.runtime_state import RuntimeState
@@ -261,7 +265,7 @@ def make_tp_shm_name() -> str:
 
 
 def select_master_port() -> int:
-    configured = os.getenv("SPARSEENGINE_MASTER_PORT")
+    configured = env_optional_str("SPARSEENGINE_MASTER_PORT")
     if configured is not None:
         try:
             port = int(configured)
@@ -870,7 +874,7 @@ class ModelRunner:
             command_event.set()
         if not wait_for_read:
             return
-        timeout_s = float(os.getenv("SPARSEENGINE_TP_RPC_ACK_TIMEOUT_S", "30"))
+        timeout_s = tp_rpc_ack_timeout_s()
         deadline = time.monotonic() + timeout_s
         for command_event, _ in self.event:
             while command_event.is_set():
@@ -1004,7 +1008,7 @@ class ModelRunner:
                 raise sync_error
             return
 
-        timeout_s = float(os.getenv("SPARSEENGINE_TP_RPC_STATUS_TIMEOUT_S", "300"))
+        timeout_s = tp_rpc_status_timeout_s()
         deadline = time.monotonic() + timeout_s
         failed_ranks: list[int] = []
         for rank, (_, completion_event) in enumerate(self.event, start=1):
@@ -1117,15 +1121,7 @@ class ModelRunner:
             )
 
     def load_deltakv_compressors(self):
-        """加载 DeltaKV 压缩器权重"""
-        method = str(self.config.sparse_method or "")
-        if not method.startswith('deltakv') or self.config.deltakv_checkpoint_path is None:
-            return
-        
-        logger.info(f"Loading DeltaKV compressors from {self.config.deltakv_checkpoint_path}")
-        from sparseengine.utils.loader import load_deltakv_compressors_to_cache_manager
-
-        load_deltakv_compressors_to_cache_manager(self.cache_manager, self.config.deltakv_checkpoint_path)
+        self.cache_manager.load_external_assets()
 
     def reset_after_warmup(self) -> None:
         reset_after_warmup = getattr(self.runtime_state, "reset_after_warmup", None)
@@ -1140,9 +1136,9 @@ class ModelRunner:
                 if callable(reset_prefix_cache):
                     reset_prefix_cache()
 
-        if os.getenv("SPARSEENGINE_DELTAKV_CLEAR_GRAPHS_AFTER_WARMUP", "0") == "1":
+        if env_is_one("SPARSEENGINE_DELTAKV_CLEAR_GRAPHS_AFTER_WARMUP"):
             self.decode_graph_runner.clear_captured_graphs()
-        if os.getenv("SPARSEENGINE_DELTAKV_CLEAR_ATTN_SCORE_BUFFERS_AFTER_WARMUP", "0") == "1":
+        if env_is_one("SPARSEENGINE_DELTAKV_CLEAR_ATTN_SCORE_BUFFERS_AFTER_WARMUP"):
             self.sparse_controller.clear_decode_attn_score_buffers()
 
     def log_operator_implementations(self) -> None:
@@ -1197,14 +1193,14 @@ class ModelRunner:
         """通知 CacheManager 释放该序列占用的物理显存位子"""
         self._assert_cache_release((seq_id,))
         with profiler.record("model_free_slots"):
-            if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1":
+            if debug_slots_enabled():
                 before = self.cache_manager.free_slot_stats()
                 logger.info("model_runner.free_slots seq_id={} before={}", seq_id, before)
             self._release_runtime_slots_once(seq_id)
             if hasattr(self, "_async_execution"):
                 self._async_execution.forget([seq_id])
             self.multimodal_runtime.free(seq_id)
-            if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1":
+            if debug_slots_enabled():
                 after = self.cache_manager.free_slot_stats()
                 logger.info("model_runner.free_slots seq_id={} after={}", seq_id, after)
 
@@ -1215,14 +1211,14 @@ class ModelRunner:
             if not seq_ids:
                 return
             self._assert_cache_release(seq_ids)
-            if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1":
+            if debug_slots_enabled():
                 before = self.cache_manager.free_slot_stats()
                 logger.info("model_runner.free_slots_batch seq_ids={} before={}", seq_ids, before)
             for seq_id in seq_ids:
                 self._release_runtime_slots_once(seq_id)
             if hasattr(self, "_async_execution"):
                 self._async_execution.forget(seq_ids)
-            if os.getenv("SPARSEENGINE_DEBUG_SLOTS", "0") == "1":
+            if debug_slots_enabled():
                 after = self.cache_manager.free_slot_stats()
                 logger.info("model_runner.free_slots_batch seq_ids={} after={}", seq_ids, after)
 
@@ -1461,138 +1457,15 @@ class ModelRunner:
         temp_seq_id: int,
         protected_token_ids: list[int] | None = None,
     ) -> torch.Tensor:
-        return self._prefix_prune_score_forward_batch([dict(
-            token_ids=token_ids, prefix_hit_len=prefix_hit_len,
+        return prefix_prune_executor._prefix_prune_score_forward(
+            self, token_ids=token_ids, prefix_hit_len=prefix_hit_len,
             protected_prefix_len=protected_prefix_len, candidate_start=candidate_start,
             temp_seq_id=temp_seq_id, protected_token_ids=protected_token_ids,
-        )])[0]
+        )
 
     @cpu_timing.timed
     def _prefix_prune_score_forward_batch(self, requests) -> list[torch.Tensor]:
-        manager = self.cache_manager
-        prefix_cache = manager.prefix_cache
-        block_size = int(manager.prefix_cache_block_size)
-        if prefix_cache is None or block_size <= 0:
-            raise RuntimeError("prefix cache is not enabled on this model worker.")
-        asynchronous = getattr(self, "_async_execution", None)
-        if asynchronous is not None:
-            asynchronous.prepare_synchronous_execution()
-        seqs, scoring, protected = [], [], {}
-        for request in requests:
-            token_ids = request["token_ids"]
-            prepared = request.get("prefix")
-            prefix_hit_len = request["prefix_hit_len"]
-            protected_prefix_len = request["protected_prefix_len"]
-            candidate_start = request["candidate_start"]
-            temp_seq_id = request["temp_seq_id"]
-            query_end = len(token_ids) + (prefix_hit_len if prepared is not None else 0)
-            if query_end > int(self.config.max_model_len):
-                raise ValueError(
-                    "prefix-prune scoring context exceeds max_model_len: "
-                    f"context={query_end} max_model_len={self.config.max_model_len}. "
-                    "Reduce observation_tokens, score_chunk_size, or prev_postfix_size."
-                )
-            if prefix_hit_len <= candidate_start or prefix_hit_len >= query_end:
-                raise ValueError(
-                    "prefix-prune score forward requires candidate tokens followed by queries: "
-                    f"candidate_start={candidate_start} hit={prefix_hit_len} end={query_end}."
-                )
-            if prepared is not None:
-                hit_len = prefix_hit_len
-                hit_blocks = len(prepared.blocks)
-                last_block_id = prepared.blocks[-1].stable_block_id
-                protected_blocks = ()  # Already pinned by the maintenance iterator.
-            else:
-                block_ids = prefix_cache.block_ids_for_tokens(
-                    token_ids[:prefix_hit_len], max_tokens=prefix_hit_len
-                )
-                hit_len, last_block_id, hit_blocks = prefix_cache.match_longest_block_ids(
-                    block_ids
-                )
-                if hit_len != prefix_hit_len or last_block_id is None:
-                    raise RuntimeError(
-                        "prefix-prune score forward cannot attach the requested cached prefix: "
-                        f"requested={prefix_hit_len} matched={hit_len}."
-                    )
-                protection_tokens = request.get("protected_token_ids")
-                if protection_tokens is not None:
-                    protected_block_ids = prefix_cache.block_ids_for_tokens(
-                        protection_tokens, max_tokens=len(protection_tokens),
-                    )
-                    protected_hit, protected_last, protected_count = (
-                        prefix_cache.match_longest_block_ids(protected_block_ids)
-                    )
-                elif protected_prefix_len == prefix_hit_len:
-                    protected_hit, protected_last, protected_count = hit_len, last_block_id, hit_blocks
-                else:
-                    protected_block_ids = prefix_cache.block_ids_for_tokens(
-                        token_ids[:protected_prefix_len], max_tokens=protected_prefix_len
-                    )
-                    protected_hit, protected_last, protected_count = (
-                        prefix_cache.match_longest_block_ids(protected_block_ids)
-                    )
-                if protected_hit < protected_prefix_len or protected_last is None:
-                    raise RuntimeError(
-                        "prefix-prune target changed before its scoring forward: "
-                        f"protected={protected_prefix_len} matched={protected_hit}."
-                    )
-                protected_blocks = prefix_cache.get_chain(
-                    protected_last, protected_count
-                )
-            seq = Sequence([int(token_id) for token_id in token_ids])
-            seq.seq_id = int(temp_seq_id)
-            if prepared is not None:
-                seq.num_tokens = seq.num_prompt_tokens = query_end
-                seq.prefix_prune_prefix = prepared
-            seq.num_prefilled_tokens = int(prefix_hit_len)
-            seq.current_chunk_size = query_end - prefix_hit_len
-            seq.prefix_cache_enabled = True
-            seq.prefix_cache_hit_len = int(prefix_hit_len)
-            seq.prefix_cache_hit_block_count = int(hit_blocks)
-            seq.prefix_cache_hit_last_block_id = last_block_id
-            seq.prefix_cache_block_size = block_size
-            seq.prefix_cache_method = str(getattr(self.config, "sparse_method", "") or "")
-            seqs.append(seq)
-            scoring.append(dict(seq_id=seq.seq_id, candidate_start=candidate_start,
-                                query_start=prefix_hit_len, query_end=query_end))
-            for block in protected_blocks:
-                protected[id(block)] = block
-        acquired = []
-        try:
-            for block in protected.values():
-                prefix_cache.acquire_block_ref(block)
-                acquired.append(block)
-            manager.begin_prefix_prune_scoring_batch(scoring)
-            input_ids, positions = self.prepare_step(seqs, True)
-            for seq, request, state in zip(seqs, requests, manager._prefix_prune_scoring["batch"], strict=True):
-                prefix = request.get("prefix")
-                if prefix is None:
-                    continue
-                if prefix.token_slots is None:
-                    manager.attach_prefix_prune_prefix(seq, prefix)
-                start = int(prefix.token_slots.numel())
-                length = int(seq.current_chunk_size)
-                state["physical_window"] = (start, start + length, prefix.candidate_start)
-                if prefix.logical_positions is not None:
-                    state["logical_positions"] = torch.cat((
-                        prefix.logical_positions,
-                        torch.arange(prefix.logical_length, prefix.logical_length + length,
-                                     dtype=torch.long, device=self.device),
-                    ))
-            ctx = get_context()
-            ctx.sparse_controller = self.sparse_controller
-            self.sparse_controller.prepare_forward(seqs, True)
-            self.model(input_ids, positions)
-            self.sparse_controller.post_forward(seqs, True)
-            return manager.finish_prefix_prune_scoring_batch()
-        finally:
-            manager.abort_prefix_prune_scoring()
-            reset_context()
-            for seq in seqs:
-                if seq.seq_id in manager.seq_id_to_row:
-                    self.runtime_state.free_seq(seq.seq_id)
-            for block in acquired:
-                prefix_cache.release_block_ref(block)
+        return prefix_prune_executor._prefix_prune_score_forward_batch(self, requests)
 
     @torch.no_grad()
     @cpu_timing.timed
@@ -1612,427 +1485,41 @@ class ModelRunner:
         temp_seq_id: int = -1,
         ranges: list[tuple[int, int]] | None = None,
     ) -> dict[str, object]:
-        token_ids = [int(token_id) for token_id in token_ids]
-        block_size = int(self.config.prefix_cache_block_size)
-        intervals = normalize_prefix_prune_ranges(
-            token_count=len(token_ids), block_size=block_size,
-            range_start=range_start, range_end=range_end, ranges=ranges,
-        )
-        validate_prefix_prune_request(
-            token_count=len(token_ids), block_size=block_size, ranges=intervals,
-            keep_tokens=keep_tokens, policy=policy,
-        )
-        self.cache_manager.validate_prefix_prune_keep_tokens(keep_tokens)
-        self.cache_manager.validate_prefix_cache_prune_target(
-            token_ids, ranges=intervals, allow_recompress=allow_recompress,
-        )
-        range_start, range_end = intervals[0][0], intervals[-1][1]
-        width = sum(right - left for left, right in intervals)
-        if policy == "snapkv_global":
-            observation_tokens = max(1, int(observation_tokens))
-            query_start = max(range_start + block_size, range_end - observation_tokens)
-            query_start = (query_start // block_size) * block_size
-            protected_count = sum(
-                right - max(left, query_start)
-                for left, right in intervals if right > query_start
-            )
-            if protected_count > keep_tokens or query_start >= range_end:
-                raise ValueError(
-                    "SnapKV observation window exceeds the global keep budget: "
-                    f"observation={protected_count} keep_tokens={keep_tokens}."
-                )
-            score = self._prefix_prune_score_forward(
-                token_ids=token_ids[:range_end], prefix_hit_len=query_start,
-                protected_prefix_len=range_end, candidate_start=range_start,
-                temp_seq_id=temp_seq_id, protected_token_ids=token_ids,
-            )
-            # Pack only requested tokens before the collective and selection.
-            packed = torch.cat([score[left:right] for left, right in intervals])
-            self.parallel_context.world.all_reduce(packed, op=dist.ReduceOp.MAX)
-            # Sorted disjoint intervals put all protected positions at the end.
-            keep_indices = self.cache_manager.select_prefix_prune_keep_indices(
-                packed,
-                keep_tokens=keep_tokens,
-                protected_suffix_tokens=protected_count,
-            )
-        elif policy == "kvzip_global":
-            if keep_tokens == 0:
-                # The mask is known without reconstruction when everything is dropped.
-                keep_indices = torch.empty(0, dtype=torch.long, device=self.device)
-            else:
-                outcomes = ModelRunner.prefix_cache_prune_batch(self, [dict(
-                    token_ids=token_ids, ranges=intervals, keep_tokens=keep_tokens,
-                    allow_recompress=allow_recompress, score_chunk_size=max(1, int(score_chunk_size)),
-                    prev_postfix_size=max(0, int(prev_postfix_size)), prune_id=prune_id,
-                )], list(kvzip_replay_prefix_ids or []))
-                if "error" in outcomes[0]:
-                    raise RuntimeError(outcomes[0]["error"])
-                return outcomes[0]["result"]
-        else:
-            raise ValueError(f"unsupported prefix prune policy: {policy!r}.")
-
-        return self.cache_manager.prefix_cache_prune(
-            token_ids, ranges=intervals, keep_indices=keep_indices,
-            policy=policy, prune_id=prune_id, allow_recompress=allow_recompress,
+        return prefix_prune_executor.prefix_cache_prune(
+            self, token_ids, range_start, range_end, keep_tokens, policy, prune_id,
+            allow_recompress, observation_tokens, score_chunk_size, prev_postfix_size,
+            kvzip_replay_prefix_ids, temp_seq_id, ranges, prune_batch=ModelRunner.prefix_cache_prune_batch,
         )
 
     @torch.no_grad()
     @cpu_timing.timed
     def prefix_cache_prune_batch(self, jobs, replay_prefix):
-        iterator = ModelRunner._prefix_cache_prune_batch_iter(self, jobs, replay_prefix)
-        try:
-            while True:
-                next(iterator)
-        except StopIteration as done:
-            return done.value
-        finally:
-            iterator.close()
+        return prefix_prune_executor.prefix_cache_prune_batch(self, jobs, replay_prefix)
 
     def prefix_cache_prune_batch_start(self, jobs, replay_prefix):
-        if getattr(self, "_prefix_prune_iterator", None) is not None:
-            raise RuntimeError("Another prefix-prune batch is already running.")
-        self._prefix_prune_iterator = self._prefix_cache_prune_batch_iter(jobs, replay_prefix)
+        return prefix_prune_executor.prefix_cache_prune_batch_start(self, jobs, replay_prefix)
 
     @torch.no_grad()
     def prefix_cache_prune_batch_step(self):
-        iterator = getattr(self, "_prefix_prune_iterator", None)
-        if iterator is None:
-            raise RuntimeError("No prefix-prune batch is running.")
-        try:
-            next(iterator)
-        except StopIteration as done:
-            self._prefix_prune_iterator = None
-            return done.value
-        except BaseException:
-            self.prefix_cache_prune_batch_abort()
-            raise
-        return None
+        return prefix_prune_executor.prefix_cache_prune_batch_step(self)
 
     def prefix_cache_prune_batch_abort(self):
-        iterator = getattr(self, "_prefix_prune_iterator", None)
-        self._prefix_prune_iterator = None
-        if iterator is not None:
-            iterator.close()
+        return prefix_prune_executor.prefix_cache_prune_batch_abort(self)
 
     def _prefix_cache_prune_batch_iter(self, jobs, replay_prefix):
-        """Yield only after a complete forward has released its temporary rows."""
-        from collections import deque
-        from sparseengine.engine.cache_manager.prefix_prune_scoring import PrefixPrunePrefix
-
-        manager = self.cache_manager
-        cache = manager.prefix_cache
-        block_size = int(self.config.prefix_cache_block_size)
-        states, protected, affected_ids = [], {}, set()
-        outcomes = [None] * len(jobs)
-        for index, job in enumerate(jobs):
-            try:
-                intervals = normalize_prefix_prune_ranges(
-                    token_count=len(job["token_ids"]), block_size=block_size,
-                    ranges=job["ranges"],
-                )
-                validate_prefix_prune_request(
-                    token_count=len(job["token_ids"]), block_size=block_size,
-                    ranges=intervals, keep_tokens=job["keep_tokens"], policy="kvzip_global",
-                )
-                manager.validate_prefix_prune_keep_tokens(job["keep_tokens"])
-                affected = manager.validate_prefix_cache_prune_target(
-                    job["token_ids"], ranges=intervals,
-                    allow_recompress=job["allow_recompress"],
-                )
-                ids = {id(block) for block in affected}
-                if affected_ids.intersection(ids):
-                    raise RuntimeError("Overlapping prune targets cannot share a scoring batch.")
-                end = intervals[-1][1]
-                # Preserve the complete cached route, including non-candidate
-                # tails which the caller will reuse after pruning.
-                block_ids = cache.block_ids_for_tokens(
-                    job["token_ids"], max_tokens=len(job["token_ids"]),
-                )
-                _, last, count = cache.match_longest_block_ids(block_ids)
-                chain = cache.get_chain(last, count)
-                chunks = deque()
-                if job["keep_tokens"]:
-                    if not replay_prefix:
-                        raise ValueError("KVzip requires a non-empty reconstruction prompt.")
-                    for left, right in intervals:
-                        for start in range(left, right, job["score_chunk_size"]):
-                            stop = min(right, start + job["score_chunk_size"])
-                            prev = max(left, start - job["prev_postfix_size"])
-                            chunks.append((prev, stop))
-                    max_query = max(len(replay_prefix) + stop - prev for prev, stop in chunks)
-                    if end + max_query > self.config.max_model_len:
-                        raise ValueError("Prefix-prune scoring context exceeds max_model_len.")
-                prefix_blocks = chain[:end // block_size]
-                state = dict(index=index, job=job, intervals=intervals,
-                             prefix=PrefixPrunePrefix(prefix_blocks, end, intervals[0][0]),
-                             prefix_blocks=prefix_blocks,
-                             chunks=chunks, forwards=0, max_batch=0,
-                             aggregate=torch.zeros(sum(r-l for l,r in intervals),
-                                                   dtype=torch.float32, device=self.device))
-                states.append(state)
-                affected_ids.update(ids)
-                protected.update((id(block), block) for block in chain)
-            except (ValueError, RuntimeError) as exc:
-                outcomes[index] = {"error": f"{type(exc).__name__}: {exc}"}
-        acquired = []
-        try:
-            # Protect every pending job, including those not in the next forward.
-            for block in protected.values():
-                cache.acquire_block_ref(block)
-                acquired.append(block)
-            pending = deque(state for state in states if state["chunks"])
-            next_seq_id = -1_000_000_000
-            token_limit = min(self.config.max_num_batched_tokens,
-                              self.config.engine_prefill_chunk_size or self.config.max_num_batched_tokens)
-            while pending:
-                requests, owners = [], []
-                query_tokens = 0
-                while pending and len(requests) < self.config.max_num_seqs_in_batch:
-                    owner = pending[0]
-                    prev, stop = owner["chunks"][0]
-                    replay = replay_prefix + owner["job"]["token_ids"][prev:stop]
-                    if requests and query_tokens + len(replay) > token_limit:
-                        break
-                    pending.popleft()
-                    owner["chunks"].popleft()
-                    end = owner["prefix"].logical_length
-                    requests.append(dict(token_ids=replay, prefix=owner["prefix"],
-                                         prefix_hit_len=end, protected_prefix_len=end,
-                                         candidate_start=owner["intervals"][0][0],
-                                         temp_seq_id=next_seq_id))
-                    next_seq_id -= 1
-                    owners.append((owner, (prev, stop)))
-                    query_tokens += len(replay)
-                    if owner["chunks"]:
-                        pending.append(owner)
-                reservation = [(r["temp_seq_id"], len(r["token_ids"]))
-                               for r in requests]
-                prefix_blocks = {r["temp_seq_id"]: (owner["prefix_blocks"]
-                                                  if owner["prefix"].token_slots is None else ())
-                                 for r, (owner, _) in zip(requests, owners, strict=True)}
-                with manager.reserve_prefill_slots(reservation, prefix_blocks=prefix_blocks) as admitted:
-                    # Return unadmitted chunks in their original per-task order.
-                    for owner, chunk in reversed(owners[admitted:]):
-                        owner["chunks"].appendleft(chunk)
-                        if not any(item is owner for item in pending):
-                            pending.appendleft(owner)
-                    requests = requests[:admitted]
-                    owners = [owner for owner, _ in owners[:admitted]]
-                    scores = self._prefix_prune_score_forward_batch(requests)
-                for owner, score in zip(owners, scores, strict=True):
-                    packed = torch.cat([score[l:r] for l, r in owner["intervals"]])
-                    torch.maximum(owner["aggregate"], packed, out=owner["aggregate"])
-                    owner["forwards"] += 1
-                    owner["max_batch"] = max(owner["max_batch"], len(requests))
-                del requests, scores, owners, score, packed
-                yield
-        finally:
-            for block in acquired:
-                cache.release_block_ref(block)
-        for state in states:
-            job = state["job"]
-            aggregate = state["aggregate"]
-            if job["keep_tokens"]:
-                self.parallel_context.world.all_reduce(aggregate, op=dist.ReduceOp.MAX)
-            indices = manager.select_prefix_prune_keep_indices(
-                aggregate, keep_tokens=job["keep_tokens"],
-            )
-            try:
-                result = manager.prefix_cache_prune(
-                    job["token_ids"], ranges=state["intervals"], keep_indices=indices,
-                    policy="kvzip_global", prune_id=job["prune_id"],
-                    allow_recompress=job["allow_recompress"],
-                )
-                result.update(scoring_chunks=state["forwards"],
-                              max_scoring_batch=state["max_batch"], scoring_jobs=len(states))
-                outcomes[state["index"]] = {"result": result}
-            except (ValueError, RuntimeError) as exc:
-                outcomes[state["index"]] = {"error": f"{type(exc).__name__}: {exc}"}
-        return outcomes
+        return prefix_prune_executor._prefix_cache_prune_batch_iter(self, jobs, replay_prefix)
 
     def debug_sparse_state_summary(self) -> dict[str, object]:
-        def parallel_group_summary(group) -> dict[str, object] | None:
-            if group is None:
-                return None
-            return {
-                "rank": int(group.rank),
-                "size": int(group.size),
-                "ranks": [int(rank) for rank in group.ranks],
-            }
-
-        parallel_context = self.parallel_context
-        config = getattr(self, "config", None)
-        moe_synced = {}
-        moe_local = {}
-        model = getattr(getattr(self, "model", None), "model", None)
-        layers = getattr(model, "layers", ())
-        selected_layers = {0, len(layers) - 1} if layers else set()
-        for layer_idx, layer in enumerate(layers):
-            if layer_idx not in selected_layers:
-                continue
-            block = getattr(layer, "mlp", None)
-            topk_ids = getattr(block, "debug_last_topk_ids", None)
-            topk_weights = getattr(block, "debug_last_topk_weights", None)
-            output = getattr(block, "debug_last_output", None)
-            if topk_ids is None or topk_weights is None or output is None:
-                continue
-            moe_synced[str(layer_idx)] = {
-                "topk_ids": _debug_tensor_summary(topk_ids),
-                "topk_weights": _debug_tensor_summary(topk_weights),
-                "output": _debug_tensor_summary(output),
-            }
-            experts = block.experts
-            moe_local[str(layer_idx)] = {
-                "local_expert_start": int(experts.local_expert_start),
-                "local_expert_end": int(experts.local_expert_end),
-                "local_hit_count": int(block.debug_last_local_hit_count),
-                "local_output": _debug_tensor_summary(block.debug_last_local_output),
-            }
-        state = self.sparse_controller.debug_state_summary()
-        prefix_cache_coordinator = getattr(
-            self,
-            "prefix_cache_coordinator",
-            None,
-        )
-        if prefix_cache_coordinator is not None:
-            state["mixed_prefix_cache"] = (
-                prefix_cache_coordinator.debug_state_summary()
-            )
-        graph_runner = getattr(self, "decode_graph_runner", None)
-        graph_key = getattr(graph_runner, "last_state_key", None)
-        graph_summary = {
-            "dp_idle_graph_count": len(getattr(self, "dp_idle_graphs", {})),
-            "dp_idle_replay_count": int(getattr(self, "dp_idle_replay_count", 0)),
-            "dp_idle_eager_count": int(getattr(self, "dp_idle_eager_count", 0)),
-            "enabled": bool(
-                getattr(config, "decode_graph", False)
-            ),
-            "capture_count": int(
-                getattr(graph_runner, "capture_count", 0)
-            ),
-            "replay_count": int(
-                getattr(graph_runner, "replay_count", 0)
-            ),
-            "eager_static_count": int(
-                getattr(graph_runner, "eager_static_count", 0)
-            ),
-            "force_eager_count": int(
-                getattr(graph_runner, "force_eager_count", 0)
-            ),
-            "eviction_count": int(
-                getattr(graph_runner, "eviction_count", 0)
-            ),
-            "recapture_count": int(
-                getattr(graph_runner, "recapture_count", 0)
-            ),
-            "cached_graph_count": len(
-                getattr(graph_runner, "_graphs", {})
-            ),
-            "graph_plan": (
-                graph_runner.graph_plan()
-                if callable(getattr(graph_runner, "graph_plan", None))
-                else None
-            ),
-            "last_state_key": (
-                {
-                    "method": str(graph_key.method or ""),
-                    "batch_size": int(graph_key.batch_size),
-                    "graph_path_id": str(graph_key.graph_path_id),
-                    "capture_sampling": bool(graph_key.capture_sampling),
-                }
-                if graph_key is not None
-                else None
-            ),
-        }
-        return {
-            "world_rank": self.parallel_context.world_rank,
-            "ep_rank": self.parallel_context.moe_ep_rank,
-            "parallel": {
-                "configured": {
-                    "tensor_parallel_size": int(
-                        getattr(config, "tensor_parallel_size", parallel_context.attn_tp_size)
-                    ),
-                    "expert_parallel_size": int(
-                        getattr(config, "expert_parallel_size", parallel_context.moe_ep_size)
-                    ),
-                    "data_parallel_size": int(
-                        getattr(config, "data_parallel_size", parallel_context.attn_dp_size)
-                    ),
-                    "world_size": int(
-                        getattr(config, "world_size", parallel_context.world_size)
-                    ),
-                },
-                "effective": {
-                    "world": parallel_group_summary(parallel_context.world),
-                    "attn_tp": parallel_group_summary(parallel_context.attn_tp),
-                    "moe_ep": parallel_group_summary(parallel_context.moe_ep),
-                    "moe_tp": parallel_group_summary(
-                        parallel_context.moe_tp
-                    ),
-                    "attn_dp": parallel_group_summary(parallel_context.attn_dp),
-                },
-            },
-            "state": state,
-            "decode_graph": graph_summary,
-            "last_logits": (
-                _debug_tensor_summary(self.debug_last_logits)
-                if hasattr(self, "debug_last_logits")
-                else None
-            ),
-            "moe_synced": moe_synced,
-            "moe_local": moe_local,
-        }
+        return runner_diagnostics.debug_sparse_state_summary(self)
 
     def debug_last_logits_cpu(self) -> torch.Tensor | None:
-        if self.parallel_context.attn_tp_rank != 0:
-            return None
-        logits = getattr(self, "debug_last_logits", None)
-        if logits is None:
-            raise RuntimeError(
-                "No debug logits are available. Set SPARSEENGINE_DEBUG_RUNTIME=1 before engine startup."
-            )
-        return logits.detach().cpu()
+        return runner_diagnostics.debug_last_logits_cpu(self)
 
     def debug_hidden_states_cpu(self) -> dict[int, torch.Tensor] | None:
-        model = getattr(getattr(self, "model", None), "model", None)
-        snapshots = getattr(model, "debug_last_hidden_states", None)
-        if snapshots is None:
-            raise RuntimeError(
-                "No hidden-state snapshots are available. Set "
-                "SPARSEENGINE_DEBUG_HIDDEN_LAYERS before model execution."
-            )
-        if self.parallel_context.attn_tp_rank != 0:
-            return None
-        return {
-            int(layer_idx): tensor.detach().cpu()
-            for layer_idx, tensor in snapshots.items()
-        }
+        return runner_diagnostics.debug_hidden_states_cpu(self)
 
     def debug_moe_states_cpu(self) -> dict[int, dict[str, torch.Tensor]] | None:
-        model = getattr(getattr(self, "model", None), "model", None)
-        layers = getattr(model, "layers", ())
-        snapshots = {}
-        for layer_idx, layer in enumerate(layers):
-            block = getattr(layer, "mlp", None)
-            if block is None or not hasattr(block, "experts"):
-                continue
-            required = {
-                "input": getattr(block, "debug_last_input", None),
-                "topk_ids": getattr(block, "debug_last_topk_ids", None),
-                "topk_weights": getattr(block, "debug_last_topk_weights", None),
-                "output": getattr(block, "debug_last_output", None),
-            }
-            missing = [name for name, tensor in required.items() if tensor is None]
-            if missing:
-                raise RuntimeError(
-                    f"Layer {layer_idx} is missing MoE debug tensors {missing}. Set "
-                    "SPARSEENGINE_DEBUG_MOE before model execution."
-                )
-            snapshots[layer_idx] = {
-                name: tensor.detach().cpu()
-                for name, tensor in required.items()
-            }
-        return snapshots if self.parallel_context.attn_tp_rank == 0 else None
+        return runner_diagnostics.debug_moe_states_cpu(self)
 
     def _debug_float_error_from_tp_leader(
         self,
@@ -2041,123 +1528,21 @@ class ModelRunner:
         atol: float,
         rtol: float,
     ) -> tuple[float, float]:
-        if self.parallel_context.attn_tp_size == 1:
-            return 0.0, 0.0
-        reference = tensor.detach().clone()
-        dist.broadcast(
-            reference,
-            src=self.parallel_context.attn_tp.ranks[0],
-            group=self.parallel_context.attn_tp.process_group,
-        )
-        difference = (tensor.detach().float() - reference.float()).abs()
-        max_abs = difference.max()
-        tolerance_ratio = (
-            difference / (float(atol) + float(rtol) * reference.float().abs())
-        ).max()
-        self.parallel_context.attn_tp.all_reduce(max_abs, op=dist.ReduceOp.MAX)
-        self.parallel_context.attn_tp.all_reduce(tolerance_ratio, op=dist.ReduceOp.MAX)
-        return float(max_abs.item()), float(tolerance_ratio.item())
+        return runner_diagnostics._debug_float_error_from_tp_leader(self, tensor, atol=atol, rtol=rtol)
 
     def _debug_any_mismatch_from_tp_leader(self, tensor: torch.Tensor) -> bool:
-        if self.parallel_context.attn_tp_size == 1:
-            return False
-        reference = tensor.detach().clone()
-        dist.broadcast(
-            reference,
-            src=self.parallel_context.attn_tp.ranks[0],
-            group=self.parallel_context.attn_tp.process_group,
-        )
-        mismatch = torch.tensor(
-            [int(not torch.equal(tensor.detach(), reference))],
-            dtype=torch.int32,
-            device=self.device,
-        )
-        self.parallel_context.attn_tp.all_reduce(mismatch, op=dist.ReduceOp.MAX)
-        return bool(mismatch.item())
+        return runner_diagnostics._debug_any_mismatch_from_tp_leader(self, tensor)
 
     def debug_replica_consistency(self) -> dict[str, object] | None:
-        logits = getattr(self, "debug_last_logits", None)
-        if self.parallel_context.attn_tp_size > 1:
-            result: dict[str, object] = {
-                "last_logits_max_abs": None,
-                "last_logits_tolerance_ratio": None,
-                "last_logits_comparison": "not_applicable_tp_vocab_sharded",
-                "moe_layers": {},
-            }
-        else:
-            if logits is None:
-                return None
-            logits_max_abs, logits_tolerance_ratio = (
-                self._debug_float_error_from_tp_leader(
-                    logits,
-                    atol=0.05,
-                    rtol=0.05,
-                )
-            )
-            result = {
-                "last_logits_max_abs": logits_max_abs,
-                "last_logits_tolerance_ratio": logits_tolerance_ratio,
-                "last_logits_comparison": "compared",
-                "moe_layers": {},
-            }
-        model = getattr(getattr(self, "model", None), "model", None)
-        layers = getattr(model, "layers", ())
-        for layer_idx in sorted({0, len(layers) - 1} if layers else set()):
-            block = getattr(layers[layer_idx], "mlp", None)
-            if not hasattr(block, "debug_last_topk_ids"):
-                continue
-            topk_weights_max_abs, topk_weights_tolerance_ratio = (
-                self._debug_float_error_from_tp_leader(
-                    block.debug_last_topk_weights,
-                    atol=0.01,
-                    rtol=0.01,
-                )
-            )
-            output_max_abs, output_tolerance_ratio = (
-                self._debug_float_error_from_tp_leader(
-                    block.debug_last_output,
-                    atol=0.05,
-                    rtol=0.05,
-                )
-            )
-            result["moe_layers"][str(layer_idx)] = {
-                "topk_ids_mismatch": self._debug_any_mismatch_from_tp_leader(
-                    block.debug_last_topk_ids
-                ),
-                "topk_weights_max_abs": topk_weights_max_abs,
-                "topk_weights_tolerance_ratio": topk_weights_tolerance_ratio,
-                "output_max_abs": output_max_abs,
-                "output_tolerance_ratio": output_tolerance_ratio,
-            }
-        return result
+        return runner_diagnostics.debug_replica_consistency(self)
 
     def debug_sparse_state_summaries(self, synchronize: bool = False) -> list[dict[str, object]] | None:
-        local_error: BaseException | None = None
-        local_summary = None
-        try:
-            if synchronize:
-                self.platform.synchronize()
-            local_summary = self.debug_sparse_state_summary()
-            local_summary["replica_consistency"] = (
-                self.debug_replica_consistency()
-            )
-        except BaseException as exc:
-            local_error = exc
-        self._sync_tp_rpc_status("debug_sparse_state_summaries", local_error)
-        if local_error is not None:
-            raise local_error
-        if self.parallel_context.attn_tp_size == 1:
-            return [local_summary]
-        summaries = [None] * self.parallel_context.attn_tp_size
-        dist.all_gather_object(
-            summaries,
-            local_summary,
-            group=self.parallel_context.attn_tp.process_group,
-        )
-        return summaries if self.parallel_context.attn_tp_rank == 0 else None
+        return runner_diagnostics.debug_sparse_state_summaries(self, synchronize)
 
     @cpu_timing.timed
-    def prepare_step(self, seqs: list[Sequence], is_prefill: bool):
+    def prepare_step(
+        self, seqs: list[Sequence], is_prefill: bool, *, moe_token_metadata=(None, None)
+    ):
         """准备前向上下文并设置 Context"""
         input_ids, positions, cu_seqlens_q = self.runtime_state.prepare_step(seqs, is_prefill)
         set_context(
@@ -2166,6 +1551,7 @@ class ModelRunner:
             cache_manager=self.cache_manager,
             seqs=seqs,
             recurrent_state_manager=self.recurrent_state_manager,
+            moe_token_metadata=moe_token_metadata,
         )
         (
             self._prefill_inputs_embeds,
@@ -2488,10 +1874,7 @@ class ModelRunner:
         return logits
 
     def _record_debug_logits(self, logits: torch.Tensor | None) -> None:
-        if (
-            os.getenv("SPARSEENGINE_DEBUG_RUNTIME", "0") == "1"
-            and isinstance(logits, torch.Tensor)
-        ):
+        if debug_runtime_enabled() and isinstance(logits, torch.Tensor):
             # A clone captured inside run_model keeps the capture-time value on
             # CUDA Graph replay.  Refresh outside replay so debug/validation
             # observes the business step that actually completed.
@@ -2579,6 +1962,7 @@ class ModelRunner:
         if asynchronous is not None and not getattr(self, "_async_submitting", False):
             asynchronous.prepare_synchronous_execution()
         dp_eager = False
+        step_kwargs = {}
         if self.parallel_context.attn_dp_size > 1:
             from sparseengine.engine.dp_step import coordinate_dp_step
             dp_eager = coordinate_dp_step(self, seqs, is_prefill)
@@ -2588,6 +1972,11 @@ class ModelRunner:
                     return [], None
                 finally:
                     reset_context()
+            context = get_context()
+            # Carry this step's DP coordination across context initialization.
+            step_kwargs["moe_token_metadata"] = (
+                context.moe_token_capacity, context.moe_token_sizes,
+            )
         name = "model_run_prefill" if is_prefill else "model_run_decode"
         with profiler.record(name):
             if not is_prefill:
@@ -2596,9 +1985,10 @@ class ModelRunner:
                         logits, graph_token_ids = self.decode_graph_runner.run(
                             seqs,
                             capture_sampling=self._auto_capture_greedy_sampling(seqs),
+                            **step_kwargs,
                         )
                     else:
-                        logits = self.decode_graph_runner.run_eager_static(seqs)
+                        logits = self.decode_graph_runner.run_eager_static(seqs, **step_kwargs)
                         graph_token_ids = None
                     self._record_debug_logits(logits)
                     if self.parallel_context.attn_tp_rank != 0:
@@ -2623,7 +2013,7 @@ class ModelRunner:
 
             # 1. 准备前向上下文
             ctx = get_context()
-            input_ids, positions = self.prepare_step(seqs, is_prefill)
+            input_ids, positions = self.prepare_step(seqs, is_prefill, **step_kwargs)
             
             # 2. 准备稀疏化状态
             with profiler.record("model_sparse_prepare"):

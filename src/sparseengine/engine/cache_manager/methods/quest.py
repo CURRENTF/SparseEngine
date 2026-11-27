@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
-import time
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -15,17 +14,8 @@ from sparseengine.engine.decode_graph_contract import (
     DecodeGraphContract,
     DecodeGraphInputs,
 )
-from sparseengine.engine.prefix_cache import (
-    PrefixCacheBlock,
-    PrefixTransferKind,
-    RadixPrefixIndex,
-    build_prefix_cache_fingerprint,
-    select_write_through_candidates,
-    usable_prefix_cache_tokens,
-)
+from sparseengine.engine.prefix_cache import PrefixCacheBlock
 from sparseengine.engine.prefix_prune import (
-    PrefixPruneRecord,
-    normalize_prefix_prune_ranges,
     select_global_keep_block_indices,
 )
 from sparseengine.engine.sequence import Sequence
@@ -53,18 +43,10 @@ from ..base import (
     PagedDecodeViewMeta,
     SparseSelection,
 )
-from ..offload.prefix_components import (
-    ComponentPrefixOffloadController,
-    ComponentPrefixPool,
-    prefix_block_bytes,
-    storage_prefix_components,
-)
 from ..prefix_cache_mixin import PrefixCacheMixin
 from ..prefix_prune_scoring import PrefixPruneScoringMixin
 from ..prefix_offload import (
     PinnedQuestPrefixPool,
-    PrefixH2DOperation,
-    PrefixOffloadController,
     QuestPrefixOffloadController,
 )
 from ..storage import (
@@ -114,6 +96,31 @@ class QuestDecodeGraphState(CacheDecodeGraphState):
 
 class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager):
     """Paged KV cache + page metadata cache for QuEST."""
+
+    _prefix_payload_type = QuestPrefixBlockPayload
+    _prefix_label = "QuEST prefix"
+    _prefix_profile = "quest_prefix_cache"
+    _prefix_unit_name = "page"
+    _prefix_hit_capacity_device_resident_only = True
+
+    @property
+    def _prefix_device_unit_tokens(self) -> int:
+        return self.page_size
+
+    @property
+    def _radix_block_size(self) -> int:
+        return self.page_size
+
+    def _prefix_hit_method(self) -> str:
+        return "quest"
+
+    def _prefix_block_resident_tokens(self, block: PrefixCacheBlock) -> int:
+        return self._quest_payload(block).resident_tokens(self.page_size)
+
+    def _prefix_resident_units_for_ids(
+        self, block_ids: frozenset[bytes], *, view: str
+    ) -> int:
+        return self._prefix_resident_pages_for_ids(block_ids, view=view)
 
     def __init__(
         self,
@@ -215,18 +222,7 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
                 "Quest prefix cache requires prefix_cache_block_size == quest_chunk_size: "
                 f"prefix_cache_block_size={self.prefix_cache_block_size}, quest_chunk_size={self.page_size}."
             )
-        self.prefix_cache: RadixPrefixIndex | None = None
-        if self.enable_prefix_caching:
-            self.prefix_cache = RadixPrefixIndex(
-                block_size=self.prefix_cache_block_size,
-                fingerprint=build_prefix_cache_fingerprint(config, self.prefix_cache_block_size),
-                max_blocks=config.prefix_cache_max_blocks,
-            )
-        self.seq_id_to_prefix_blocks: dict[int, list[PrefixCacheBlock]] = {}
         self.seq_id_to_cached_pages: dict[int, set[int]] = {}
-        self._scheduler_capacity_snapshot_depth = 0
-        self._scheduler_freeable_block_ids: frozenset[bytes] | None = None
-        self._scheduler_reclaimable_pages: int | None = None
         self._prefill_metadata_full_pages = False
 
         # [2, L, P, H_meta, D_meta] -> 0:max, 1:min. Explicit KV uses
@@ -240,32 +236,12 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             dtype=self.hf_config.dtype,
             device=self.device,
         )
-        self._init_prefix_cache_runtime()
-        self.prefix_offload_controller: PrefixOffloadController | None = None
-        self._prefix_offload_step_h2d_operations: dict[int, PrefixH2DOperation] = {}
-        self._prefix_write_through_candidates: dict[bytes, PrefixCacheBlock] = {}
-        has_linear_layers = bool(
-            getattr(getattr(config, "runtime_layout", None), "linear_attention_layer_indices", ())
-        )
-        if bool(getattr(config, "enable_prefix_cache_offload", False)) and not has_linear_layers:
-            self._init_prefix_offload()
+        self._init_radix_prefix_cache()
 
-    def _init_prefix_offload(self) -> None:
-        if not self.enable_prefix_caching or self.prefix_cache is None:
-            raise RuntimeError(
-                "QuEST prefix cache offload requires a pure-attention QuEST prefix cache; "
-                "mixed recurrent snapshots are not supported."
-            )
-        if self.tp_size not in (1, 2):
-            raise RuntimeError("Prefix cache offload currently supports only TP=1 or TP=2.")
-        if not device_runtime.supports_pin_memory():
-            raise RuntimeError("Prefix cache offload requires pinned host memory support.")
-        if not device_runtime.supports_streams(self.device):
-            raise RuntimeError("Prefix cache offload requires asynchronous device streams.")
-        host_size_gb = getattr(self.config, "prefix_cache_host_size_gb", None)
-        if host_size_gb is None:
-            raise RuntimeError("Prefix cache offload requires prefix_cache_host_size_gb.")
-        storage = self.attention_cache_storage
+    def _prefix_offload_device_blocks(self) -> int:
+        return int(self.num_pages)
+
+    def _prefix_storage_components(self):
         summary_specs = tuple(
             CacheComponentSpec(
                 name, (self.metadata_num_heads, self.metadata_head_dim),
@@ -273,40 +249,17 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             )
             for name in ("page_max", "page_min")
         )
-        components = tuple(
+        return tuple(
             layer + tuple(
                 (spec, self.metadata_cache[component, index])
                 for component, spec in enumerate(summary_specs)
             )
             for index, layer in enumerate(
-                storage_prefix_components(storage, self.num_kv_layers)
+                super()._prefix_storage_components()
             )
         )
-        bytes_per_block = prefix_block_bytes(components, self.page_size)
-        host_capacity_blocks = int(float(host_size_gb) * (1024**3)) // bytes_per_block
-        required_blocks = int(self.num_pages)
-        if self.prefix_cache.max_blocks is not None:
-            required_blocks = min(required_blocks, int(self.prefix_cache.max_blocks))
-        if host_capacity_blocks < required_blocks:
-            raise RuntimeError(
-                "QuEST prefix host tier is too small for write-through safety: "
-                f"host_blocks={host_capacity_blocks} required_blocks={required_blocks} "
-                f"bytes_per_block={bytes_per_block} host_size_gb={host_size_gb}."
-            )
-        if isinstance(storage, MlaLatentStorage):
-            host_pool = ComponentPrefixPool(
-                components=components,
-                capacity_blocks=host_capacity_blocks,
-                block_size=self.page_size,
-            )
-            self.prefix_offload_controller = ComponentPrefixOffloadController(
-                components=components,
-                prefix_cache=self.prefix_cache,
-                host_pool=host_pool,
-                block_size=self.page_size,
-                device=self.device,
-            )
-            return
+
+    def _build_explicit_prefix_offload_controller(self, host_capacity_blocks: int):
         host_pool = PinnedQuestPrefixPool(
             capacity_blocks=host_capacity_blocks,
             num_layers=self.num_kv_layers,
@@ -315,7 +268,7 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             head_dim=self.head_dim,
             dtype=self.kv_cache.dtype,
         )
-        self.prefix_offload_controller = QuestPrefixOffloadController(
+        return QuestPrefixOffloadController(
             prefix_cache=self.prefix_cache,
             kv_cache=self.kv_cache,
             device_metadata_cache=self.metadata_cache,
@@ -323,14 +276,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             block_size=self.page_size,
             device=self.device,
         )
-
-    def _prefix_offload_enabled(self) -> bool:
-        return getattr(self, "prefix_offload_controller", None) is not None
-
-    def _poll_prefix_offload(self) -> None:
-        controller = getattr(self, "prefix_offload_controller", None)
-        if controller is not None:
-            controller.poll()
 
     def allocate_kv_cache(self):
         available_memory, slot_bytes_per_layer = self._get_available_slots_info()
@@ -539,68 +484,13 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
     def num_free_slots(self) -> int:
         return int(self._num_free_pages * self.page_size)
 
-    def _prefix_evictable_slots(self) -> int:
-        if self.prefix_cache is None:
-            return 0
-        block_ids = (
-            self.prefix_cache.device_freeable_block_ids()
-            if self._prefix_offload_enabled()
-            else self._prefix_freeable_block_ids_for_capacity()
-        )
-        return int(self._prefix_resident_pages_for_ids(block_ids, view="evictable") * self.page_size)
-
     def _prefix_resident_pages_for_ids(
         self, block_ids: frozenset[bytes], *, view: str = "explicit"
     ) -> int:
         return self._prefix_resident_weight_for_ids(block_ids, view=view)
 
-    def _prefix_block_capacity_weight(self, block: PrefixCacheBlock) -> int:
-        return self._quest_payload(block).resident_tokens(self.page_size) // self.page_size
-
-    def _prefix_freeable_block_ids_for_capacity(self) -> frozenset[bytes]:
-        if self.prefix_cache is None:
-            return frozenset()
-        if self._scheduler_capacity_snapshot_depth <= 0:
-            return self.prefix_cache.freeable_block_ids()
-        if self._scheduler_freeable_block_ids is None:
-            self._scheduler_freeable_block_ids = self.prefix_cache.freeable_block_ids()
-        return self._scheduler_freeable_block_ids
-
-    @contextmanager
-    def scheduler_capacity_snapshot(self):
-        """Reuse one immutable prefix-capacity view within a scheduler pass."""
-        self._scheduler_capacity_snapshot_depth += 1
-        if self._scheduler_capacity_snapshot_depth == 1:
-            self._scheduler_freeable_block_ids = None
-            self._scheduler_reclaimable_pages = None
-        try:
-            yield
-        finally:
-            self._scheduler_capacity_snapshot_depth -= 1
-            if self._scheduler_capacity_snapshot_depth == 0:
-                self._scheduler_freeable_block_ids = None
-                self._scheduler_reclaimable_pages = None
-
     def _prefix_step_reclaimable_pages(self) -> int:
-        if self.prefix_cache is None:
-            return 0
-        if (
-            self._scheduler_capacity_snapshot_depth > 0
-            and self._scheduler_reclaimable_pages is not None
-        ):
-            return self._scheduler_reclaimable_pages
-        block_ids = (
-            self.prefix_cache.device_reclaimable_block_ids()
-            if self._prefix_offload_enabled()
-            else self._prefix_freeable_block_ids_for_capacity()
-        )
-        reclaimable_pages = self._prefix_resident_pages_for_ids(block_ids, view="reclaimable")
-        if self._scheduler_capacity_snapshot_depth > 0:
-            self._scheduler_reclaimable_pages = reclaimable_pages
-        return int(reclaimable_pages)
-
-    def _prefix_step_reclaimable_slots(self) -> int:
-        return int(self._prefix_step_reclaimable_pages() * self.page_size)
+        return self._prefix_step_reclaimable_units()
 
     def _partial_page_free_slots(self) -> int:
         total = 0
@@ -671,9 +561,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             return 1
         return self.page_size
 
-    def prompt_admission_free_slots(self) -> int:
-        return int(self.num_free_slots + self._prefix_step_reclaimable_slots())
-
     def _ceil_to_page_slots(self, n_tokens: int) -> int:
         n_tokens = int(n_tokens)
         if n_tokens <= 0:
@@ -719,48 +606,8 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
                 costs[block.stable_block_id] = int(resident_tokens)
         return {"slots": costs} if costs else {}
 
-    def _prefix_hit_chain(self, seq: Sequence) -> list[PrefixCacheBlock]:
-        if self.prefix_cache is None or seq.prefix_cache_hit_last_block_id is None:
-            return []
-        return self.prefix_cache.get_chain(
-            seq.prefix_cache_hit_last_block_id,
-            int(seq.prefix_cache_hit_block_count),
-        )
-
     def _prefix_hit_capacity_pages(self, seq: Sequence) -> tuple[int, int]:
-        if self.prefix_cache is None:
-            return 0, 0
-        self._prefix_hit_capacity_counts(seq)
-        entry = self.prefix_hit_capacity_cache.get(seq)
-        if entry is not None and entry.weighted_slots is not None:
-            return entry.weighted_slots
-        chain = tuple(self._prefix_hit_chain(seq)) if entry is None else entry.chain
-        freeable_ids = (
-            self.prefix_cache.device_reclaimable_block_ids()
-            if self._prefix_offload_enabled()
-            else self.prefix_cache.freeable_block_ids()
-        )
-        reclaimable = sum(
-            self._quest_payload(block).resident_tokens(self.page_size) // self.page_size
-            for block in chain
-            if block.stable_block_id in freeable_ids and block.residency.device_present
-        )
-        promotion = (
-            sum(
-                self._quest_payload(block).resident_tokens(self.page_size) // self.page_size
-                for block in chain
-                if not block.residency.device_present
-            )
-            if self._prefix_offload_enabled()
-            else 0
-        )
-        result = int(reclaimable), int(promotion)
-        if entry is not None:
-            self.prefix_hit_capacity_cache[seq] = replace(entry, weighted_slots=result)
-        return result
-
-    def prompt_logical_reservation_cost(self, seq: Sequence) -> int:
-        return int(self.prompt_admission_cost(seq))
+        return self._prefix_hit_capacity_units(seq)
 
     def reserved_prefill_slots(self, waiting_seqs: deque[Sequence], engine_prefill_chunk_size: int) -> int:
         reserved = 0
@@ -784,64 +631,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             stats.update(controller.stats())
         return stats
 
-    def _require_prefix_cache(self) -> RadixPrefixIndex:
-        if getattr(self, "prefix_cache", None) is None:
-            raise RuntimeError("prefix cache is not enabled for this cache manager.")
-        return self.prefix_cache
-
-    def prefix_cache_inspect(
-        self,
-        token_ids: list[int],
-        *,
-        include_subtree: bool = False,
-    ) -> dict[str, object]:
-        self._poll_prefix_offload()
-        return self._require_prefix_cache().inspect_prefix(
-            [int(token_id) for token_id in token_ids],
-            include_subtree=include_subtree,
-        )
-
-    def prefix_cache_match(self, token_ids: list[int]) -> dict[str, object]:
-        self._poll_prefix_offload()
-        if getattr(self, "prefix_cache", None) is None:
-            return {
-                "supported": True,
-                "enabled": False,
-                "method": str(getattr(self.config, "sparse_method", "") or ""),
-                "matched_tokens": 0,
-                "matched_blocks": 0,
-                "match_ratio": 0.0,
-                "reason": "prefix cache is not enabled for this cache manager.",
-            }
-        token_ids = [int(token_id) for token_id in token_ids]
-        usable_tokens = usable_prefix_cache_tokens(len(token_ids), self.prefix_cache_block_size)
-        hit_len, hit_last_block_id, hit_blocks = self.prefix_cache.match_longest_prefix(
-            token_ids,
-            max_usable_tokens=usable_tokens,
-        )
-        chain = (
-            []
-            if hit_last_block_id is None
-            else self.prefix_cache.get_chain(hit_last_block_id, hit_blocks)
-        )
-        return {
-            "supported": True,
-            "enabled": True,
-            "method": str(getattr(self.config, "sparse_method", "") or ""),
-            "block_size": int(self.prefix_cache_block_size),
-            "prompt_tokens": int(len(token_ids)),
-            "usable_tokens": int(usable_tokens),
-            "matched_tokens": int(hit_len),
-            "matched_blocks": int(hit_blocks),
-            "resident_kv_tokens": int(sum(
-                self._quest_payload(block).resident_tokens(self.page_size)
-                for block in chain
-            )),
-            "match_ratio": 0.0 if usable_tokens <= 0 else float(hit_len) / float(usable_tokens),
-            "last_block_id": None if hit_last_block_id is None else hit_last_block_id.hex(),
-            "live_blocks": int(len(self.prefix_cache)),
-        }
-
     def _quest_payload(self, block: PrefixCacheBlock) -> QuestPrefixBlockPayload:
         payload = block.payload
         if not isinstance(payload, QuestPrefixBlockPayload):
@@ -849,15 +638,7 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         payload.resident_tokens(self.page_size)
         return payload
 
-    def _prefix_prune_prefix_logical_positions(self, seq_id: int) -> list[int]:
-        positions: list[int] = []
-        for block in self.seq_id_to_prefix_blocks[int(seq_id)]:
-            payload = self._quest_payload(block)
-            if payload.retained_offsets == ():
-                continue
-            base = int(block.logical_block_idx) * self.page_size
-            positions.extend(range(base, base + self.page_size))
-        return positions
+    _prefix_block_payload = _quest_payload
 
     def validate_prefix_prune_keep_tokens(self, keep_tokens: int) -> None:
         if int(keep_tokens) % self.page_size:
@@ -866,101 +647,7 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
                 f"keep_tokens={keep_tokens} page_size={self.page_size}."
             )
 
-    def validate_prefix_cache_prune_target(
-        self,
-        token_ids: list[int],
-        *,
-        range_start: int | None = None,
-        range_end: int | None = None,
-        ranges: list[tuple[int, int]] | None = None,
-        allow_recompress: bool = False,
-    ) -> list[PrefixCacheBlock]:
-        intervals = normalize_prefix_prune_ranges(
-            token_count=len(token_ids),
-            block_size=self.page_size,
-            range_start=range_start,
-            range_end=range_end,
-            ranges=ranges,
-        )
-        if allow_recompress:
-            raise RuntimeError(
-                "allow_recompress is not implemented because dropped KV cannot be "
-                "rescored without rebuilding the original dense prefix."
-            )
-        controller = getattr(self, "prefix_offload_controller", None)
-        if controller is not None:
-            controller.synchronize_all()
-        prefix_cache = self._require_prefix_cache()
-        final_end = intervals[-1][1]
-        block_ids = prefix_cache.block_ids_for_tokens(
-            [int(token_id) for token_id in token_ids[:final_end]],
-            max_tokens=final_end,
-        )
-        expected_blocks = final_end // self.page_size
-        if len(block_ids) != expected_blocks:
-            raise RuntimeError(
-                "prefix prune selector does not cover a complete block-aligned range."
-            )
-        hit_len, last_block_id, hit_blocks = prefix_cache.match_longest_block_ids(block_ids)
-        if hit_len != final_end or hit_blocks != expected_blocks or last_block_id is None:
-            raise RuntimeError(
-                "prefix prune target is not fully present in the radix tree: "
-                f"requested_end={final_end} matched_tokens={hit_len}."
-            )
-        chain = prefix_cache.get_chain(last_block_id, expected_blocks)
-        affected = [
-            block
-            for left, right in intervals
-            for block in chain[left // self.page_size : right // self.page_size]
-        ]
-        blocked = [
-            block.stable_block_id.hex()[:16]
-            for block in affected
-            if int(block.ref_count) != 0 or block.residency.transfer is not None
-        ]
-        if blocked:
-            raise RuntimeError(
-                "prefix prune requires an idle, transfer-free subtree interval: "
-                f"blocked_blocks={blocked}."
-            )
-        if any(self._quest_payload(block).retained_offsets is not None for block in affected):
-            raise RuntimeError(
-                "prefix prune target overlaps an already pruned block; "
-                "repeated compression of the same interval is not implemented."
-            )
-        return affected
-
-    @torch.no_grad()
-    def prefix_cache_prune(
-        self,
-        token_ids: list[int],
-        *,
-        range_start: int | None = None,
-        range_end: int | None = None,
-        ranges: list[tuple[int, int]] | None = None,
-        keep_indices: torch.Tensor,
-        policy: str,
-        prune_id: str,
-        allow_recompress: bool = False,
-    ) -> dict[str, object]:
-        intervals = normalize_prefix_prune_ranges(
-            token_count=len(token_ids),
-            block_size=self.page_size,
-            range_start=range_start,
-            range_end=range_end,
-            ranges=ranges,
-        )
-        affected = self.validate_prefix_cache_prune_target(
-            token_ids,
-            ranges=intervals,
-            allow_recompress=allow_recompress,
-        )
-        width = sum(right - left for left, right in intervals)
-        selected = sorted({int(index) for index in keep_indices.detach().cpu().tolist()})
-        if any(index < 0 or index >= width for index in selected):
-            raise ValueError("prefix prune keep mask contains an out-of-range token index.")
-        if len(selected) != int(keep_indices.numel()):
-            raise ValueError("prefix prune keep mask contains duplicate token indices.")
+    def _validate_prefix_prune_selection(self, selected: list[int]) -> None:
         selected_page_counts: dict[int, int] = {}
         for index in selected:
             page_index = index // self.page_size
@@ -977,15 +664,11 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
                 f"block_index={page_index} retained={count} "
                 f"page_size={self.page_size}."
             )
-        kept_page_indices = set(selected_page_counts)
-        keep_blocks: list[PrefixCacheBlock] = []
-        drop_blocks: list[PrefixCacheBlock] = []
-        for block_index, block in enumerate(affected):
-            if block_index in kept_page_indices:
-                keep_blocks.append(block)
-            else:
-                drop_blocks.append(block)
 
+    def _compact_prefix_prune_payloads(
+        self, plans: list[tuple[PrefixCacheBlock, tuple[int, ...]]]
+    ) -> dict[str, object]:
+        drop_blocks = [block for block, offsets in plans if not offsets]
         dropped_pages: list[int] = []
         for block in drop_blocks:
             payload = self._quest_payload(block)
@@ -999,34 +682,11 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         if self._num_free_pages + len(dropped_pages) > int(self.free_pages_stack.numel()):
             raise RuntimeError("QuEST prefix page free stack would overflow during pruning.")
 
-        records = []
-        block_cursor = 0
-        created_at = time.time()
-        for left, right in intervals:
-            block_count = (right - left) // self.page_size
-            retained = sum(
-                self.page_size
-                for page_index in range(block_cursor, block_cursor + block_count)
-                if page_index in kept_page_indices
-            )
-            records.append((affected[block_cursor], PrefixPruneRecord(
-                prune_id=prune_id,
-                policy=policy,
-                range_start=left,
-                range_end=right,
-                original_tokens=right - left,
-                retained_tokens=retained,
-                created_at=created_at,
-            )))
-            block_cursor += block_count
-
         empty_slots = torch.empty(0, dtype=torch.int32, device=self.device)
-        full_page_offsets = tuple(range(self.page_size))
-        for block in keep_blocks:
-            self._quest_payload(block).retained_offsets = full_page_offsets
+        for block, offsets in plans:
+            self._quest_payload(block).retained_offsets = offsets
         for block in drop_blocks:
             payload = self._quest_payload(block)
-            payload.retained_offsets = ()
             if block.residency.device_present:
                 payload.block_slot = None
                 payload.block_slots = None
@@ -1035,21 +695,10 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             self._return_prefix_device_pages(torch.tensor(
                 dropped_pages, dtype=torch.int32, device=self.device,
             ))
-        for block, record in records:
-            block.prune_record = record
-        self._require_prefix_cache().mark_payload_compacted(affected)
         return {
-            "prune_id": str(prune_id),
-            "policy": str(policy),
-            "range": [intervals[0][0], intervals[-1][1]],
-            "ranges": [list(span) for span in intervals],
-            "logical_tokens": width,
-            "retained_tokens": len(selected),
-            "retained_pages": len(keep_blocks),
+            "retained_pages": len(plans) - len(drop_blocks),
             "freed_device_slots": len(dropped_pages) * self.page_size,
-            "affected_blocks": len(affected),
             "selection_granularity": "quest_page",
-            "quality_degraded": True,
         }
 
     def select_prefix_prune_keep_indices(
@@ -1065,85 +714,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             block_size=self.page_size,
             protected_suffix_tokens=protected_suffix_tokens,
         )
-
-    def prefix_cache_delete_subtree(self, token_ids: list[int]) -> dict[str, object]:
-        controller = getattr(self, "prefix_offload_controller", None)
-        if controller is not None:
-            controller.synchronize_all()
-        normalized = [int(token_id) for token_id in token_ids]
-        prefix_cache = self._require_prefix_cache()
-        plan = prefix_cache.preview_delete_subtree(normalized)
-        self.synchronize_prefix_cache_delete_plan(plan.to_dict())
-        result = prefix_cache.safe_delete_subtree(normalized)
-        self._free_prefix_cache_blocks(result.deleted_blocks)
-        return result.to_dict()
-
-    def prefix_cache_set_eviction_priority(
-        self,
-        token_ids: list[int],
-        *,
-        priority: int,
-    ) -> dict[str, object]:
-        return self._require_prefix_cache().set_subtree_eviction_priority(
-            [int(token_id) for token_id in token_ids],
-            int(priority),
-        )
-
-    def refresh_prefix_cache_hit(self, seq: Sequence) -> None:
-        self._poll_prefix_offload()
-        self.clear_prefix_cache_hit(seq)
-        if not self.enable_prefix_caching or self.prefix_cache is None:
-            return
-        if seq.num_prefilled_tokens != 0 or seq.num_completion_tokens != 0:
-            return
-        usable_tokens = usable_prefix_cache_tokens(seq.num_prompt_tokens, self.page_size)
-        if usable_tokens <= 0:
-            return
-        with profiler.record("quest_prefix_cache_lookup"):
-            hit_len, last_block_id, hit_blocks = self._lookup_prefix_cache_hit(
-                seq,
-                usable_tokens,
-            )
-        if hit_len <= 0:
-            return
-        if last_block_id is None or hit_blocks <= 0:
-            raise RuntimeError("Quest prefix cache lookup returned an invalid hit.")
-        if hit_len >= seq.num_prompt_tokens or hit_len % self.page_size != 0:
-            raise RuntimeError(
-                "Quest prefix cache lookup returned an unusable hit length: "
-                f"seq_id={seq.seq_id} hit_len={hit_len} prompt_len={seq.num_prompt_tokens} "
-                f"page_size={self.page_size}."
-            )
-        seq.prefix_cache_enabled = True
-        seq.prefix_cache_hit_len = int(hit_len)
-        seq.prefix_cache_hit_block_count = int(hit_blocks)
-        seq.prefix_cache_hit_last_block_id = last_block_id
-        seq.prefix_cache_block_size = self.page_size
-        seq.prefix_cache_method = "quest"
-
-    def _free_prefix_cache_blocks(self, blocks: list[PrefixCacheBlock]) -> None:
-        pending = getattr(self, "_prefix_write_through_candidates", None)
-        host_blocks: list[PrefixCacheBlock] = []
-        device_blocks: list[PrefixCacheBlock] = []
-        for block in blocks:
-            if pending is not None:
-                pending.pop(block.stable_block_id, None)
-            payload = block.payload
-            if not isinstance(payload, QuestPrefixBlockPayload):
-                raise RuntimeError("Quest prefix cache block is missing block slot payload.")
-            if block.residency.device_present:
-                device_blocks.append(block)
-            if block.residency.host_present:
-                host_blocks.append(block)
-        self._free_device_prefix_blocks(device_blocks)
-        if host_blocks:
-            controller = getattr(self, "prefix_offload_controller", None)
-            if controller is None:
-                raise RuntimeError("QuEST host-resident prefix block has no offload controller.")
-            controller.free_host_payloads(host_blocks)
-
-    def _free_device_prefix_block(self, block: PrefixCacheBlock) -> None:
-        self._free_device_prefix_blocks([block])
 
     def _free_device_prefix_blocks(self, blocks: list[PrefixCacheBlock]) -> None:
         if not blocks:
@@ -1328,28 +898,16 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         private_page_offset = int(block.logical_block_idx) - len(chain)
         cached_pages.add(resident_prefix_pages + private_page_offset)
 
-    def build_prefix_kv_payload(self, seq: Sequence, block_start: int, block_end: int) -> QuestPrefixBlockPayload:
-        block_start = int(block_start)
-        block_end = int(block_end)
-        if block_end <= block_start:
-            raise ValueError(f"Invalid Quest prefix KV payload range: {block_start}:{block_end}.")
-        if block_start % self.page_size != 0 or block_end % self.page_size != 0:
+    def _validate_mixed_prefix_range(self, start: int, end: int) -> None:
+        if start % self.page_size != 0 or end % self.page_size != 0:
             raise RuntimeError(
                 "Quest mixed prefix payload must be page aligned: "
-                f"range={block_start}:{block_end} page_size={self.page_size}."
+                f"range={start}:{end} page_size={self.page_size}."
             )
-        row_idx = self.seq_id_to_row.get(int(seq.seq_id))
-        if row_idx is None:
-            raise RuntimeError(f"Cannot build Quest prefix KV payload for unknown seq_id={seq.seq_id}.")
-        row_len = int(self.row_seq_lens[row_idx])
-        if block_end > row_len:
-            raise RuntimeError(
-                "Cannot build Quest prefix KV payload beyond materialized row length: "
-                f"seq_id={seq.seq_id} block={block_start}:{block_end} row_len={row_len}."
-            )
-        slots = self.buffer_req_to_token_slots[row_idx, block_start:block_end].detach().to(
-            dtype=torch.int32,
-        ).clone()
+
+    def _build_mixed_prefix_payload(
+        self, slots: torch.Tensor, block_start: int, block_end: int
+    ) -> QuestPrefixBlockPayload:
         page_slots = self._validate_page_slot_matrix(slots)
         return QuestPrefixBlockPayload(
             block_slot=None,
@@ -1359,159 +917,51 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             block_slots=page_slots,
         )
 
-    def attach_prefix_kv_payloads(self, seq: Sequence, payloads: list[object]) -> None:
-        if not payloads:
-            return
-        seq_id = int(seq.seq_id)
-        previous_row = self.seq_id_to_row.get(seq_id)
-        start = 0 if previous_row is None else int(self.row_seq_lens[previous_row])
-        end = start
-        slot_parts = []
-        page_parts = []
-        for payload in payloads:
-            if not isinstance(payload, QuestPrefixBlockPayload):
-                raise RuntimeError("Quest mixed prefix KV payload is missing page payload.")
-            if not isinstance(payload.token_slots, torch.Tensor):
-                raise RuntimeError("Quest mixed prefix KV payload has no device token slots.")
-            slots = payload.token_slots.to(device=self.device, dtype=torch.int32)
-            if slots.ndim != 1:
-                slots = slots.reshape(-1)
-            expected_tokens = int(payload.block_end) - int(payload.block_start)
-            if expected_tokens <= 0 or int(slots.numel()) != expected_tokens:
-                raise RuntimeError(
-                    "Quest mixed prefix KV payload token count does not match its range: "
-                    f"range={int(payload.block_start)}:{int(payload.block_end)} "
-                    f"slots={int(slots.numel())}."
-                )
-            if int(payload.block_start) != end or end % self.page_size != 0:
-                raise RuntimeError(
-                    "Quest mixed prefix KV payload attach must be contiguous and page aligned: "
-                    f"seq_id={seq_id} block_start={int(payload.block_start)} row_len={end}."
-                )
-            page_parts.append(self._payload_page_slots(payload))
-            slot_parts.append(slots)
-            end += expected_tokens
-        if end > int(self.buffer_req_to_token_slots.shape[1]):
-            raise RuntimeError("Attaching mixed Quest prefix KV payload exceeds row capacity.")
-        slots = slot_parts[0] if len(slot_parts) == 1 else torch.cat(slot_parts)
-        page_slots = page_parts[0] if len(page_parts) == 1 else torch.cat(page_parts)
-        page_slots = self._validate_page_slot_matrix(slots, page_slots)
-        page_count = int(page_slots.numel())
-        start_page = start // self.page_size
-        end_page = start_page + page_count
-        if end_page > int(self.buffer_req_to_page_slots.shape[1]):
+    def _mixed_prefix_attach_units(
+        self, seq_id: int, start: int, payload: QuestPrefixBlockPayload, slots: torch.Tensor
+    ) -> torch.Tensor:
+        expected_tokens = int(payload.block_end) - int(payload.block_start)
+        if expected_tokens <= 0 or int(slots.numel()) != expected_tokens:
+            raise RuntimeError(
+                "Quest mixed prefix KV payload token count does not match its range: "
+                f"range={int(payload.block_start)}:{int(payload.block_end)} "
+                f"slots={int(slots.numel())}."
+            )
+        if int(payload.block_start) != start or start % self.page_size != 0:
+            raise RuntimeError(
+                "Quest mixed prefix KV payload attach must be contiguous and page aligned: "
+                f"seq_id={seq_id} block_start={int(payload.block_start)} row_len={start}."
+            )
+        return self._payload_page_slots(payload)
+
+    def _pack_mixed_prefix_units(
+        self, start: int, slots: torch.Tensor, unit_parts: list[torch.Tensor]
+    ) -> torch.Tensor:
+        pages = unit_parts[0] if len(unit_parts) == 1 else torch.cat(unit_parts)
+        pages = self._validate_page_slot_matrix(slots, pages)
+        if start // self.page_size + pages.numel() > self.buffer_req_to_page_slots.shape[1]:
             raise RuntimeError("Attaching mixed Quest prefix KV payload exceeds page row capacity.")
-        row_idx = self._get_free_row(seq_id)
-        try:
-            self.buffer_req_to_page_slots[row_idx, start_page:end_page].copy_(page_slots)
-            self.buffer_req_to_token_slots[row_idx, start:end].copy_(slots)
-        except BaseException:
-            self.buffer_req_to_token_slots[row_idx, start:end].zero_()
-            self.buffer_req_to_page_slots[row_idx, start_page:end_page].fill_(-1)
-            if previous_row is None:
-                self.seq_id_to_row.pop(seq_id)
-                self.free_rows.appendleft(row_idx)
-            raise
-        self.seq_id_to_cached_pages.setdefault(seq_id, set()).update(range(start_page, end_page))
-        self.row_seq_lens[row_idx] = end
-        self.row_logical_lens[row_idx] = end
-
-    def validate_prefix_kv_attach(self, seq: Sequence) -> bool:
-        row_idx = self.seq_id_to_row.get(int(seq.seq_id))
-        if row_idx is not None and int(self.row_seq_lens[row_idx]) != 0:
-            raise RuntimeError(
-                "Cannot attach mixed Quest prefix KV to a non-empty row: "
-                f"seq_id={seq.seq_id} row_idx={row_idx} "
-                f"row_len={int(self.row_seq_lens[row_idx])}."
-            )
-        if row_idx is None and not self.free_rows:
-            raise RuntimeError("No free rows in cache manager buffer!")
-        return row_idx is not None
-
-    def rollback_prefix_kv_attach(
-        self,
-        seq: Sequence,
-        payloads: list[object],
-        *,
-        row_preexisted: bool,
-    ) -> None:
-        normalized: list[QuestPrefixBlockPayload] = []
-        expected_start = 0
-        for payload in payloads:
-            if not isinstance(payload, QuestPrefixBlockPayload):
-                raise RuntimeError("Quest mixed prefix rollback received an invalid payload.")
-            if int(payload.block_start) != expected_start or int(payload.block_end) <= expected_start:
-                raise RuntimeError(
-                    "Quest mixed prefix rollback payloads are not contiguous: "
-                    f"expected_start={expected_start} "
-                    f"range={int(payload.block_start)}:{int(payload.block_end)}."
-                )
-            normalized.append(payload)
-            expected_start = int(payload.block_end)
-        if not normalized:
-            return
-
-        seq_id = int(seq.seq_id)
-        row_idx = self.seq_id_to_row.get(seq_id)
-        if row_idx is None or int(self.row_seq_lens[row_idx]) != expected_start:
-            raise RuntimeError(
-                "Quest mixed prefix rollback row state is inconsistent: "
-                f"seq_id={seq_id} row_idx={row_idx} "
-                f"row_len={None if row_idx is None else int(self.row_seq_lens[row_idx])} "
-                f"expected={expected_start}."
-            )
-        expected_pages = set(range(expected_start // self.page_size))
-        if self.seq_id_to_cached_pages.get(seq_id) != expected_pages:
-            raise RuntimeError(
-                "Quest mixed prefix rollback cached pages are inconsistent: "
-                f"seq_id={seq_id} expected={sorted(expected_pages)} "
-                f"got={sorted(self.seq_id_to_cached_pages.get(seq_id, set()))}."
-            )
-
-        self.buffer_req_to_token_slots[row_idx, :expected_start] = 0
-        self.buffer_req_to_page_slots[row_idx, : len(expected_pages)] = -1
-        self.row_seq_lens[row_idx] = 0
-        self.row_logical_lens[row_idx] = 0
-        self.seq_id_to_cached_pages.pop(seq_id, None)
-        if not row_preexisted:
-            owner = self.seq_id_to_row.pop(seq_id, None)
-            if owner != row_idx:
-                raise RuntimeError(
-                    "Quest mixed prefix rollback row ownership changed unexpectedly: "
-                    f"seq_id={seq_id} expected_row={row_idx} owner={owner}."
-                )
-            self.free_rows.appendleft(row_idx)
+        return pages
 
     def free_prefix_kv_payload(self, payload: object) -> None:
         if not isinstance(payload, QuestPrefixBlockPayload):
             raise RuntimeError("Quest mixed prefix KV payload is missing page payload.")
         self._release_prefix_payload_pages(payload)
 
-    def allocate_prefix_kv_payload_device(self, payload: object) -> None:
-        self.allocate_prefix_kv_payloads_device([payload])
+    def _mixed_prefix_allocation_count(self, tokens: int) -> int:
+        if tokens <= 0 or tokens % self.page_size != 0:
+            raise RuntimeError("Quest mixed prefix KV promotion requires whole pages.")
+        return tokens // self.page_size
 
-    def allocate_prefix_kv_payloads_device(self, payloads: list[object]) -> None:
-        normalized: list[QuestPrefixBlockPayload] = []
-        page_counts: list[int] = []
-        for payload in payloads:
-            if not isinstance(payload, QuestPrefixBlockPayload):
-                raise RuntimeError("Quest mixed prefix KV payload is missing page payload.")
-            if isinstance(payload.token_slots, torch.Tensor):
-                raise RuntimeError("Quest mixed prefix KV payload is already device-resident.")
-            token_count = int(payload.block_end) - int(payload.block_start)
-            if token_count <= 0 or token_count % self.page_size != 0:
-                raise RuntimeError("Quest mixed prefix KV promotion requires whole pages.")
-            normalized.append(payload)
-            page_counts.append(token_count // self.page_size)
-        if not normalized:
-            return
-        pages = self._take_prefix_device_pages(sum(page_counts))
+    def _stage_mixed_prefix_payloads(
+        self, payloads: list[QuestPrefixBlockPayload], page_counts: list[int], pages: torch.Tensor
+    ) -> None:
         token_slots = (
             pages[:, None] * self.page_size + self.page_offsets_i32[None, :]
         ).reshape(-1)
         page_offset = 0
         token_offset = 0
-        for payload, page_count in zip(normalized, page_counts):
+        for payload, page_count in zip(payloads, page_counts):
             token_count = page_count * self.page_size
             payload.block_slot = None
             payload.block_slots = pages[page_offset : page_offset + page_count]
@@ -1519,11 +969,7 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             page_offset += page_count
             token_offset += token_count
 
-    def free_prefix_kv_payload_device(self, payload: object) -> None:
-        if not isinstance(payload, QuestPrefixBlockPayload):
-            raise RuntimeError("Quest mixed prefix KV payload is missing page payload.")
-        if not isinstance(payload.token_slots, torch.Tensor):
-            raise RuntimeError("Quest mixed prefix KV payload has no device pages to demote.")
+    def _release_mixed_prefix_payload_device(self, payload: QuestPrefixBlockPayload) -> None:
         pages = self._payload_page_slots(payload)
         self._return_prefix_device_pages(pages)
         payload.block_slot = None
@@ -1590,352 +1036,125 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         self.seq_id_to_cached_pages.clear()
         getattr(self, "_prefix_write_through_candidates", {}).clear()
 
-    def _on_prefix_cache_reset(self) -> None:
-        self._prefix_resident_weight_cache = None
-        controller = getattr(self, "prefix_offload_controller", None)
-        if controller is not None:
-            controller.prefix_cache = self._require_prefix_cache()
-
     def reset_after_warmup(self) -> None:
         if self.enable_prefix_caching and self.prefix_cache is not None:
             self.reset_prefix_cache()
             return
         self._reset_prefix_cache_allocator_after_clear()
 
-    def _evict_prefix_cache_until_free(self, needed_slots: int) -> None:
-        if not self.enable_prefix_caching or self.prefix_cache is None:
-            return
-        needed_slots = int(needed_slots)
-        if self.num_free_slots >= needed_slots:
-            return
-        if self._prefix_offload_enabled():
-            controller = self.prefix_offload_controller
-            assert controller is not None
-            while self.num_free_slots < needed_slots:
-                self._poll_prefix_offload()
-                missing_slots = needed_slots - int(self.num_free_slots)
-                needed_pages = (missing_slots + self.page_size - 1) // self.page_size
-                with profiler.record("quest_prefix_cache_device_demote"):
-                    demoted = self.prefix_cache.demote_device_until_weight(
-                        needed_pages,
-                        lambda block: self._quest_payload(block).resident_tokens(
-                            self.page_size
-                        ) // self.page_size,
-                    )
-                self._free_device_prefix_blocks(demoted)
-                if self.num_free_slots >= needed_slots:
-                    return
-                if not controller.wait_oldest_d2h():
-                    break
-            return
-        missing_slots = needed_slots - int(self.num_free_slots)
-        needed_pages = (missing_slots + self.page_size - 1) // self.page_size
-        with profiler.record("quest_prefix_cache_evict"):
-            evicted = self.prefix_cache.evict_until_weight(
-                needed_pages,
-                lambda block: self._quest_payload(block).resident_tokens(
-                    self.page_size
-                ) // self.page_size,
-            )
-        self._free_prefix_cache_blocks(evicted)
+    @property
+    def _prefix_cached_rows(self) -> dict[int, set[int]]:
+        return self.seq_id_to_cached_pages
 
-    def _evict_prefix_cache_for_insert(self, needed_blocks: int = 1) -> None:
-        if not self.enable_prefix_caching or self.prefix_cache is None:
-            return
-        if not self._prefix_offload_enabled():
-            with profiler.record("quest_prefix_cache_evict"):
-                evicted = self.prefix_cache.ensure_insert_capacity(needed_blocks)
-            self._free_prefix_cache_blocks(evicted)
-            return
-        max_blocks = self.prefix_cache.max_blocks
-        if max_blocks is None:
-            return
-        over_capacity = len(self.prefix_cache) + int(needed_blocks) - int(max_blocks)
-        if over_capacity <= 0:
-            return
-        controller = self.prefix_offload_controller
-        assert controller is not None
-        evicted: list[PrefixCacheBlock] = []
-        while len(evicted) < over_capacity:
-            self._poll_prefix_offload()
-            remaining = over_capacity - len(evicted)
-            with profiler.record("quest_prefix_cache_host_evict"):
-                host_evicted = self.prefix_cache.evict_host_until_freeable(remaining)
-            self._free_prefix_cache_blocks(host_evicted)
-            evicted.extend(host_evicted)
-            if len(evicted) >= over_capacity:
-                break
-            with profiler.record("quest_prefix_cache_device_demote"):
-                demoted = self.prefix_cache.demote_device_until_freeable(remaining)
-            self._free_device_prefix_blocks(demoted)
-            with profiler.record("quest_prefix_cache_host_evict"):
-                newly_evicted = self.prefix_cache.evict_host_until_freeable(remaining)
-            self._free_prefix_cache_blocks(newly_evicted)
-            evicted.extend(newly_evicted)
-            if len(evicted) >= over_capacity:
-                break
-            # A successful wait retires one queued D2H operation.
-            # Queue exhaustion bounds retries without scanning the radix.
-            if not controller.wait_oldest_d2h():
-                break
-        if len(evicted) != over_capacity:
-            raise RuntimeError(
-                "QuEST prefix logical capacity exceeded and not enough CPU-only leaves "
-                "are evictable: "
-                f"live_blocks={len(self.prefix_cache)} max_blocks={max_blocks} "
-                f"needed_blocks={needed_blocks} evicted_blocks={len(evicted)}."
-            )
+    def _prefix_cached_entries(self, ranges: list[tuple[int, int]]) -> set[int]:
+        return {
+            page for start, end in ranges
+            for page in range(start // self.page_size, end // self.page_size)
+        }
 
-    def _ensure_prefix_host_capacity(self, needed_blocks: int) -> None:
-        controller = self.prefix_offload_controller
-        if controller is None:
-            raise RuntimeError("QuEST prefix host capacity requested without a controller.")
-        needed_blocks = int(needed_blocks)
-        if controller.host_pool.free_blocks >= needed_blocks:
-            return
-        missing = needed_blocks - controller.host_pool.free_blocks
-        with profiler.record("quest_prefix_cache_host_evict"):
-            evicted = self._require_prefix_cache().evict_host_until_freeable(missing)
-        self._free_prefix_cache_blocks(evicted)
-        if controller.host_pool.free_blocks < needed_blocks:
-            raise RuntimeError(
-                "QuEST prefix host pool cannot preserve write-through residency: "
-                f"need={needed_blocks} free={controller.host_pool.free_blocks} "
-                f"capacity={controller.host_pool.capacity_blocks}."
-            )
-
-    def _schedule_write_through_prefix_blocks(
-        self,
-        newly_unreferenced: list[PrefixCacheBlock] | None = None,
-    ) -> None:
-        if not self._prefix_offload_enabled():
-            return
-        if device_runtime.is_stream_capturing():
-            raise RuntimeError("QuEST prefix D2H scheduling is forbidden during graph capture.")
-        self._poll_prefix_offload()
-        prefix_cache = self._require_prefix_cache()
-        pending = getattr(self, "_prefix_write_through_candidates", None)
-        if pending is None:
-            pending = {}
-            self._prefix_write_through_candidates = pending
-        selected = select_write_through_candidates(
-            prefix_cache,
-            pending,
-            newly_unreferenced,
+    def _mark_mixed_prefix_ranges(self, seq_id: int, ranges: list[tuple[int, int]]) -> None:
+        self.seq_id_to_cached_pages.setdefault(seq_id, set()).update(
+            self._prefix_cached_entries(ranges)
         )
-        if not selected:
-            return
-        self._ensure_prefix_host_capacity(len(selected))
-        controller = self.prefix_offload_controller
-        assert controller is not None
-        with profiler.record("quest_prefix_cache_d2h_submit"):
-            controller.submit_d2h(selected)
-        for block in selected:
-            pending.pop(block.stable_block_id, None)
 
-    def _attach_prefix_cache_if_needed(self, seq: Sequence) -> None:
-        if not self.enable_prefix_caching or self.prefix_cache is None:
-            return
-        hit_len = int(getattr(seq, "prefix_cache_hit_len", 0) or 0)
-        if hit_len <= 0:
-            return
-        if seq.seq_id in self.seq_id_to_prefix_blocks:
-            return
-        prepared = getattr(seq, "prefix_prune_prefix", None)
-        if prepared is not None and prepared.token_slots is not None:
-            self.attach_prefix_prune_prefix(seq, prepared)
-            return
-        self._poll_prefix_offload()
-        with profiler.record("quest_prefix_cache_attach"):
-            if seq.prefix_cache_hit_last_block_id is None:
-                raise RuntimeError(f"seq_id={seq.seq_id} has Quest prefix hit length but no last block id.")
-            if hit_len % self.page_size != 0:
-                raise RuntimeError(
-                    f"seq_id={seq.seq_id} Quest prefix hit length is not page aligned: "
-                    f"hit_len={hit_len} page_size={self.page_size}."
-                )
-            chain = self.prefix_cache.get_chain(
-                seq.prefix_cache_hit_last_block_id,
-                int(seq.prefix_cache_hit_block_count),
-            )
-            if len(chain) * self.page_size != hit_len:
-                raise RuntimeError(
-                    "Quest prefix cache chain length does not match scheduler metadata: "
-                    f"seq_id={seq.seq_id} hit_len={hit_len} blocks={len(chain)} page_size={self.page_size}."
-                )
-            cpu_only_blocks: list[PrefixCacheBlock] = []
-            cpu_only_page_blocks: list[PrefixCacheBlock] = []
-            existing_h2d_operations: dict[int, PrefixH2DOperation] = {}
-            resident_pages = []
-            resident_slot_parts = []
-            saw_cpu_only = False
-            for page_idx, block in enumerate(chain):
-                payload = block.payload
-                if not isinstance(payload, QuestPrefixBlockPayload):
-                    raise RuntimeError(
-                        f"Invalid Quest prefix cache block for seq_id={seq.seq_id}: "
-                        f"logical_block_idx={block.logical_block_idx}."
-                    )
-                if int(block.logical_block_idx) != page_idx:
-                    raise ValueError("QuEST prefix attachment is not root-contiguous.")
-                block.residency.validate()
-                if payload.retained_offsets == ():
-                    if block.residency.device_present:
-                        if payload.block_slot is not None:
-                            raise RuntimeError("Pruned QuEST block still owns a device page.")
-                        if not isinstance(payload.token_slots, torch.Tensor) or payload.token_slots.numel():
-                            raise RuntimeError("Pruned QuEST block has inconsistent empty slots.")
-                    else:
-                        if not self._prefix_offload_enabled() or not block.residency.host_present:
-                            raise RuntimeError(
-                                "Pruned QuEST block has no usable cache residency."
-                            )
-                        payload.token_slots = torch.empty(
-                            0, dtype=torch.int32, device=self.device,
-                        )
-                        cpu_only_blocks.append(block)
-                    continue
-                if not block.residency.device_present:
-                    saw_cpu_only = True
-                    if not self._prefix_offload_enabled() or not block.residency.host_present:
-                        raise RuntimeError(
-                            "QuEST lookup returned a non-device block that cannot be promoted: "
-                            f"seq_id={seq.seq_id} block={block.stable_block_id.hex()[:16]}."
-                        )
-                    if block.residency.transfer is not None:
-                        raise RuntimeError(
-                            "CPU-only QuEST block has an unexpected in-flight transfer: "
-                            f"seq_id={seq.seq_id} transfer={block.residency.transfer.value}."
-                        )
-                    if payload.host_block_index is None:
-                        raise RuntimeError("CPU-only QuEST prefix block has no host allocation.")
-                    cpu_only_blocks.append(block)
-                    cpu_only_page_blocks.append(block)
-                    continue
-                if saw_cpu_only:
-                    raise RuntimeError("QuEST prefix device residency is not root-contiguous.")
-                if payload.block_slot is None or not isinstance(payload.token_slots, torch.Tensor):
-                    raise RuntimeError("Device-resident QuEST prefix block has no device page.")
-                if payload.token_slots.ndim != 1 or payload.token_slots.numel() != self.page_size:
-                    raise RuntimeError("QuEST prefix block must contain exactly one full page.")
-                page_slot = int(payload.block_slot)
-                if not 0 <= page_slot < self.num_pages:
-                    raise RuntimeError("QuEST prefix block page_slot is out of range.")
-                resident_pages.append(page_slot)
-                resident_slot_parts.append(payload.token_slots)
-                if block.residency.transfer == PrefixTransferKind.H2D:
-                    controller = self.prefix_offload_controller
-                    assert controller is not None
-                    operation = controller.h2d_operation_for_block(block)
-                    if operation is None:
-                        raise RuntimeError("QuEST H2D block has no tracked transfer operation.")
-                    existing_h2d_operations[id(operation)] = operation
+    def _take_prefix_device_units(self, count: int) -> torch.Tensor:
+        return self._take_prefix_device_pages(count)
 
-            page_parts = []
-            token_parts = []
-            if resident_pages:
-                pages = torch.tensor(resident_pages, dtype=torch.int32, device=self.device)
-                slots = torch.cat(resident_slot_parts)
-                expected = (pages[:, None] * self.page_size + self.page_offsets_i32[None, :]).reshape(-1)
-                # One device result read for the entire prefix, before refs or
-                # allocations change. Reuse these packed tensors for publication.
-                if not torch.equal(slots.to(dtype=torch.int32), expected):
-                    raise RuntimeError("QuEST prefix token slots do not match contiguous page geometry.")
-                page_parts.append(pages)
-                token_parts.append(slots)
+    def _return_prefix_device_units(self, units: torch.Tensor) -> None:
+        self._return_prefix_device_pages(units)
 
-            row_idx = self.seq_id_to_row.get(seq.seq_id)
-            if row_idx is not None and int(self.row_seq_lens[row_idx]) != 0:
-                raise RuntimeError(
-                    f"Cannot attach Quest prefix cache to non-empty row: seq_id={seq.seq_id} "
-                    f"row_idx={row_idx} row_len={int(self.row_seq_lens[row_idx])}."
-                )
-            if row_idx is None and not self.free_rows:
-                raise RuntimeError("No free rows in cache manager buffer!")
+    def _validate_prefix_row_capacity(self, seq_id: int, end: int, *, mixed: bool) -> None:
+        if mixed:
+            if end > self.buffer_req_to_token_slots.shape[1]:
+                raise RuntimeError("Attaching mixed Quest prefix KV payload exceeds row capacity.")
+        elif (end > self.buffer_req_to_token_slots.shape[1]
+                or end // self.page_size > self.buffer_req_to_page_slots.shape[1]):
+            raise ValueError("QuEST prefix attachment exceeds the physical row capacity.")
 
-            resident_page_count = len(resident_pages) + len(cpu_only_page_blocks)
-            resident_token_count = resident_page_count * self.page_size
-            if (resident_token_count > self.buffer_req_to_token_slots.shape[1]
-                    or resident_page_count > self.buffer_req_to_page_slots.shape[1]):
-                raise ValueError("QuEST prefix attachment exceeds the physical row capacity.")
-            existing_row = row_idx
-            old_cached_pages = self.seq_id_to_cached_pages.get(seq.seq_id)
-            acquired = 0
-            allocated_pages: torch.Tensor | None = None
-            submitted_operation: PrefixH2DOperation | None = None
-            promotion_committed = False
-            try:
-                for block in chain:
-                    self.prefix_cache.acquire_block_ref(block)
-                    acquired += 1
-                if cpu_only_blocks:
-                    if device_runtime.is_stream_capturing():
-                        raise RuntimeError("QuEST prefix H2D is forbidden during graph capture.")
-                    allocated_pages = self._take_prefix_device_pages(len(cpu_only_page_blocks))
-                    allocated_token_slots = (
-                        allocated_pages[:, None] * self.page_size
-                        + self.page_offsets_i32[None, :]
-                    )
-                    page_slot_values = allocated_pages.to(device="cpu").tolist()
-                    for block_idx, (block, page_slot) in enumerate(zip(
-                        cpu_only_page_blocks, page_slot_values, strict=True,
-                    )):
-                        payload = block.payload
-                        assert isinstance(payload, QuestPrefixBlockPayload)
-                        payload.block_slot = int(page_slot)
-                        payload.token_slots = allocated_token_slots[block_idx]
-                    controller = self.prefix_offload_controller
-                    assert controller is not None
-                    with profiler.record("quest_prefix_cache_h2d_submit"):
-                        submitted_operation = controller.submit_h2d(cpu_only_blocks)
-                        promotion_committed = True
-                    if allocated_pages.numel():
-                        page_parts.append(allocated_pages)
-                        token_parts.append(allocated_token_slots.reshape(-1))
+    def _validate_radix_block_index(self, block: PrefixCacheBlock, block_index: int) -> None:
+        if int(block.logical_block_idx) != block_index:
+            raise ValueError("QuEST prefix attachment is not root-contiguous.")
 
-                row_idx = self._get_free_row(seq.seq_id)
-                if submitted_operation is not None:
-                    existing_h2d_operations[id(submitted_operation)] = submitted_operation
-                self._prefix_offload_step_h2d_operations.update(existing_h2d_operations)
+    def _prepare_empty_radix_payload(self, block: PrefixCacheBlock, expected_tokens: int) -> bool:
+        if expected_tokens:
+            return False
+        payload = block.payload
+        if block.residency.device_present:
+            if payload.block_slot is not None:
+                raise RuntimeError("Pruned QuEST block still owns a device page.")
+            if not isinstance(payload.token_slots, torch.Tensor) or payload.token_slots.numel():
+                raise RuntimeError("Pruned QuEST block has inconsistent empty slots.")
+        else:
+            if not self._prefix_offload_enabled() or not block.residency.host_present:
+                raise RuntimeError("Pruned QuEST block has no usable cache residency.")
+            payload.token_slots = torch.empty(0, dtype=torch.int32, device=self.device)
+        # Empty logical blocks do not affect the contiguity of device pages.
+        return True
 
-                if page_parts:
-                    self.buffer_req_to_page_slots[row_idx, :resident_page_count] = (
-                        page_parts[0] if len(page_parts) == 1 else torch.cat(page_parts)
-                    )
-                    self.buffer_req_to_token_slots[row_idx, :resident_token_count] = (
-                        token_parts[0] if len(token_parts) == 1 else torch.cat(token_parts)
-                    )
-                self.row_seq_lens[row_idx] = resident_token_count
-                self.row_logical_lens[row_idx] = hit_len
-                self.seq_id_to_cached_pages[seq.seq_id] = set(range(resident_page_count))
-                self.seq_id_to_prefix_blocks[seq.seq_id] = chain
-                self.prefix_cache.touch_chain(chain)
-            except BaseException:
-                row_idx = self.seq_id_to_row.get(seq.seq_id)
-                if row_idx is not None:
-                    self.buffer_req_to_token_slots[row_idx, :] = 0
-                    self.buffer_req_to_page_slots[row_idx, :] = -1
-                    if hasattr(self, "buffer_req_to_page_slots_cpu"):
-                        self.buffer_req_to_page_slots_cpu[row_idx, :] = -1
-                    self.row_seq_lens[row_idx] = 0
-                    self.row_logical_lens[row_idx] = 0
-                    if existing_row is None:
-                        self.seq_id_to_row.pop(seq.seq_id, None)
-                        self.free_rows.appendleft(row_idx)
-                self.seq_id_to_prefix_blocks.pop(seq.seq_id, None)
-                if old_cached_pages is None:
-                    self.seq_id_to_cached_pages.pop(seq.seq_id, None)
-                else:
-                    self.seq_id_to_cached_pages[seq.seq_id] = old_cached_pages
-                for block in chain[:acquired]:
-                    self.prefix_cache.release_block_ref(block)
-                if allocated_pages is not None and not promotion_committed:
-                    self._return_prefix_device_pages(allocated_pages)
-                    for block in cpu_only_page_blocks:
-                        block.payload.block_slot = None
-                        block.payload.token_slots = None
-                # Submitted destinations stay index-owned until H2D retirement.
-                raise
+    def _prefix_attach_rollback_logical_len(self, previous_row: int | None) -> int:
+        return 0
+
+    def _validate_resident_radix_payload(
+        self, seq_id: int, block: PrefixCacheBlock, expected_tokens: int
+    ) -> None:
+        payload = block.payload
+        if payload.block_slot is None or not isinstance(payload.token_slots, torch.Tensor):
+            raise RuntimeError("Device-resident QuEST prefix block has no device page.")
+        if payload.token_slots.ndim != 1 or payload.token_slots.numel() != self.page_size:
+            raise RuntimeError("QuEST prefix block must contain exactly one full page.")
+        if not 0 <= int(payload.block_slot) < self.num_pages:
+            raise RuntimeError("QuEST prefix block page_slot is out of range.")
+
+    def _pack_radix_prefix_blocks(
+        self, blocks: list[PrefixCacheBlock],
+    ) -> tuple[list[torch.Tensor], torch.Tensor | None]:
+        if not blocks:
+            return [], None
+        page_ids = [int(block.payload.block_slot) for block in blocks]
+        pages = torch.tensor(page_ids, dtype=torch.int32, device=self.device)
+        slot_parts, _ = super()._pack_radix_prefix_blocks(blocks)
+        slots = slot_parts[0] if len(slot_parts) == 1 else torch.cat(slot_parts)
+        expected = (pages[:, None] * self.page_size + self.page_offsets_i32[None, :]).reshape(-1)
+        if not torch.equal(slots.to(dtype=torch.int32), expected):
+            raise RuntimeError("QuEST prefix token slots do not match contiguous page geometry.")
+        return [slots], pages
+
+    def _stage_radix_prefix_blocks(
+        self, blocks: list[PrefixCacheBlock], units: torch.Tensor,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        if not units.numel():
+            return None, None
+        token_slots = units[:, None] * self.page_size + self.page_offsets_i32[None, :]
+        with_pages = (block.payload for block in blocks if block.payload.retained_offsets != ())
+        for index, (payload, page) in enumerate(zip(with_pages, units.cpu().tolist(), strict=True)):
+            payload.block_slot = int(page)
+            payload.token_slots = token_slots[index]
+        return token_slots.reshape(-1), units
+
+    def _clear_radix_promotion_payloads(self, blocks: list[PrefixCacheBlock]) -> None:
+        for block in blocks:
+            if block.payload.retained_offsets != ():
+                block.payload.block_slot = None
+                block.payload.token_slots = None
+
+    def _write_prefix_row_slots(
+        self, row_idx: int, start: int, end: int,
+        slots: torch.Tensor, device_units: torch.Tensor | None,
+    ) -> None:
+        assert device_units is not None
+        start_page = start // self.page_size
+        end_page = start_page + int(device_units.numel())
+        self.buffer_req_to_page_slots[row_idx, start_page:end_page].copy_(device_units)
+        super()._write_prefix_row_slots(row_idx, start, end, slots, device_units)
+
+    def _clear_prefix_row_slots(
+        self, row_idx: int, start: int, end: int | None = None
+    ) -> None:
+        super()._clear_prefix_row_slots(row_idx, start, end)
+        end_page = None if end is None else end // self.page_size
+        self.buffer_req_to_page_slots[row_idx, start // self.page_size:end_page].fill_(-1)
+        if end is None and hasattr(self, "buffer_req_to_page_slots_cpu"):
+            self.buffer_req_to_page_slots_cpu[row_idx, :] = -1
 
     @contextmanager
     def reserve_prefill_slots(

@@ -18,6 +18,7 @@ from sparseengine.engine.startup import (
     profiling_prefill_chunk_lengths,
 )
 from sparseengine.models.layout import RuntimeLayout
+from sparseengine.platforms.interface import AllocatorStats
 
 
 def _config(*, sparse_method: str = "", prefill_sparse_method=None):
@@ -225,6 +226,36 @@ def test_explicit_budget_still_resolves_mixed_kv_and_recurrent_prefix_capacity()
     assert manager.config.prefix_cache_max_blocks == 10
     assert manager.config.prefix_recurrent_capacity_bytes == 400
     assert manager.config.prefix_kv_block_capacity == 10
+
+
+def test_repeated_memory_caps_preserve_requested_prefill_budget(monkeypatch):
+    manager = object.__new__(StandardCacheManager)
+    config = manager.config = _config()
+    config.prefill_schedule_policy = "long_bs1full_short_batch"
+    config.long_prefill_offload_threshold = 12
+    config.gpu_memory_utilization = 0.9
+    manager.device = torch.device("cpu")
+    manager.tp_size = 2
+    manager.attention_cache_bytes_per_slot_per_layer = lambda: 10
+    manager.platform = SimpleNamespace(
+        get_available_memory=lambda _: (1000, 1000),
+        get_allocator_stats=lambda _: AllocatorStats(),
+    )
+    estimates = iter([6, 4])
+    monkeypatch.delenv("SPARSEENGINE_ALLOW_LARGE_PREFILL_CHUNK", raising=False)
+    monkeypatch.setattr(
+        "sparseengine.configs.scheduling.estimate_prefill_token_capacity",
+        lambda *_args, **_kwargs: next(estimates),
+    )
+
+    for effective in (6, 4):
+        manager._get_available_slots_info()
+        assert config.max_num_batched_tokens == effective
+        assert config.engine_prefill_chunk_size == effective
+        assert config.long_prefill_offload_threshold == effective
+        assert config.requested_max_num_batched_tokens == 16
+        assert config.requested_engine_prefill_chunk_size == 8
+        assert config.requested_long_prefill_offload_threshold == 12
 
 
 def test_startup_batch_feasibility_uses_all_memory_oracle_budgets():

@@ -669,6 +669,16 @@ class DeltaKVCacheManager(CacheManager):
             self.deltakv_layer_ids,
         )
 
+    def load_external_assets(self) -> None:
+        checkpoint_path = self.config.deltakv_checkpoint_path
+        if checkpoint_path is None:
+            return
+
+        from sparseengine.utils.loader import load_deltakv_compressors_to_cache_manager
+
+        logger.info(f"Loading DeltaKV compressors from {checkpoint_path}")
+        load_deltakv_compressors_to_cache_manager(self, checkpoint_path)
+
     def _apply_sparse_k_norm_if_needed(self, l_idx: int, key: torch.Tensor) -> torch.Tensor:
         weight = getattr(self, "deltakv_k_norm_weight", None)
         if weight is None:

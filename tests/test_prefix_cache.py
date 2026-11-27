@@ -2038,6 +2038,7 @@ def test_config_restricts_prefix_cache_offload_to_explicit_tp1_tp2_modes():
         enable_prefix_cache_offload=True,
         prefix_cache_host_size_gb=1,
         tensor_parallel_size=2,
+        max_num_batched_tokens=65536,
     )
     assert tp2.tensor_parallel_size == 2
     with pytest.raises(ValueError, match="tensor_parallel_size=1 or 2"):

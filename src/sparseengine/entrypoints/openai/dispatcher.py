@@ -1,6 +1,5 @@
 import asyncio
 
-import os
 import queue
 import threading
 import uuid
@@ -13,6 +12,7 @@ from typing import Callable
 
 from sparseengine.utils.profiler import cpu_timing
 from sparseengine.engine.input_processor import tokenize_text_prompt
+from sparseengine.env import env_float
 from sparseengine.entrypoints.openai.detokenizer import IncrementalDetokenizer
 from sparseengine.entrypoints.openai.sampling import _find_stop_index
 from sparseengine.entrypoints.openai.sampling import _safe_stream_text_len
@@ -455,9 +455,7 @@ class AsyncEngineDispatcher:
                 self._pending.put(_WAKEUP)
         if terminal_message is not None:
             raise RuntimeError(terminal_message)
-        timeout_s = float(
-            os.getenv("SPARSEENGINE_OPENAI_DISCARD_TIMEOUT_S", "30")
-        )
+        timeout_s = env_float("SPARSEENGINE_OPENAI_DISCARD_TIMEOUT_S", 30.0)
         try:
             result = await asyncio.wait_for(
                 output_queue.get(),
@@ -476,7 +474,7 @@ class AsyncEngineDispatcher:
                 self._closing.set()
                 self._pending.put(None)
         self._prepare_executor.shutdown(wait=False, cancel_futures=True)
-        timeout_s = float(os.getenv("SPARSEENGINE_OPENAI_SHUTDOWN_TIMEOUT_S", "5"))
+        timeout_s = env_float("SPARSEENGINE_OPENAI_SHUTDOWN_TIMEOUT_S", 5.0)
         self._thread.join(timeout=max(0.0, timeout_s))
         if self._thread.is_alive():
             logger.warning(

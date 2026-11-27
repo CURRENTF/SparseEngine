@@ -1,5 +1,3 @@
-import os
-
 import torch
 
 from sparseengine.engine.cache_manager import (
@@ -7,7 +5,13 @@ from sparseengine.engine.cache_manager import (
     ExplicitKVPayload,
     PrefillComputeView,
 )
-from sparseengine.operators.registry import record_operator_binding
+from sparseengine.env import (
+    debug_decode_bounds_enabled,
+    debug_prefill_bounds_enabled,
+    env_str,
+    env_truthy,
+)
+from sparseengine.platforms import device_runtime
 from sparseengine.utils.context import get_context
 from sparseengine.kernels.triton.context_flashattention_nopad import context_attention_fwd
 from sparseengine.kernels.triton.flash_decoding_stage1 import flash_decode_stage1 as mha_flash_decode_stage1
@@ -19,17 +23,12 @@ from sparseengine.utils.log import log_once
 from sparseengine.utils.profiler import profiler
 
 
-def _env_truthy(name: str) -> bool:
-    value = os.environ.get(name, "")
-    return value.lower() in {"1", "true", "yes", "on"}
-
-
 def _fake_attention_enabled() -> bool:
-    return _env_truthy("SPARSEENGINE_FAKE_ATTENTION")
+    return env_truthy("SPARSEENGINE_FAKE_ATTENTION")
 
 
 def _allow_fake_attention() -> None:
-    if not _env_truthy("SPARSEENGINE_ALLOW_FAKE_ATTENTION"):
+    if not env_truthy("SPARSEENGINE_ALLOW_FAKE_ATTENTION"):
         raise RuntimeError(
             "SparseEngine fake attention was requested, but it is disabled by default because it "
             "invalidates correctness and benchmark results. Set SPARSEENGINE_ALLOW_FAKE_ATTENTION=1 "
@@ -42,21 +41,21 @@ def _allow_fake_attention() -> None:
 
 
 def _fake_prefill_attention_enabled() -> bool:
-    enabled = _env_truthy("SPARSEENGINE_FAKE_PREFILL_ATTENTION") or _fake_attention_enabled()
+    enabled = env_truthy("SPARSEENGINE_FAKE_PREFILL_ATTENTION") or _fake_attention_enabled()
     if enabled:
         _allow_fake_attention()
     return enabled
 
 
 def _fake_decode_attention_enabled() -> bool:
-    enabled = _env_truthy("SPARSEENGINE_FAKE_DECODE_ATTENTION") or _fake_attention_enabled()
+    enabled = env_truthy("SPARSEENGINE_FAKE_DECODE_ATTENTION") or _fake_attention_enabled()
     if enabled:
         _allow_fake_attention()
     return enabled
 
 
 def _fake_attention_output(q: torch.Tensor) -> torch.Tensor:
-    mode = os.environ.get("SPARSEENGINE_FAKE_ATTENTION_MODE", "zero").strip().lower()
+    mode = env_str("SPARSEENGINE_FAKE_ATTENTION_MODE", "zero").strip().lower()
     if mode in {"zero", "zeros"}:
         return torch.zeros_like(q)
     if mode == "copy":
@@ -88,13 +87,86 @@ def _require_explicit_payload(
     return payload
 
 
+def maybe_run_fake_prefill(
+    q: torch.Tensor,
+    view: PrefillComputeView,
+    *,
+    chunk_lens: torch.Tensor,
+    max_input_len: int,
+) -> torch.Tensor | None:
+    if not _fake_prefill_attention_enabled():
+        return None
+    meta = view.meta
+    _fill_fake_attention_score(meta.attn_score)
+    return _fake_attention_output(q)
+
+
+def debug_check_prefill_bounds(
+    q: torch.Tensor,
+    view: PrefillComputeView,
+    *,
+    chunk_lens: torch.Tensor,
+):
+    if not debug_prefill_bounds_enabled():
+        return
+    if device_runtime.is_stream_capturing():
+        return
+    payload = _require_explicit_payload(view, operation="Prefill bounds check")
+    meta = view.meta
+    if meta.active_slots.dim() != 2:
+        raise RuntimeError(
+            f"prefill bounds check expects 2D active_slots, got shape={tuple(meta.active_slots.shape)}"
+        )
+    rows = meta.req_indices.to(torch.long)
+    row_min = int(rows.min().item()) if rows.numel() > 0 else 0
+    row_max = int(rows.max().item()) if rows.numel() > 0 else -1
+    if row_min < 0 or row_max >= int(meta.active_slots.shape[0]):
+        raise RuntimeError(
+            "prefill req row index out of bounds: "
+            f"row_min={row_min} row_max={row_max} num_rows={int(meta.active_slots.shape[0])}"
+        )
+    if int(chunk_lens.sum().item()) != int(q.shape[0]):
+        raise RuntimeError(
+            "prefill q/chunk length mismatch: "
+            f"q_tokens={int(q.shape[0])} chunk_tokens={int(chunk_lens.sum().item())}"
+        )
+    if bool((meta.context_lens < chunk_lens).any().item()):
+        raise RuntimeError(
+            "prefill context_lens shorter than chunk_lens: "
+            f"context_lens={meta.context_lens.detach().cpu().tolist()} "
+            f"chunk_lens={chunk_lens.detach().cpu().tolist()}"
+        )
+    visible_len = int(meta.context_lens.max().item()) if meta.context_lens.numel() > 0 else 0
+    if visible_len > int(meta.active_slots.shape[1]):
+        raise RuntimeError(
+            "prefill visible length exceeds active slot table width: "
+            f"visible_len={visible_len} active_slots_width={int(meta.active_slots.shape[1])}"
+        )
+    visible_slots = meta.active_slots.index_select(0, rows)[:, :visible_len]
+    pos = torch.arange(visible_len, device=visible_slots.device)[None, :]
+    valid_pos = pos < meta.context_lens[:, None]
+    slot_cap = int(payload.k_cache.shape[0])
+    bad = ((visible_slots < 0) | (visible_slots >= slot_cap)) & valid_pos
+    if bool(bad.any().item()):
+        layer_idx = getattr(get_context(), "now_layer_idx", None)
+        loc = bad.nonzero(as_tuple=False)[0]
+        bad_b = int(loc[0].item())
+        bad_pos = int(loc[1].item())
+        bad_slot = int(visible_slots[bad_b, bad_pos].item())
+        bad_req_row = int(rows[bad_b].item())
+        raise RuntimeError(
+            "prefill physical slot out of bounds before attention: "
+            f"layer={layer_idx} batch={bad_b} req_row={bad_req_row} pos={bad_pos} "
+            f"slot={bad_slot} slot_cap={slot_cap} context_len={int(meta.context_lens[bad_b].item())} "
+            f"k_shape={tuple(payload.k_cache.shape)} v_shape={tuple(payload.v_cache.shape)} "
+            f"active_slots_shape={tuple(meta.active_slots.shape)}"
+        )
+
+
 class TritonAttentionBackend:
     """Thin backend wrapper around the existing SparseEngine Triton attention kernels."""
 
     name = "triton"
-
-    def __init__(self) -> None:
-        record_operator_binding("Attention", self)
 
     def maybe_run_fake_prefill(
         self,
@@ -104,11 +176,7 @@ class TritonAttentionBackend:
         chunk_lens: torch.Tensor,
         max_input_len: int,
     ) -> torch.Tensor | None:
-        if not _fake_prefill_attention_enabled():
-            return None
-        meta = view.meta
-        _fill_fake_attention_score(meta.attn_score)
-        return _fake_attention_output(q)
+        return maybe_run_fake_prefill(q, view, chunk_lens=chunk_lens, max_input_len=max_input_len)
 
     def run_prefill(
         self,
@@ -159,60 +227,7 @@ class TritonAttentionBackend:
         *,
         chunk_lens: torch.Tensor,
     ):
-        if os.environ.get("SENGINE_DEBUG_PREFILL_BOUNDS", "0") != "1":
-            return
-        if torch.cuda.is_available() and torch.cuda.is_current_stream_capturing():
-            return
-        payload = _require_explicit_payload(view, operation="Prefill bounds check")
-        meta = view.meta
-        if meta.active_slots.dim() != 2:
-            raise RuntimeError(
-                f"prefill bounds check expects 2D active_slots, got shape={tuple(meta.active_slots.shape)}"
-            )
-        rows = meta.req_indices.to(torch.long)
-        row_min = int(rows.min().item()) if rows.numel() > 0 else 0
-        row_max = int(rows.max().item()) if rows.numel() > 0 else -1
-        if row_min < 0 or row_max >= int(meta.active_slots.shape[0]):
-            raise RuntimeError(
-                "prefill req row index out of bounds: "
-                f"row_min={row_min} row_max={row_max} num_rows={int(meta.active_slots.shape[0])}"
-            )
-        if int(chunk_lens.sum().item()) != int(q.shape[0]):
-            raise RuntimeError(
-                "prefill q/chunk length mismatch: "
-                f"q_tokens={int(q.shape[0])} chunk_tokens={int(chunk_lens.sum().item())}"
-            )
-        if bool((meta.context_lens < chunk_lens).any().item()):
-            raise RuntimeError(
-                "prefill context_lens shorter than chunk_lens: "
-                f"context_lens={meta.context_lens.detach().cpu().tolist()} "
-                f"chunk_lens={chunk_lens.detach().cpu().tolist()}"
-            )
-        visible_len = int(meta.context_lens.max().item()) if meta.context_lens.numel() > 0 else 0
-        if visible_len > int(meta.active_slots.shape[1]):
-            raise RuntimeError(
-                "prefill visible length exceeds active slot table width: "
-                f"visible_len={visible_len} active_slots_width={int(meta.active_slots.shape[1])}"
-            )
-        visible_slots = meta.active_slots.index_select(0, rows)[:, :visible_len]
-        pos = torch.arange(visible_len, device=visible_slots.device)[None, :]
-        valid_pos = pos < meta.context_lens[:, None]
-        slot_cap = int(payload.k_cache.shape[0])
-        bad = ((visible_slots < 0) | (visible_slots >= slot_cap)) & valid_pos
-        if bool(bad.any().item()):
-            layer_idx = getattr(get_context(), "now_layer_idx", None)
-            loc = bad.nonzero(as_tuple=False)[0]
-            bad_b = int(loc[0].item())
-            bad_pos = int(loc[1].item())
-            bad_slot = int(visible_slots[bad_b, bad_pos].item())
-            bad_req_row = int(rows[bad_b].item())
-            raise RuntimeError(
-                "prefill physical slot out of bounds before attention: "
-                f"layer={layer_idx} batch={bad_b} req_row={bad_req_row} pos={bad_pos} "
-                f"slot={bad_slot} slot_cap={slot_cap} context_len={int(meta.context_lens[bad_b].item())} "
-                f"k_shape={tuple(payload.k_cache.shape)} v_shape={tuple(payload.v_cache.shape)} "
-                f"active_slots_shape={tuple(meta.active_slots.shape)}"
-            )
+        return debug_check_prefill_bounds(q, view, chunk_lens=chunk_lens)
 
     def run_decode(
         self,
@@ -233,6 +248,8 @@ class TritonAttentionBackend:
         if _fake_decode_attention_enabled():
             _fill_fake_attention_score(meta.attn_score)
             return _fake_attention_output(q)
+        # TritonPagedDecodeAttentionProvider and unbound eager callers share
+        # this launch. DeltaKVFixedGridDecodeAttentionProvider owns graph decode.
         if payload.backend == "full_layer_kivi":
             self._run_full_layer_kivi_decode_stage1(
                 q,
@@ -395,13 +412,13 @@ class TritonAttentionBackend:
         )
 
     def _debug_check_decode_bounds(self, view: DecodeComputeView):
-        if os.environ.get("SENGINE_DEBUG_DECODE_BOUNDS", "0") != "1":
+        if not debug_decode_bounds_enabled():
             return
         payload = _require_explicit_payload(view, operation="Decode bounds check")
         meta = view.meta
         if payload.backend not in {"dense", "flash_attn_contiguous"}:
             return
-        if torch.cuda.is_available() and torch.cuda.is_current_stream_capturing():
+        if device_runtime.is_stream_capturing():
             return
         if meta.active_slots.dim() != 2:
             raise RuntimeError(

@@ -34,7 +34,10 @@ from sparseengine.layers.mla_attention import MLAAttention
 from sparseengine.layers.packed_moe import PackedMoeExperts
 from sparseengine.layers.rotary_embedding import RotaryEmbedding, get_rope
 from sparseengine.operators.glm_rope import resolve_glm_rope_provider
-from sparseengine.method_registry import sparse_decode_attention_score_kind
+from sparseengine.method_registry import (
+    resolve_decode_context_capacity,
+    sparse_decode_attention_score_kind,
+)
 from sparseengine.models.layout import resolve_attention_qk_head_dim
 from sparseengine.models.qwen3 import Qwen3MLP
 from sparseengine.operators.activation import resolve_silu_and_mul_provider
@@ -845,21 +848,6 @@ class Glm4MoeLiteForCausalLM(nn.Module):
         max_decode_tokens: int,
     ) -> dict:
         decode_graph = bool(engine_config.decode_graph)
-        decode_context_capacity = int(engine_config.max_model_len)
-        if engine_config.sparse_method == "quest":
-            page_size = int(engine_config.quest_chunk_size)
-            page_budget = max(
-                3,
-                int(engine_config.quest_token_budget) // page_size,
-            )
-            decode_context_capacity = min(
-                decode_context_capacity,
-                max(
-                    int(engine_config.quest_token_budget),
-                    page_budget * page_size,
-                    page_size,
-                ),
-            )
         kwargs = {
             "mla_attention": build_glm4_moe_lite_mla_attention(
                 config,
@@ -871,7 +859,7 @@ class Glm4MoeLiteForCausalLM(nn.Module):
                 prefill_workspace_bytes=engine_config.mla_prefill_workspace_bytes,
                 history_chunk_size=engine_config.mla_prefill_history_chunk_size,
                 decode_graph=decode_graph,
-                context_capacity=decode_context_capacity,
+                context_capacity=resolve_decode_context_capacity(engine_config),
                 projection_chunk_size=engine_config.mlp_chunk_size,
                 score_output=sparse_decode_attention_score_kind(
                     engine_config.sparse_method,

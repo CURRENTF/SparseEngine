@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 
+from sparseengine.platforms import device_runtime
 import sparseengine.platforms as platforms
 from sparseengine.kernels.external.flashinfer.decode import (
     flashinfer_paged_decode_support,
@@ -1860,7 +1861,7 @@ def prepare_decode_attention_op(
 ) -> PreparedDecodeAttentionOp:
     platform = platforms.current_platform
     if device_index is None:
-        device_index = torch.cuda.current_device() if platform.is_cuda_alike() else 0
+        device_index = device_runtime.current_device_index(platform=platform)
     caps = platform.get_device_caps(int(device_index))
     resolved = OpResolver(DECODE_ATTENTION_REGISTRY).resolve(
         spec,
@@ -2120,7 +2121,7 @@ def prepare_decode_attention_launch_op(
 ) -> PreparedDecodeAttentionLaunchOp:
     platform = platforms.current_platform
     if device_index is None:
-        device_index = torch.cuda.current_device() if platform.is_cuda_alike() else 0
+        device_index = device_runtime.current_device_index(platform=platform)
     caps = platform.get_device_caps(int(device_index))
     provider = OpResolver(DECODE_ATTENTION_LAUNCH_REGISTRY).resolve(spec, caps).provider
     return PreparedDecodeAttentionLaunchOp(spec, provider)

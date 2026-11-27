@@ -1591,7 +1591,6 @@ def test_omnikv_uses_first_target_kv_layer_for_slot_table_in_mixed_layout():
     runtime.sparse_method = "omnikv"
     runtime.debug_dynamic_selection = {}
     runtime.debug_dynamic_selection_detail = False
-    runtime.dynamic_deltakv_topk_tiebreak = False
     runtime.device = torch.device("cpu")
     runtime.cache_manager = FakeCacheManager()
     runtime.num_sink = 0

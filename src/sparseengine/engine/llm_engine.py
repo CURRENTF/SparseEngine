@@ -22,6 +22,12 @@ import time
 from sparseengine.configs.cuda_graph import build_decode_cuda_graph_startup_plan
 
 from sparseengine.config import Config
+from sparseengine.env import (
+    engine_exit_timeout_s,
+    graph_capture_diagnostics_enabled,
+    profiler_reset_after_warmup,
+    worker_join_timeout_s,
+)
 from sparseengine.kernels.external.required import (
     validate_required_cuda_kernel_metadata,
 )
@@ -30,6 +36,7 @@ from sparseengine.method_registry import (
     SPARSE_AUXILIARY_PREFILL_TEMPLATES,
     decode_graph_path_id,
     request_logical_length_limit,
+    validate_prefix_prune_keep_tokens,
 )
 from sparseengine.platforms.interface import PlatformEnum
 from sparseengine.sampling_params import SamplingParams
@@ -342,7 +349,7 @@ class LLMEngine:
         finally:
             self._startup_warmup_active = False
         self.model_runner.call("arm_runtime_compilation_guard")
-        if os.getenv("SPARSEENGINE_PROFILER_RESET_AFTER_WARMUP", "0") == "1":
+        if profiler_reset_after_warmup():
             profiler.reset()
         self._throughput_logger.start()
         if config.async_scheduling:
@@ -491,7 +498,7 @@ class LLMEngine:
         prepared = False
 
         def park_prefilled() -> None:
-            diagnostics = os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1"
+            diagnostics = graph_capture_diagnostics_enabled()
             while self.scheduler.waiting:
                 if diagnostics:
                     logger.info(
@@ -597,7 +604,7 @@ class LLMEngine:
         for entry in startup_plan:
             batch_size, _ = entry
             prompt_len = 1
-            if os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1":
+            if graph_capture_diagnostics_enabled():
                 logger.info("Startup CUDA Graph batch begin: batch={} context_capacity={}.", *entry)
             parked, prompt_offset = self._prepare_startup_capture_batch(
                 capture_params,
@@ -606,7 +613,7 @@ class LLMEngine:
                 prompt_len=prompt_len,
                 sequential_prefill=entry in sequential_plan,
             )
-            if os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1":
+            if graph_capture_diagnostics_enabled():
                 logger.info("Startup CUDA Graph batch prefill complete: batch={}.", batch_size)
             if parked is None:
                 skipped_plan.append(entry)
@@ -618,7 +625,7 @@ class LLMEngine:
                 continue
             try:
                 self.model_runner.call("capture_decode_cuda_graph_warmup", parked)
-                if os.environ.get("SPARSEENGINE_GRAPH_CAPTURE_DIAGNOSTICS") == "1":
+                if graph_capture_diagnostics_enabled():
                     logger.info("Startup CUDA Graph batch capture complete: batch={}.", batch_size)
             finally:
                 self.scheduler.decoding.extend(parked)
@@ -809,7 +816,7 @@ class LLMEngine:
         if hasattr(self, "model_runner"):
             model_runner = self.model_runner
             runner_platform = getattr(model_runner, "platform", None)
-            timeout_s = float(os.getenv("SPARSEENGINE_ENGINE_EXIT_TIMEOUT_S", "10"))
+            timeout_s = engine_exit_timeout_s()
             errors: list[BaseException] = []
 
             def call_model_runner_exit():
@@ -840,7 +847,7 @@ class LLMEngine:
         if hasattr(self, "scheduler"):
             del self.scheduler
         if hasattr(self, "ps"):
-            join_timeout_s = float(os.getenv("SPARSEENGINE_WORKER_JOIN_TIMEOUT_S", "5"))
+            join_timeout_s = worker_join_timeout_s()
             for p in self.ps:
                 # The exit RPC has already asked each worker to leave its loop.
                 # Give it time to release distributed/Event resources before using
@@ -1369,15 +1376,7 @@ class LLMEngine:
             block_size=int(self.config.prefix_cache_block_size),
             policy=str(policy),
         )
-        if (
-            str(self.config.sparse_method or "") == "quest"
-            and int(keep_tokens) % int(self.config.prefix_cache_block_size)
-        ):
-            raise ValueError(
-                "QuEST prefix pruning requires keep_tokens to be page aligned: "
-                f"keep_tokens={keep_tokens} "
-                f"page_size={self.config.prefix_cache_block_size}."
-            )
+        validate_prefix_prune_keep_tokens(self.config, keep_tokens)
         if not bool(self.config.enable_prefix_caching):
             raise RuntimeError("prefix cache must be enabled before a prune job can start.")
         if int(observation_tokens) <= 0:

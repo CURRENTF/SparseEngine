@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
+from sparseengine.platforms import device_runtime
 import sparseengine.platforms as platforms
 from sparseengine.operators.registry import (
     OpRegistry,
@@ -127,7 +128,7 @@ def resolve_silu_and_mul_provider(
 ) -> SiluAndMulProvider:
     platform = platforms.current_platform
     if device_index is None:
-        device_index = torch.cuda.current_device() if platform.is_cuda_alike() else 0
+        device_index = device_runtime.current_device_index(platform=platform)
     caps = platform.get_device_caps(int(device_index))
     spec = SiluAndMulSpec(
         activation_dtype=activation_dtype,

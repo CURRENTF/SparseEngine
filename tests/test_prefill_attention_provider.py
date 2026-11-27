@@ -879,7 +879,8 @@ def test_sgl_fa3_prefill_passes_token_page_view_without_copying():
     assert actual.shape == q.shape
 
 
-def test_attention_forward_runs_sgl_before_posthoc_cache_manager_hooks():
+@pytest.mark.parametrize("inject_backend", [False, True])
+def test_attention_forward_runs_sgl_before_posthoc_cache_manager_hooks(inject_backend):
     events = []
     kernel = Mock()
 
@@ -929,10 +930,13 @@ def test_attention_forward_runs_sgl_before_posthoc_cache_manager_hooks():
         attention_validation_scope=object(),
     )
     attention = Attention(32, 128, 128**-0.5, 4, prefill_op=prepared)
-    attention.attention_backend = SimpleNamespace(
+    backend = SimpleNamespace(
         maybe_run_fake_prefill=Mock(return_value=None),
         debug_check_prefill_bounds=Mock(),
     )
+    assert attention.attention_backend is None
+    if inject_backend:
+        attention.attention_backend = backend
 
     with (
         patch("sparseengine.layers.attention.get_context", return_value=context),
@@ -941,6 +945,10 @@ def test_attention_forward_runs_sgl_before_posthoc_cache_manager_hooks():
         actual = attention(q, torch.empty_like(k_cache[:2]), torch.empty_like(v_cache[:2]))
 
     assert actual.shape == q.shape
+    assert attention.attention_backend is (backend if inject_backend else None)
+    if inject_backend:
+        backend.maybe_run_fake_prefill.assert_called_once()
+        backend.debug_check_prefill_bounds.assert_called_once()
     kernel.run_explicit_varlen.assert_called_once()
     cache_manager.collect_prefill_attention_score.assert_called_once()
     cache_manager.record_prefill_query.assert_called_once()

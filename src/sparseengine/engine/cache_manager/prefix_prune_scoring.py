@@ -26,9 +26,6 @@ class PrefixPrunePrefix:
 class PrefixPruneScoringMixin:
     """Shared maintenance-forward scoring for radix cache managers."""
 
-    def _prefix_prune_prefix_logical_positions(self, seq_id: int) -> list[int]:
-        raise NotImplementedError
-
     def attach_prefix_prune_prefix(self, seq, prefix: PrefixPrunePrefix) -> None:
         if prefix.token_slots is None:
             self._attach_prefix_cache_if_needed(seq)

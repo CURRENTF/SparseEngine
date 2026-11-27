@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import os
 from typing import Any, Callable
 
 import torch
@@ -14,23 +13,11 @@ from sparseengine.engine.cache_manager.base import (
     _debug_value_summary,
 )
 from sparseengine.engine.sequence import Sequence
+from sparseengine.env import env_truthy
 from sparseengine.method_registry import normalize_sparse_method
 from sparseengine.models.layout import resolve_attention_qk_head_dim
+from sparseengine.platforms import device_runtime
 from sparseengine.utils.profiler import profiler
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(
-        f"{name} must be one of 1/0, true/false, yes/no, or on/off; got {value!r}."
-    )
 
 
 @dataclass
@@ -45,7 +32,7 @@ class LayerBatchSparseState:
     max_context_len: int | None = None
     active_compressed_indices: torch.Tensor | None = None
     global_req_indices: torch.Tensor | None = None
-    deltakv_free_temp_slots: bool = False
+    release_temp_slots: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,11 +89,9 @@ class SparseMethodRuntime(ABC):
         self.validate_runtime_invariants = bool(
             getattr(config, "validate_runtime_invariants", False)
         )
-        self.device = getattr(
-            cache_manager,
-            "device",
-            torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        )
+        self.device = getattr(cache_manager, "device", None)
+        if self.device is None:
+            self.device = device_runtime.default_device()
         self.obs_layer_ids = self.config.obs_layer_ids
         self.full_attention_layers = self.config.full_attention_layers
         self.num_layers = self.config.hf_config.num_hidden_layers
@@ -131,20 +116,14 @@ class SparseMethodRuntime(ABC):
             "bfloat16": torch.bfloat16,
             "float16": torch.float16,
         }[score_dtype_name]
-        self.snapkv_decode_score_dtype = torch.float32
-
         self.layer_batch_sparse_states = {
             layer_idx: LayerBatchSparseState()
             for layer_idx in range(self.num_layers)
         }
         self._decode_attn_score_buffers: dict[int, torch.Tensor] = {}
         self.debug_dynamic_selection: dict[str, object] = {}
-        self.debug_dynamic_selection_detail = os.environ.get(
-            "SPARSEENGINE_DEBUG_DYNAMIC_SELECTION_DETAIL", ""
-        ).lower() in ("1", "true", "yes", "on")
-        self.dynamic_deltakv_topk_tiebreak = _env_bool(
-            "SPARSEENGINE_DELTAKV_DETERMINISTIC_TOPK_TIEBREAK",
-            False,
+        self.debug_dynamic_selection_detail = env_truthy(
+            "SPARSEENGINE_DEBUG_DYNAMIC_SELECTION_DETAIL"
         )
         self.sparse_config = {
             "sparse_method": self.sparse_method,
@@ -157,7 +136,6 @@ class SparseMethodRuntime(ABC):
             ),
             "obs_layer_ids": self.config.obs_layer_ids,
             "full_attention_layers": self.config.full_attention_layers,
-            "dynamic_deltakv_topk_tiebreak": self.dynamic_deltakv_topk_tiebreak,
         }
 
     def bind_auxiliary_prefill(
@@ -334,7 +312,7 @@ class SparseMethodRuntime(ABC):
                 state.active_indices = None
                 state.active_slots = None
                 state.active_compressed_indices = None
-                state.deltakv_free_temp_slots = False
+                state.release_temp_slots = False
                 continue
 
             batch_state = self.cache_manager.get_layer_batch_states(layer_idx)
@@ -346,7 +324,7 @@ class SparseMethodRuntime(ABC):
             state.active_indices = None
             state.active_slots = None
             state.active_compressed_indices = None
-            state.deltakv_free_temp_slots = False
+            state.release_temp_slots = False
 
             if not self.needs_attention_score(layer_idx, step):
                 continue

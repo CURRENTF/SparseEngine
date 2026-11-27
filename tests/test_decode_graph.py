@@ -47,7 +47,7 @@ def test_decode_graph_runner_blocks_replay_until_collectives_are_ready() -> None
     runner._graph_path_id = lambda: ""
     runner._graph_path_capacity = lambda seqs: 128
     runner._select_state = lambda **kwargs: state
-    runner._prepare_static_step = lambda state, seqs: (None, None)
+    runner._prepare_static_step = lambda state, seqs, *, moe_token_metadata: (None, None)
     runner._restore_sparse_state_refs = lambda state: None
     runner.collective_runtime = SimpleNamespace(
         assert_cuda_graph_replayable=Mock(

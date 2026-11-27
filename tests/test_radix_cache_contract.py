@@ -34,6 +34,7 @@ def test_shared_prefix_two_readers_and_idempotent_cleanup(method):
     from sparseengine.engine.cache_manager.radix_contract import validate_radix_manager
     m = make_radix(method)
     validate_radix_manager(m, CacheManager, mixed=False)
+    validate_radix_manager(m, CacheManager, mixed=True)
     h = RadixHarness(m, paged=method == 'quest')
     original = h.observe()
     producer = materialize(m)
