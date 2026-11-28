@@ -122,6 +122,10 @@ plan = PACEPlan(current_step=3, spans=((120, 480, (4, 9)), (900, 1300, (5,))))
 outputs = llm.generate([prompt_ids], sampling_params, pace_plans=[plan])
 ```
 
+可运行的端到端示例见 `scripts/validation/pace_quickstart.py`：长 prompt 开头给出一条事实，KV 预算为
+2,048 token，plan 指明该事实所在区间（`--sparse_method h2o` 以同一 prompt 不带 plan 运行；`--bounded`
+启用有界位置）。
+
 `add_request`/`admit_request` 接受单数形式的 `pace_plan`；其他方法收到计划会直接报错。
 若某区间在当前 step `t` 之后的下一次计划引用为 step `r`，其 token 获得
 `pace_bonus_scale * (0.5 + 0.5 * exp(-pace_bonus_decay * (r - t)))` 的加分；

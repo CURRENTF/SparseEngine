@@ -139,6 +139,11 @@ plan = PACEPlan(current_step=3, spans=((120, 480, (4, 9)), (900, 1300, (5,))))
 outputs = llm.generate([prompt_ids], sampling_params, pace_plans=[plan])
 ```
 
+A runnable end-to-end example is `scripts/validation/pace_quickstart.py`: a fact at the
+start of a long prompt, a 2,048-token KV budget, and a plan naming the fact's span
+(`--sparse_method h2o` runs the same prompt without a plan; `--bounded` adds bounded
+positions).
+
 `add_request`/`admit_request` accept a singular `pace_plan`. A plan on any other
 method is rejected. For a span whose next planned reference is step `r` at
 current step `t`, its tokens receive

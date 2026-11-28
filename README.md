@@ -151,15 +151,14 @@ uv pip install -e ".[cu130]"
 
 Use `cu129` instead of `cu130` for CUDA 12.9.
 
-### Optional dependencies
+### Additional dependencies
 
-After installing the base environment, add these packages as needed.
+Install these packages after setting up the base environment if the conditions below apply.
 
-**FlashInfer JIT Cache** provides precompiled kernel caches to reduce compilation overhead on first use.
-
-```bash
-pip install flashinfer-jit-cache --index-url https://flashinfer.ai/whl/cu130
-```
+**FlashInfer JIT Cache** is required if the CUDA toolkit headers are missing.
+With the headers installed, the cache is optional and reduces first-use compilation.
+See [FlashInfer JIT cache installation](docs/en/getting_started/README.md#flashinfer-jit-cache)
+for version-matched uv and Conda commands.
 
 **DeepEP V1** provides the NVLink MoE communication backend selected by `moe_backend="deepepv1"` and builds against the installed PyTorch/CUDA environment.
 

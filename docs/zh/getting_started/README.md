@@ -53,12 +53,6 @@ head 数必须等于 key head 数或是其整数倍；adapter 在 FlashInfer 边
 initial/final state，同时保留仓库配置的 BF16 或 FP32 runtime state。Provider
 resolution 会在执行前验证公开 dispatcher 的签名和对应架构的 kernel symbol。
 
-`flashinfer-jit-cache` 是可选加速 package：
-
-```bash
-pip install flashinfer-jit-cache --index-url https://flashinfer.ai/whl/cu130
-```
-
 Block-scaled FP8 Linear 会根据当前 CUDA device capability，从本地 operator
 registry 选择实现。SM90 上匹配 BF16 block-scale 契约的算子使用 FlashInfer
 实现，其他受支持的 SM90 契约使用通用 Triton；RTX PRO 6000 上任何模型只要
@@ -71,6 +65,29 @@ Provider。未命中 profile、但仍处于该上游 atomic contract 内的 SM12
 缺失时，才绑定通用 Triton portable baseline。binding report 会记录 selection
 basis、profile 判断和 route；warmup 期间不会下载 Hub kernel。当前 profile 的
 测量 workload 是 Qwen3-30B TP1，但模型名只属于 provenance，不参与选择。
+
+## FlashInfer JIT Cache
+
+缺少 CUDA toolkit 头文件时，必须安装 `flashinfer-jit-cache`，以避免首次使用时出现
+`cuda_runtime.h: No such file or directory` 编译错误。已安装头文件时，可按需安装缓存以减少首次使用时的编译开销。
+缓存版本必须与已安装的 `flashinfer-python` 一致。
+
+请在已激活的 SparseEngine 环境中运行对应命令。以下示例使用 CUDA 13.0 的 wheel 索引，
+使用 CUDA 12.9 时请将 URL 中的 `cu130` 改为 `cu129`。
+
+uv 环境：
+
+```bash
+FI_VERSION=$(python -c 'from importlib.metadata import version; print(version("flashinfer-python"))') &&
+uv pip install "flashinfer-jit-cache==${FI_VERSION}" --index-url https://flashinfer.ai/whl/cu130
+```
+
+Conda 环境：
+
+```bash
+FI_VERSION=$(python -c 'from importlib.metadata import version; print(version("flashinfer-python"))') &&
+python -m pip install "flashinfer-jit-cache==${FI_VERSION}" --index-url https://flashinfer.ai/whl/cu130
+```
 
 ## DeltaKV Checkpoint
 

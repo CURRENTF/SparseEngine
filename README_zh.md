@@ -133,15 +133,12 @@ uv pip install -e ".[cu130]"
 
 CUDA 12.9 环境将 `cu130` 换成 `cu129`。
 
-### 可选安装
+### 其他依赖
 
-完成基础环境安装后，可按需安装以下依赖。
+完成基础环境安装后，请根据以下条件安装额外依赖。
 
-**FlashInfer JIT Cache**：提供预编译算子缓存，减少首次使用时的编译开销。
-
-```bash
-pip install flashinfer-jit-cache --index-url https://flashinfer.ai/whl/cu130
-```
+**FlashInfer JIT Cache** 在缺少 CUDA toolkit 头文件时必须安装。已安装头文件时，可按需安装缓存以减少首次使用时的编译开销。
+uv 和 Conda 的版本匹配安装命令见 [FlashInfer JIT Cache 安装说明](docs/zh/getting_started/README.md#flashinfer-jit-cache)。
 
 **DeepEP V1**：为 `moe_backend="deepepv1"` 提供 NVLink MoE 通信，在已安装的 PyTorch/CUDA 环境中构建。
 

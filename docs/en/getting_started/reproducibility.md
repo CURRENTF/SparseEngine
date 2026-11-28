@@ -13,8 +13,8 @@ The README contains the current install command. The expected baseline is:
 - Treat `pyproject.toml` as the current dependency contract; record the resolved
   package versions with each experiment because the repository does not ship a
   frozen environment lock.
-- Optional matching `flashinfer-jit-cache` installed from the CUDA-specific FlashInfer
-  wheel index when precompiled JIT modules are desired.
+- Install the matching [FlashInfer JIT cache](README.md#flashinfer-jit-cache)
+  when CUDA toolkit headers are missing or to reduce first-use compilation.
 - `flash-attn` installed with `MAX_JOBS=8 pip install flash-attn --no-build-isolation`.
 - Editable install from the repository root with `pip install -e ".[cu129]"`
   or `pip install -e ".[cu130]"`. Training, benchmark, and test dependencies

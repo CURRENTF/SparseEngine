@@ -23,6 +23,12 @@
 
 engine 无法为 prompt 或 prompt chunk 分配足够的 KV slot。请提高 `gpu_memory_utilization`，减小 `max_model_len` 或 batch size，或者降低 keep-token budget。
 
+## FlashInfer 编译时报 `cuda_runtime.h: No such file or directory`
+
+未安装预编译缓存时，FlashInfer 会在首次使用时编译算子。若机器只有 NVIDIA 驱动和 `nvcc`，
+没有 CUDA toolkit 头文件，编译会失败（`ninja: build stopped: subcommand failed`）。请按
+[FlashInfer JIT Cache 安装说明](README.md#flashinfer-jit-cache)安装与当前环境中 `flashinfer-python` 版本一致的缓存。
+
 ## TensorRT-LLM DeepGEMM 编译缓存
 
 CUDA worker 使用独立的 TensorRT-LLM DeepGEMM 缓存目录，避免冷启动时并发编译写入。
