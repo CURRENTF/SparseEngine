@@ -34,15 +34,9 @@ reduce the keep-token budgets.
 
 FlashInfer compiles kernels on first use when no precompiled cache is installed. On
 machines with the NVIDIA driver and `nvcc` but without the CUDA toolkit headers, that
-compilation fails (`ninja: build stopped: subcommand failed`). Install the FlashInfer JIT
-cache whose version matches the installed `flashinfer-python`:
-
-```bash
-pip install "flashinfer-jit-cache==$(python -c 'import flashinfer; print(flashinfer.__version__)')" \
-  --index-url https://flashinfer.ai/whl/cu130
-```
-
-Use `cu129` in the index URL for CUDA 12.9.
+compilation fails (`ninja: build stopped: subcommand failed`). Follow the
+[FlashInfer JIT cache installation](README.md#flashinfer-jit-cache) instructions
+to install the version matching `flashinfer-python` in your environment.
 
 ## TensorRT-LLM DeepGEMM compilation cache
 

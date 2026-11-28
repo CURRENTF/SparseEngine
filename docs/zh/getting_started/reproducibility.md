@@ -10,7 +10,7 @@ README 包含当前安装命令。预期 baseline 为：
 - 从 `pyproject.toml` 中选择一个 CUDA extra 安装：`cu129` 或 `cu130`。
 - 将 `pyproject.toml` 视为当前依赖契约；仓库不再提供冻结环境 lock，
   因此每次实验都要记录实际解析出的 package 版本。
-- 需要预编译 JIT 模块时，可从对应 CUDA 版本的 FlashInfer wheel index 安装匹配的 `flashinfer-jit-cache`。
+- 缺少 CUDA toolkit 头文件或需要减少首次编译开销时，安装版本匹配的 [FlashInfer JIT Cache](README.md#flashinfer-jit-cache)。
 - 使用 `MAX_JOBS=8 pip install flash-attn --no-build-isolation` 安装 `flash-attn`。
 - 在仓库根目录运行 `pip install -e ".[cu129]"` 或
   `pip install -e ".[cu130]"`。训练、benchmark 和测试依赖均包含在主安装中。

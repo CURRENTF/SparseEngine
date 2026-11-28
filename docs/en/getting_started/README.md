@@ -60,12 +60,6 @@ while preserving the configured BF16 or FP32 repo runtime state. Provider
 resolution validates the public dispatcher signature and the architecture-specific
 kernel symbol before execution.
 
-`flashinfer-jit-cache` is an optional acceleration package:
-
-```bash
-pip install flashinfer-jit-cache --index-url https://flashinfer.ai/whl/cu130
-```
-
 Block-scaled FP8 Linear selects an implementation from the local operator
 registry using the active CUDA device capabilities. An SM90 operation matching
 the BF16 block-scale contract uses the optimized FlashInfer implementation;
@@ -81,6 +75,30 @@ binding report records the selection basis, profile decision, and routes. No Hub
 kernel is downloaded during warmup. The current profile was measured with
 Qwen3-30B TP1 shapes, but the model name is provenance rather than a selection
 key.
+
+## FlashInfer JIT Cache
+
+If the CUDA toolkit headers are missing, install `flashinfer-jit-cache` to
+avoid a first-use `cuda_runtime.h: No such file or directory` compilation error.
+With the headers installed, the cache is optional and reduces first-use compilation.
+The cache version must match the installed `flashinfer-python` version.
+
+Run the command for your active SparseEngine environment. The examples use the
+CUDA 13.0 wheel index. For CUDA 12.9, use `cu129` in the URL.
+
+For uv:
+
+```bash
+FI_VERSION=$(python -c 'from importlib.metadata import version; print(version("flashinfer-python"))') &&
+uv pip install "flashinfer-jit-cache==${FI_VERSION}" --index-url https://flashinfer.ai/whl/cu130
+```
+
+For Conda:
+
+```bash
+FI_VERSION=$(python -c 'from importlib.metadata import version; print(version("flashinfer-python"))') &&
+python -m pip install "flashinfer-jit-cache==${FI_VERSION}" --index-url https://flashinfer.ai/whl/cu130
+```
 
 ## DeltaKV Checkpoints
 

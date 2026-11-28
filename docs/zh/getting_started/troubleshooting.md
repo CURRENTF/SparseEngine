@@ -26,15 +26,8 @@ engine 无法为 prompt 或 prompt chunk 分配足够的 KV slot。请提高 `gp
 ## FlashInfer 编译时报 `cuda_runtime.h: No such file or directory`
 
 未安装预编译缓存时，FlashInfer 会在首次使用时编译算子。若机器只有 NVIDIA 驱动和 `nvcc`，
-没有 CUDA toolkit 头文件，编译会失败（`ninja: build stopped: subcommand failed`）。请安装与
-已安装 `flashinfer-python` 版本一致的 FlashInfer JIT cache：
-
-```bash
-pip install "flashinfer-jit-cache==$(python -c 'import flashinfer; print(flashinfer.__version__)')" \
-  --index-url https://flashinfer.ai/whl/cu130
-```
-
-CUDA 12.9 请将 index URL 中的 `cu130` 改为 `cu129`。
+没有 CUDA toolkit 头文件，编译会失败（`ninja: build stopped: subcommand failed`）。请按
+[FlashInfer JIT Cache 安装说明](README.md#flashinfer-jit-cache)安装与当前环境中 `flashinfer-python` 版本一致的缓存。
 
 ## TensorRT-LLM DeepGEMM 编译缓存
 
