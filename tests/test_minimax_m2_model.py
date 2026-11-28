@@ -176,7 +176,7 @@ def _instantiate_model(config, context, runtime_config=None):
             return_value=context,
         ),
         patch(
-            "sparseengine.models.qwen3.get_parallel_context",
+            "sparseengine.models.standard_mha.get_parallel_context",
             return_value=context,
         ),
         patch(

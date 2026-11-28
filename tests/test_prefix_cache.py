@@ -26,7 +26,6 @@ from sparseengine.engine.cache_manager.standard import StandardCacheManager, Sta
 from sparseengine.engine.cache_manager.prefix_cache_mixin import PrefixLookupCache
 from sparseengine.engine.cache_manager.storage import MlaLatentStorage
 from sparseengine.engine.cache_manager.prefix_offload import (
-    QuestPrefixOffloadController,
     StandardPrefixOffloadController,
 )
 from sparseengine.engine.decode_graph_contract import (
@@ -2480,7 +2479,7 @@ def test_fp8_model_store_waits_before_reading_restored_history(monkeypatch):
 
     monkeypatch.setattr("sparseengine.engine.cache_manager.fp8.materialize_prefill_history", materialize)
     monkeypatch.setattr("sparseengine.engine.cache_manager.fp8.fp8_store_tokens", lambda *args, **kwargs: None)
-    monkeypatch.setattr("sparseengine.models.llama.get_context", lambda: SimpleNamespace(
+    monkeypatch.setattr("sparseengine.models.standard_mha.get_context", lambda: SimpleNamespace(
         cache_manager=manager, now_layer_idx=0))
 
     def attention(q, k, v):
@@ -2756,6 +2755,7 @@ def test_h2d_transfer_stream_waits_for_index_producer_event(monkeypatch):
     controller.block_size = 2
     controller.device = torch.device("cpu")
     controller.kv_cache = torch.zeros((2, 2, 8, 1, 4), dtype=torch.float16)
+    controller._quest_metadata = None
     controller.host_pool = SimpleNamespace(
         cache=torch.zeros((2, 2, 1, 2, 1, 4), dtype=torch.float16),
         num_layers=2,
@@ -2846,15 +2846,8 @@ def test_offload_controller_reset_clears_transfer_stats():
         assert stats[name] == 0
 
 
-@pytest.mark.parametrize(
-    "controller_type",
-    [StandardPrefixOffloadController, QuestPrefixOffloadController],
-)
-def test_prefix_offload_rejects_transfer_submission_during_capture(
-    monkeypatch,
-    controller_type,
-):
-    controller = object.__new__(controller_type)
+def test_prefix_offload_rejects_transfer_submission_during_capture(monkeypatch):
+    controller = object.__new__(StandardPrefixOffloadController)
     block = SimpleNamespace()
     monkeypatch.setattr(device_runtime, "is_stream_capturing", lambda: True)
 
@@ -3002,7 +2995,7 @@ def test_standard_pending_slots_do_not_alias_free_stack_storage():
     manager._record_prefix_materialization(seq, [2], torch.tensor([88], dtype=torch.int32))
 
     pending = manager.pending_prefix_blocks[seq.seq_id][0]
-    assert pending.slots.tolist() == [89, 88]
+    assert pending.payload.token_slots.tolist() == [89, 88]
 
 
 def test_standard_admission_reserves_evictable_hit_blocks():

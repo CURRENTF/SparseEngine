@@ -6,7 +6,6 @@ import torch
 
 from sparseengine.engine.cache_manager.prefix_offload import (
     PinnedPrefixKVPool,
-    PrefixD2HOperation,
     StandardPrefixOffloadController,
     _payload_device_slots,
 )
@@ -63,27 +62,6 @@ class PinnedMixedPrefixPool(PinnedPrefixKVPool):
     @property
     def recurrent_bytes_per_block(self) -> int:
         return self.state_spec.bytes_for_layers(len(self.recurrent_layer_indices))
-
-
-class PinnedMixedQuestPrefixPool(PinnedMixedPrefixPool):
-    def __init__(self, *, page_size: int, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.page_size = int(page_size)
-        if self.block_size % self.page_size != 0:
-            raise ValueError("Mixed QuEST prefix block size must contain whole pages.")
-        self.pages_per_block = self.block_size // self.page_size
-        self.metadata_cache = torch.empty(
-            (
-                2,
-                self.num_layers,
-                self.capacity_blocks * self.pages_per_block,
-                self.cache.shape[-2],
-                self.cache.shape[-1],
-            ),
-            dtype=self.cache.dtype,
-            device="cpu",
-            pin_memory=True,
-        )
 
 
 class MixedPrefixOffloadController(StandardPrefixOffloadController):
@@ -174,39 +152,16 @@ class MixedPrefixOffloadController(StandardPrefixOffloadController):
             auxiliary_tensors = self._prepare_d2h_auxiliary(
                 blocks, host_indices
             )
-            producer_event = self._new_event(self.device, "D2H producer")
-            completion_event = self._new_event(self.device, "D2H completion")
-            device_runtime.record_event(producer_event, device=self.device)
-            with device_runtime.stream_context(self.d2h_stream):
-                device_runtime.stream_wait_event(self.d2h_stream, producer_event)
-                self._submit_d2h_payload(
-                    device_slots,
-                    host_token_indices,
-                    auxiliary_tensors,
-                )
-                device_runtime.record_event(
-                    completion_event, device=self.device
-                )
+            events = self._d2h_events()
+            self._copy_d2h(device_slots, host_token_indices, auxiliary_tensors, events)
         except Exception:
             device_runtime.synchronize_stream(self.d2h_stream)
             raise
 
-        byte_count = self._transfer_byte_count(len(blocks))
-        self.d2h_operations.append(
-            PrefixD2HOperation(
-                blocks=list(blocks),
-                host_indices=list(host_indices),
-                device_token_indices=device_slots,
-                host_token_indices=host_token_indices,
-                producer_event=producer_event,
-                completion_event=completion_event,
-                byte_count=byte_count,
-                auxiliary_tensors=auxiliary_tensors,
-            )
+        self._record_d2h_operation(
+            blocks, host_indices, device_slots, host_token_indices,
+            auxiliary_tensors, events, self._transfer_byte_count(len(blocks)), len(blocks),
         )
-        self.d2h_bytes += byte_count
-        self.d2h_submitted_operations += 1
-        self.d2h_merged_blocks += len(blocks)
 
     def _start_next_d2h_batch(self) -> None:
         if self.d2h_operations or not self._pending_d2h_batches:
@@ -361,7 +316,8 @@ class MixedPrefixOffloadController(StandardPrefixOffloadController):
         ordered = [self._ordered_recurrent_tensors(block) for block in blocks]
         for tensor_idx in range(tensor_count):
             stacks.append(torch.stack([tensors[tensor_idx] for tensors in ordered], dim=0))
-        return (host_index_tensor, *stacks)
+        metadata = super()._prepare_d2h_auxiliary(blocks, host_indices)
+        return (*metadata, host_index_tensor, *stacks)
 
     def _prepare_h2d_auxiliary(
         self,
@@ -374,7 +330,8 @@ class MixedPrefixOffloadController(StandardPrefixOffloadController):
             for block in blocks
             for tensor in self._ordered_recurrent_tensors(block)
         ]
-        return (host_index_tensor, *destinations)
+        metadata = super()._prepare_h2d_auxiliary(blocks, host_indices)
+        return (*metadata, host_index_tensor, *destinations)
 
     def _host_recurrent_tensors(self) -> list[torch.Tensor]:
         return [
@@ -390,7 +347,8 @@ class MixedPrefixOffloadController(StandardPrefixOffloadController):
         auxiliary_tensors: tuple[torch.Tensor, ...],
     ) -> None:
         super()._submit_d2h_payload(device_slots, host_token_indices, auxiliary_tensors)
-        self._submit_recurrent_d2h(auxiliary_tensors)
+        recurrent = auxiliary_tensors[2:] if self._quest_metadata is not None else auxiliary_tensors
+        self._submit_recurrent_d2h(recurrent)
 
     def _submit_recurrent_d2h(
         self,
@@ -437,6 +395,8 @@ class MixedPrefixOffloadController(StandardPrefixOffloadController):
         layer_index: int,
         auxiliary_tensors: tuple[torch.Tensor, ...],
     ) -> None:
+        if self._quest_metadata is not None:
+            auxiliary_tensors = auxiliary_tensors[2:]
         host_indices = auxiliary_tensors[0].tolist()
         destinations = auxiliary_tensors[1:]
         host_tensors = self._host_recurrent_tensors()
@@ -458,164 +418,10 @@ class MixedPrefixOffloadController(StandardPrefixOffloadController):
                 destination = destinations[block_idx * tensors_per_block + tensor_idx]
                 destination.copy_(host_tensor[int(host_idx)], non_blocking=True)
 
+    def _h2d_token_byte_count(self, token_count: int) -> int:
+        return token_count * self.host_pool.num_layers * 2 * self.item_size
+
     def _transfer_byte_count(self, block_count: int) -> int:
         return super()._transfer_byte_count(block_count) + int(
             int(block_count) * self.host_pool.recurrent_bytes_per_block
         )
-
-
-class MixedQuestPrefixOffloadController(MixedPrefixOffloadController):
-    host_pool: PinnedMixedQuestPrefixPool
-
-    def __init__(self, *, device_metadata_cache: torch.Tensor, **kwargs) -> None:
-        super().__init__(**kwargs)
-        if not isinstance(self.host_pool, PinnedMixedQuestPrefixPool):
-            raise RuntimeError("Mixed QuEST offload requires PinnedMixedQuestPrefixPool.")
-        self.device_metadata_cache = device_metadata_cache
-        host_metadata = self.host_pool.metadata_cache
-        if not self.device_metadata_cache.is_contiguous() or not host_metadata.is_pinned():
-            raise RuntimeError("Mixed QuEST metadata pools must be contiguous and pinned.")
-        if (
-            tuple(self.device_metadata_cache.shape[:2]) != (2, self.host_pool.num_layers)
-            or tuple(self.device_metadata_cache.shape[-2:]) != tuple(host_metadata.shape[-2:])
-        ):
-            raise RuntimeError("Mixed QuEST metadata pool shapes are incompatible.")
-        metadata_item_size = int(
-            self.device_metadata_cache.shape[-2]
-            * self.device_metadata_cache.shape[-1]
-            * self.device_metadata_cache.element_size()
-        )
-        if metadata_item_size != self.item_size:
-            raise RuntimeError("Mixed QuEST KV and metadata item sizes must match.")
-        self.device_metadata_max_ptrs = torch.tensor(
-            [
-                self.device_metadata_cache[0, layer].data_ptr()
-                for layer in range(self.host_pool.num_layers)
-            ],
-            dtype=torch.uint64,
-            device=self.device,
-        )
-        self.device_metadata_min_ptrs = torch.tensor(
-            [
-                self.device_metadata_cache[1, layer].data_ptr()
-                for layer in range(self.host_pool.num_layers)
-            ],
-            dtype=torch.uint64,
-            device=self.device,
-        )
-        self.host_metadata_max_ptrs = torch.tensor(
-            [host_metadata[0, layer].data_ptr() for layer in range(self.host_pool.num_layers)],
-            dtype=torch.uint64,
-            device=self.device,
-        )
-        self.host_metadata_min_ptrs = torch.tensor(
-            [host_metadata[1, layer].data_ptr() for layer in range(self.host_pool.num_layers)],
-            dtype=torch.uint64,
-            device=self.device,
-        )
-
-    def _device_pages(self, block: PrefixCacheBlock) -> torch.Tensor:
-        kv_payload = getattr(block.payload, "kv_payload", None)
-        pages = getattr(kv_payload, "block_slots", None)
-        if pages is None:
-            page = getattr(kv_payload, "block_slot", None)
-            if page is None:
-                raise RuntimeError("Mixed QuEST block has no device page payload.")
-            pages = torch.tensor([int(page)], dtype=torch.int32, device=self.device)
-        pages = pages.to(device=self.device, dtype=torch.long).reshape(-1)
-        if int(pages.numel()) != self.host_pool.pages_per_block:
-            raise RuntimeError(
-                "Mixed QuEST device page count does not match prefix block geometry."
-            )
-        return pages
-
-    def _host_pages(self, host_indices: list[int]) -> torch.Tensor:
-        values = [
-            int(host_idx) * self.host_pool.pages_per_block + page_offset
-            for host_idx in host_indices
-            for page_offset in range(self.host_pool.pages_per_block)
-        ]
-        return torch.tensor(values, dtype=torch.long, device=self.device)
-
-    def _prepare_d2h_auxiliary(
-        self,
-        blocks: list[PrefixCacheBlock],
-        host_indices: list[int],
-    ) -> tuple[torch.Tensor, ...]:
-        recurrent = super()._prepare_d2h_auxiliary(blocks, host_indices)
-        device_pages = torch.cat([self._device_pages(block) for block in blocks])
-        return (device_pages, self._host_pages(host_indices), *recurrent)
-
-    def _prepare_h2d_auxiliary(
-        self,
-        blocks: list[PrefixCacheBlock],
-        host_indices: list[int],
-    ) -> tuple[torch.Tensor, ...]:
-        recurrent = super()._prepare_h2d_auxiliary(blocks, host_indices)
-        device_pages = torch.cat([self._device_pages(block) for block in blocks])
-        return (device_pages, self._host_pages(host_indices), *recurrent)
-
-    def _submit_d2h_payload(
-        self,
-        device_slots: torch.Tensor,
-        host_token_indices: torch.Tensor,
-        auxiliary_tensors: tuple[torch.Tensor, ...],
-    ) -> None:
-        StandardPrefixOffloadController._submit_d2h_payload(
-            self, device_slots, host_token_indices, auxiliary_tensors
-        )
-        device_pages, host_pages = auxiliary_tensors[:2]
-        self._transfer_all_layers(
-            src_k_layers=self.device_metadata_max_ptrs,
-            dst_k_layers=self.host_metadata_max_ptrs,
-            src_v_layers=self.device_metadata_min_ptrs,
-            dst_v_layers=self.host_metadata_min_ptrs,
-            src_indices=device_pages,
-            dst_indices=host_pages,
-            item_size=self.item_size,
-            num_layers=self.host_pool.num_layers,
-        )
-        self._submit_recurrent_d2h(auxiliary_tensors[2:])
-
-    def _submit_h2d_layer(
-        self,
-        layer_index: int,
-        host_token_indices: torch.Tensor,
-        device_slots: torch.Tensor,
-        auxiliary_tensors: tuple[torch.Tensor, ...],
-    ) -> None:
-        StandardPrefixOffloadController._submit_h2d_layer(
-            self,
-            layer_index,
-            host_token_indices,
-            device_slots,
-            auxiliary_tensors,
-        )
-        device_pages, host_pages = auxiliary_tensors[:2]
-        host_metadata = self.host_pool.metadata_cache
-        self._transfer_per_layer(
-            src_k=host_metadata[0, layer_index],
-            dst_k=self.device_metadata_cache[0, layer_index],
-            src_v=host_metadata[1, layer_index],
-            dst_v=self.device_metadata_cache[1, layer_index],
-            src_indices=host_pages,
-            dst_indices=device_pages,
-            item_size=self.item_size,
-        )
-
-    def _submit_h2d_auxiliary_layer(
-        self,
-        layer_index: int,
-        auxiliary_tensors: tuple[torch.Tensor, ...],
-    ) -> None:
-        super()._submit_h2d_auxiliary_layer(layer_index, auxiliary_tensors[2:])
-
-    def _transfer_byte_count(self, block_count: int) -> int:
-        metadata_bytes = int(
-            int(block_count)
-            * self.host_pool.pages_per_block
-            * self.host_pool.num_layers
-            * 2
-            * self.item_size
-        )
-        return super()._transfer_byte_count(block_count) + metadata_bytes

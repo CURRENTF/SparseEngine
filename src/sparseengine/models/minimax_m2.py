@@ -34,6 +34,18 @@ from sparseengine.models.attention_runtime import (
     bind_mha_full_attention_provider,
     build_mha_full_attention_provider,
 )
+from sparseengine.models.moe_common import (
+    ExpertWeightLoader,
+    check_remote_fp8_dtype,
+    check_remote_shape,
+    expected_remote_expert_weights,
+    expert_matrix_shape,
+    expert_scale_name,
+    nonexpert_parameter_names,
+    remote_expert_skip_differences,
+    warmup_local_experts,
+    warmup_mha_projections,
+)
 from sparseengine.operators.moe import model_activation_dtype, resolve_moe_provider
 from sparseengine.operators.moe_router import (
     MoeRouterOpSpec,
@@ -48,7 +60,6 @@ from sparseengine.operators.full_attention import FullAttentionProvider
 from sparseengine.platforms import device_runtime
 from sparseengine.utils.context import get_context
 from sparseengine.utils.log import logger
-from sparseengine.utils.weight_target import WeightTarget
 
 
 _EXPERT_SOURCE_RE = re.compile(
@@ -414,7 +425,10 @@ class MiniMaxM2Model(Qwen3ModelBase):
         )
 
 
-class MiniMaxM2ForCausalLM(nn.Module):
+class MiniMaxM2ForCausalLM(ExpertWeightLoader, nn.Module):
+    expert_target_pattern = _EXPERT_TARGET_RE
+    expert_block_name = "block_sparse_moe"
+
     special_weight_loaders = (".expert_weight",)
     packed_modules_mapping = {
         "q_proj": ("qkv_proj", "q"),
@@ -481,33 +495,14 @@ class MiniMaxM2ForCausalLM(nn.Module):
             dtype=torch.bfloat16,
             device=device,
         )
-        layer.self_attn.qkv_proj(hidden_states)
-        layer.self_attn.o_proj(
-            torch.zeros(
-                (num_tokens, layer.self_attn.q_size),
-                dtype=hidden_states.dtype,
-                device=device,
-            )
-        )
+        warmup_mha_projections(layer.self_attn, hidden_states)
         layer.block_sparse_moe.gate(hidden_states)
         top_k = int(self.config.num_experts_per_tok)
-        topk_ids = (
-            torch.arange(
-                num_tokens * top_k,
-                dtype=torch.int64,
-                device=device,
-            )
-            .remainder(experts.num_local_experts)
-            .add(experts.local_expert_start)
-            .view(num_tokens, top_k)
+        warmup_local_experts(
+            experts, hidden_states, top_k,
+            num_experts=experts.num_local_experts,
+            weights_dtype=torch.float32,
         )
-        topk_weights = torch.full(
-            (num_tokens, top_k),
-            1.0 / top_k,
-            dtype=torch.float32,
-            device=device,
-        )
-        experts(hidden_states, topk_ids, topk_weights)
         device_runtime.synchronize()
 
     def map_weight_name(self, source_weight_name: str) -> str | None:
@@ -521,24 +516,13 @@ class MiniMaxM2ForCausalLM(nn.Module):
             return source_weight_name
         layer_idx, global_expert_id, projection = match.groups()
         global_expert_id = int(global_expert_id)
-        experts = self.model.layers[int(layer_idx)].block_sparse_moe.experts
+        experts = self._experts_at(int(layer_idx))
         if not experts.is_local_expert(global_expert_id):
             return None
         return (
             f"model.layers.{layer_idx}.block_sparse_moe.experts."
             f"{global_expert_id}.{projection}.expert_weight"
         )
-
-    def resolve_special_weight(
-        self,
-        target_weight_name: str,
-    ) -> WeightTarget | None:
-        match = _EXPERT_TARGET_RE.match(target_weight_name)
-        if match is None:
-            return None
-        layer_idx, global_expert_id, projection = match.groups()
-        experts = self.model.layers[int(layer_idx)].block_sparse_moe.experts
-        return WeightTarget(experts, (int(global_expert_id), projection))
 
     def record_skipped_weight(
         self,
@@ -554,7 +538,7 @@ class MiniMaxM2ForCausalLM(nn.Module):
                 f"MiniMax loader unexpectedly skipped {source_weight_name!r}."
             )
         layer_idx, global_expert_id, projection = match.groups()
-        experts = self.model.layers[int(layer_idx)].block_sparse_moe.experts
+        experts = self._experts_at(int(layer_idx))
         if experts.is_local_expert(int(global_expert_id)):
             raise ValueError(
                 f"MiniMax loader skipped local expert weight {source_weight_name!r}."
@@ -564,11 +548,7 @@ class MiniMaxM2ForCausalLM(nn.Module):
                 f"Skipped remote MiniMax expert is missing weight metadata: "
                 f"{source_weight_name!r}."
             )
-        if loaded_weight_dtype != "F8_E4M3":
-            raise TypeError(
-                "Remote MiniMax expert weight must be FP8 E4M3, got "
-                f"safetensors dtype {loaded_weight_dtype}."
-            )
+        check_remote_fp8_dtype("MiniMax", loaded_weight_dtype)
         if loaded_scale_shape is None or loaded_scale_dtype is None:
             raise ValueError(
                 f"Skipped remote MiniMax expert is missing weight_scale_inv: "
@@ -579,62 +559,21 @@ class MiniMaxM2ForCausalLM(nn.Module):
                 "Remote MiniMax expert scale must be FP32, got safetensors dtype "
                 f"{loaded_scale_dtype}."
             )
-        expected_shape = (
-            (experts.hidden_size // 128, experts.global_intermediate_size // 128)
-            if projection == "w2"
-            else (experts.global_intermediate_size // 128, experts.hidden_size // 128)
+        expected_weight_shape = expert_matrix_shape(experts, down=projection == "w2")
+        expected_scale_shape = tuple(size // 128 for size in expected_weight_shape)
+        check_remote_shape(
+            "MiniMax expert weight", source_weight_name, loaded_weight_shape, expected_weight_shape
         )
-        expected_weight_shape = (
-            (experts.hidden_size, experts.global_intermediate_size)
-            if projection == "w2"
-            else (experts.global_intermediate_size, experts.hidden_size)
+        check_remote_shape(
+            "MiniMax expert scale", source_weight_name, loaded_scale_shape, expected_scale_shape
         )
-        if loaded_weight_shape != expected_weight_shape:
-            raise ValueError(
-                "Remote MiniMax expert weight shape mismatch for "
-                f"{source_weight_name!r}: expected={expected_weight_shape}, "
-                f"got={loaded_weight_shape}."
-            )
-        if loaded_scale_shape != expected_shape:
-            raise ValueError(
-                "Remote MiniMax expert scale shape mismatch for "
-                f"{source_weight_name!r}: expected={expected_shape}, "
-                f"got={loaded_scale_shape}."
-            )
         self._intentionally_skipped_expert_weights.add(source_weight_name)
-        self._intentionally_skipped_expert_scales.add(
-            source_weight_name[: -len(".weight")] + ".weight_scale_inv"
-        )
-
-    def load_special_weight(
-        self,
-        target_weight_name: str,
-        loaded_weight: torch.Tensor,
-        loaded_scale: torch.Tensor | None,
-    ) -> int:
-        target = self.resolve_special_weight(target_weight_name)
-        if target is None:
-            return 0
-        global_expert_id, projection = target.shard_id
-        target.module.load_expert_weight(
-            global_expert_id,
-            projection,
-            loaded_weight,
-            loaded_scale,
-        )
-        return 1
+        self._intentionally_skipped_expert_scales.add(expert_scale_name(source_weight_name))
 
     def validate_loaded_weights(self, loaded_parameter_names: set[str]) -> None:
-        packed_expert_parameters = {
-            name
-            for name, _ in self.named_parameters()
-            if name.endswith(".block_sparse_moe.experts.w13_weight")
-            or name.endswith(".block_sparse_moe.experts.w2_weight")
-        }
-        expected_dense = {
-            name for name, _ in self.named_parameters()
-        } - packed_expert_parameters
-        missing_dense = sorted(expected_dense - loaded_parameter_names)
+        missing_dense = sorted(
+            nonexpert_parameter_names(self, ".block_sparse_moe.experts.") - loaded_parameter_names
+        )
         if missing_dense:
             raise ValueError(
                 f"Missing replicated MiniMax M2 weights: {missing_dense[:8]}."
@@ -642,31 +581,15 @@ class MiniMaxM2ForCausalLM(nn.Module):
         for layer in self.model.layers:
             layer.block_sparse_moe.experts.validate_loaded_weights()
 
-        expected_skipped_weights = {
-            f"model.layers.{layer_idx}.block_sparse_moe.experts.{expert_id}."
-            f"{projection}.weight"
-            for layer_idx in range(int(self.config.num_hidden_layers))
-            for expert_id in range(int(self.config.num_local_experts))
-            if not self.model.layers[
-                layer_idx
-            ].block_sparse_moe.experts.is_local_expert(expert_id)
-            for projection in ("w1", "w2", "w3")
-        }
-        expected_skipped_scales = {
-            name[: -len(".weight")] + ".weight_scale_inv"
-            for name in expected_skipped_weights
-        }
-        missing_skips = sorted(
-            expected_skipped_weights - self._intentionally_skipped_expert_weights
+        expected_skipped_weights = expected_remote_expert_weights(
+            self._experts_at, self.config.num_hidden_layers, self.config.num_local_experts,
+            ("w1", "w2", "w3"), layer_prefix="model.layers", block_name="block_sparse_moe",
         )
-        unexpected_skips = sorted(
-            self._intentionally_skipped_expert_weights - expected_skipped_weights
-        )
-        missing_scale_skips = sorted(
-            expected_skipped_scales - self._intentionally_skipped_expert_scales
-        )
-        unexpected_scale_skips = sorted(
-            self._intentionally_skipped_expert_scales - expected_skipped_scales
+        missing_skips, unexpected_skips, missing_scale_skips, unexpected_scale_skips = (
+            remote_expert_skip_differences(
+                expected_skipped_weights, self._intentionally_skipped_expert_weights,
+                self._intentionally_skipped_expert_scales, fp8=True,
+            )
         )
         if missing_skips or missing_scale_skips:
             raise ValueError(

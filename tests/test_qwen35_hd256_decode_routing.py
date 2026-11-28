@@ -196,7 +196,7 @@ class Qwen35Hd256DecodeRoutingTest(unittest.TestCase):
             kernel.__getitem__.return_value.assert_called_once()
 
         with patch(
-            "sparseengine.kernels.triton.gqa_flash_decoding_stage1._fwd_kernel_flash_decode_stage1_with_score"
+            "sparseengine.kernels.triton.gqa_flash_decoding_stage1._fwd_kernel_flash_decode_stage1"
         ) as kernel:
             flash_decode_stage1_with_score(
                 q,

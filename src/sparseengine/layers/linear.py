@@ -13,6 +13,7 @@ def divide(numerator, denominator):
 
 
 class LinearBase(nn.Module):
+    _scale_shard_label = None
 
     def __init__(
         self,
@@ -161,6 +162,20 @@ class LinearBase(nn.Module):
         self._quantized_loaded_ranges = merged
         self._quantized_weight_loaded = len(merged) == 1 and merged[0] == (0, int(base.shape[0]))
 
+    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
+        param_data = param.data
+        if self.tp_dim is not None:
+            loaded_weight = self._narrow_tp_weight(loaded_weight, param_data)
+        param_data.copy_(loaded_weight)
+
+    def _narrow_tp_weight(self, loaded_weight, target):
+        shard_size = target.size(self.tp_dim)
+        if loaded_weight.size(self.tp_dim) != shard_size:
+            loaded_weight = loaded_weight.narrow(
+                self.tp_dim, self.tp_rank * shard_size, shard_size
+            )
+        return loaded_weight
+
     def load_quantized_weight(
         self,
         loaded_weight: torch.Tensor,
@@ -169,7 +184,48 @@ class LinearBase(nn.Module):
     ) -> None:
         if loaded_shard_id is not None:
             raise ValueError(f"{type(self).__name__} does not accept loaded_shard_id={loaded_shard_id!r}.")
-        self._copy_quantized_weight_and_scale(loaded_weight, loaded_scale)
+        if self.tp_dim is None:
+            self._copy_quantized_weight_and_scale(loaded_weight, loaded_scale)
+            return
+        self._ensure_quantized_loader()
+        weight_shard = self._narrow_tp_weight(loaded_weight, self.weight.data)
+
+        if tuple(loaded_scale.shape) == tuple(self.weight_scale_inv.shape):
+            scale_shard = loaded_scale
+        else:
+            scale_shard_size = self._require_scale_shardable(
+                self._scale_shard_label or type(self).__name__,
+                loaded_scale.size(self.tp_dim),
+                self.tp_size,
+            )
+            scale_start = self.tp_rank * scale_shard_size
+            scale_shard = loaded_scale.narrow(
+                self.tp_dim, scale_start, scale_shard_size
+            )
+        self._copy_quantized_weight_and_scale(weight_shard, scale_shard)
+
+    def _load_fp8_output_shard(
+        self, loaded_weight, loaded_scale, offset, size, shard_count, shard_rank,
+        *, scale_shard_label=None,
+    ) -> None:
+        weight_target = self.weight.data.narrow(0, offset, size)
+        weight_shard = (
+            loaded_weight if loaded_weight.size(0) == size
+            else loaded_weight.chunk(shard_count, 0)[shard_rank]
+        )
+        scale_target = self.weight_scale_inv.narrow(0, offset // 128, size // 128)
+        scale_shard = loaded_scale
+        if tuple(loaded_scale.shape) != tuple(scale_target.shape):
+            if scale_shard_label is None:
+                scale_shard = loaded_scale.chunk(shard_count, 0)[shard_rank]
+            else:
+                scale_size = self._require_scale_shardable(
+                    scale_shard_label, loaded_scale.size(0), shard_count
+                )
+                scale_shard = loaded_scale.narrow(0, shard_rank * scale_size, scale_size)
+        self._copy_quantized_weight_and_scale(
+            weight_shard, scale_shard, weight_target=weight_target, scale_target=scale_target
+        )
 
     def _project_local(
         self, x: torch.Tensor, bias: torch.Tensor | None,
@@ -224,9 +280,6 @@ class ReplicatedLinear(LinearBase):
         quantization=None,
     ):
         super().__init__(input_size, output_size, bias, quantization=quantization)
-
-    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        param.data.copy_(loaded_weight)
 
     def forward(self, x: torch.Tensor, *, out=None) -> torch.Tensor:
         return self._project_local(x, self.bias, out)
@@ -297,45 +350,6 @@ class ColumnParallelLinear(LinearBase):
         tp_size = get_parallel_context().attn_tp_size
         super().__init__(input_size, divide(output_size, tp_size), bias, 0, quantization=quantization)
 
-    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        param_data = param.data
-        shard_size = param_data.size(self.tp_dim)
-        if loaded_weight.size(self.tp_dim) != shard_size:
-            start_idx = self.tp_rank * shard_size
-            loaded_weight = loaded_weight.narrow(self.tp_dim, start_idx, shard_size)
-        param_data.copy_(loaded_weight)
-
-    def load_quantized_weight(
-        self,
-        loaded_weight: torch.Tensor,
-        loaded_scale: torch.Tensor,
-        loaded_shard_id=None,
-    ) -> None:
-        if loaded_shard_id is not None:
-            raise ValueError(f"{type(self).__name__} does not accept loaded_shard_id={loaded_shard_id!r}.")
-        self._ensure_quantized_loader()
-        param_data = self.weight.data
-        shard_size = param_data.size(self.tp_dim)
-        if loaded_weight.size(self.tp_dim) == shard_size:
-            weight_shard = loaded_weight
-        else:
-            start_idx = self.tp_rank * shard_size
-            weight_shard = loaded_weight.narrow(self.tp_dim, start_idx, shard_size)
-
-        if tuple(loaded_scale.shape) == tuple(self.weight_scale_inv.shape):
-            scale_shard = loaded_scale
-        else:
-            scale_shard_size = self._require_scale_shardable(
-                f"{type(self).__name__}",
-                loaded_scale.size(self.tp_dim),
-                self.tp_size,
-            )
-            scale_start = self.tp_rank * scale_shard_size
-            scale_shard = loaded_scale.narrow(
-                self.tp_dim, scale_start, scale_shard_size
-            )
-        self._copy_quantized_weight_and_scale(weight_shard, scale_shard)
-
     def forward(self, x: torch.Tensor, *, out: torch.Tensor | None = None) -> torch.Tensor:
         return self._project_local(x, self.bias, out)
 
@@ -403,31 +417,10 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
                 f"output shard to be 128-aligned, got offset={local_offset}, size={local_size}."
             )
 
-        weight_target = self.weight.data.narrow(self.tp_dim, local_offset, local_size)
-        weight_shard = (
-            loaded_weight
-            if loaded_weight.size(self.tp_dim) == local_size
-            else loaded_weight.chunk(self.tp_size, self.tp_dim)[self.tp_rank]
-        )
-        scale_offset = local_offset // 128
-        scale_size = local_size // 128
-        scale_target = self.weight_scale_inv.narrow(0, scale_offset, scale_size)
-        if tuple(loaded_scale.shape) == tuple(scale_target.shape):
-            scale_shard = loaded_scale
-        else:
-            scale_shard_size = self._require_scale_shardable(
-                "MergedColumnParallelLinear",
-                loaded_scale.size(0),
-                self.tp_size,
-            )
-            scale_shard = loaded_scale.narrow(
-                0, self.tp_rank * scale_shard_size, scale_shard_size
-            )
-        self._copy_quantized_weight_and_scale(
-            weight_shard,
-            scale_shard,
-            weight_target=weight_target,
-            scale_target=scale_target,
+        self._load_fp8_output_shard(
+            loaded_weight, loaded_scale, local_offset, local_size,
+            self.tp_size, self.tp_rank,
+            scale_shard_label="MergedColumnParallelLinear",
         )
 
 
@@ -450,22 +443,21 @@ class QKVParallelLinear(ColumnParallelLinear):
         output_size = (total_num_heads + 2 * total_num_kv_heads) * self.head_size
         super().__init__(hidden_size, output_size, bias, quantization=quantization)
 
-    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor, loaded_shard_id: str):
-        param_data = param.data
+    def _shard(self, loaded_shard_id: str) -> tuple[int, int, int, int]:
         assert loaded_shard_id in ["q", "k", "v"]
+        q_size = self.num_heads * self.head_size
         if loaded_shard_id == "q":
-            shard_size = self.num_heads * self.head_size
-            shard_offset = 0
-        elif loaded_shard_id == "k":
-            shard_size = self.num_kv_heads * self.head_size
-            shard_offset = self.num_heads * self.head_size
-        else:
-            shard_size = self.num_kv_heads * self.head_size
-            shard_offset = self.num_heads * self.head_size + self.num_kv_heads * self.head_size
-        param_data = param_data.narrow(self.tp_dim, shard_offset, shard_size)
+            return q_size, 0, self.tp_size, self.tp_rank
+        kv_size = self.num_kv_heads * self.head_size
+        offset = q_size if loaded_shard_id == "k" else q_size + kv_size
+        return kv_size, offset, self.tp_size, self.tp_rank
+
+    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor, loaded_shard_id: str):
+        shard_size, shard_offset, shard_count, shard_rank = self._shard(loaded_shard_id)
+        target = param.data.narrow(self.tp_dim, shard_offset, shard_size)
         if loaded_weight.size(self.tp_dim) != shard_size:
-            loaded_weight = loaded_weight.chunk(self.tp_size, self.tp_dim)[self.tp_rank]
-        param_data.copy_(loaded_weight)
+            loaded_weight = loaded_weight.chunk(shard_count, self.tp_dim)[shard_rank]
+        target.copy_(loaded_weight)
 
     def load_quantized_weight(
         self,
@@ -474,44 +466,16 @@ class QKVParallelLinear(ColumnParallelLinear):
         loaded_shard_id: str,
     ) -> None:
         self._ensure_quantized_loader()
-        assert loaded_shard_id in ["q", "k", "v"]
-        if loaded_shard_id == "q":
-            shard_size = self.num_heads * self.head_size
-            shard_offset = 0
-        elif loaded_shard_id == "k":
-            shard_size = self.num_kv_heads * self.head_size
-            shard_offset = self.num_heads * self.head_size
-        else:
-            shard_size = self.num_kv_heads * self.head_size
-            shard_offset = self.num_heads * self.head_size + self.num_kv_heads * self.head_size
+        shard_size, shard_offset, shard_count, shard_rank = self._shard(loaded_shard_id)
         if shard_offset % 128 != 0 or shard_size % 128 != 0:
             raise ValueError(
                 "QKVParallelLinear FP8 scale sharding requires each local q/k/v output shard "
                 f"to be 128-aligned, got offset={shard_offset}, size={shard_size}."
             )
-        weight_target = self.weight.data.narrow(self.tp_dim, shard_offset, shard_size)
-        weight_shard = (
-            loaded_weight
-            if loaded_weight.size(self.tp_dim) == shard_size
-            else loaded_weight.chunk(self.tp_size, self.tp_dim)[self.tp_rank]
-        )
-        scale_target = self.weight_scale_inv.narrow(0, shard_offset // 128, shard_size // 128)
-        if tuple(loaded_scale.shape) == tuple(scale_target.shape):
-            scale_shard = loaded_scale
-        else:
-            scale_shard_size = self._require_scale_shardable(
-                "QKVParallelLinear",
-                loaded_scale.size(0),
-                self.tp_size,
-            )
-            scale_shard = loaded_scale.narrow(
-                0, self.tp_rank * scale_shard_size, scale_shard_size
-            )
-        self._copy_quantized_weight_and_scale(
-            weight_shard,
-            scale_shard,
-            weight_target=weight_target,
-            scale_target=scale_target,
+        self._load_fp8_output_shard(
+            loaded_weight, loaded_scale, shard_offset, shard_size,
+            shard_count, shard_rank,
+            scale_shard_label="QKVParallelLinear",
         )
 
 
@@ -568,13 +532,6 @@ class ReplicatedKVQKVParallelLinear(QKVParallelLinear):
         slices[self.tp_dim] = slice(shard_rank * shard_size, (shard_rank + 1) * shard_size)
         return tuple(slices)
 
-    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor, loaded_shard_id: str):
-        shard_size, shard_offset, shard_count, shard_rank = self._shard(loaded_shard_id)
-        target = param.data.narrow(self.tp_dim, shard_offset, shard_size)
-        if loaded_weight.size(self.tp_dim) != shard_size:
-            loaded_weight = loaded_weight.chunk(shard_count, self.tp_dim)[shard_rank]
-        target.copy_(loaded_weight)
-
     def load_quantized_weight(
         self,
         loaded_weight: torch.Tensor,
@@ -588,27 +545,14 @@ class ReplicatedKVQKVParallelLinear(QKVParallelLinear):
                 "Replicated KV QKV FP8 loading requires 128-aligned shards, "
                 f"got offset={shard_offset}, size={shard_size}."
             )
-        weight_target = self.weight.data.narrow(0, shard_offset, shard_size)
-        weight_shard = (
-            loaded_weight
-            if loaded_weight.size(0) == shard_size
-            else loaded_weight.chunk(shard_count, 0)[shard_rank]
-        )
-        scale_target = self.weight_scale_inv.narrow(0, shard_offset // 128, shard_size // 128)
-        scale_shard = (
-            loaded_scale
-            if tuple(loaded_scale.shape) == tuple(scale_target.shape)
-            else loaded_scale.chunk(shard_count, 0)[shard_rank]
-        )
-        self._copy_quantized_weight_and_scale(
-            weight_shard,
-            scale_shard,
-            weight_target=weight_target,
-            scale_target=scale_target,
+        self._load_fp8_output_shard(
+            loaded_weight, loaded_scale, shard_offset, shard_size,
+            shard_count, shard_rank,
         )
 
 
 class RowParallelLinear(LinearBase):
+    _scale_shard_label = "RowParallelLinear"
 
     def __init__(
         self,
@@ -621,45 +565,6 @@ class RowParallelLinear(LinearBase):
         tp_size = get_parallel_context().attn_tp_size
         super().__init__(divide(input_size, tp_size), output_size, bias, 1, quantization=quantization)
         self.reduce_results = bool(reduce_results)
-
-    def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
-        param_data = param.data
-        shard_size = param_data.size(self.tp_dim)
-        if loaded_weight.size(self.tp_dim) != shard_size:
-            start_idx = self.tp_rank * shard_size
-            loaded_weight = loaded_weight.narrow(self.tp_dim, start_idx, shard_size)
-        param_data.copy_(loaded_weight)
-
-    def load_quantized_weight(
-        self,
-        loaded_weight: torch.Tensor,
-        loaded_scale: torch.Tensor,
-        loaded_shard_id=None,
-    ) -> None:
-        if loaded_shard_id is not None:
-            raise ValueError(f"{type(self).__name__} does not accept loaded_shard_id={loaded_shard_id!r}.")
-        self._ensure_quantized_loader()
-        param_data = self.weight.data
-        shard_size = param_data.size(self.tp_dim)
-        if loaded_weight.size(self.tp_dim) == shard_size:
-            weight_shard = loaded_weight
-        else:
-            start_idx = self.tp_rank * shard_size
-            weight_shard = loaded_weight.narrow(self.tp_dim, start_idx, shard_size)
-
-        if tuple(loaded_scale.shape) == tuple(self.weight_scale_inv.shape):
-            scale_shard = loaded_scale
-        else:
-            scale_shard_size = self._require_scale_shardable(
-                "RowParallelLinear",
-                loaded_scale.size(self.tp_dim),
-                self.tp_size,
-            )
-            scale_start = self.tp_rank * scale_shard_size
-            scale_shard = loaded_scale.narrow(
-                self.tp_dim, scale_start, scale_shard_size
-            )
-        self._copy_quantized_weight_and_scale(weight_shard, scale_shard)
 
     def forward(self, x: torch.Tensor, *, out: torch.Tensor | None = None) -> torch.Tensor:
         bias = self.bias if self.tp_rank == 0 else None

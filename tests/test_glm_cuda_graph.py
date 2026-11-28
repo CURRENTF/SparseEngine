@@ -945,7 +945,7 @@ def _initialize_glm_method_cache_manager(
     manager._decode_static_index_buffers = {}
     manager._decode_static_state_binding_key = None
     manager._prefill_attn_score_accumulators = {}
-    manager._uniform_decode_metadata = method == "streamingllm"
+    manager._uniform_decode_metadata = method in {"streamingllm", "h2o"}
     manager.pyramidkv_prefill_staging_num_slots = 0
     manager.pyramidkv_prefill_staging_kv_cache = None
     manager._pyramidkv_prefill_staging_active = False
@@ -962,8 +962,6 @@ def _initialize_glm_method_cache_manager(
     manager._pyramidkv_long_prefill_offload_end = 0
     manager._pyramidkv_long_prefill_offload_total_len = 0
     manager._pyramidkv_long_prefill_offload_is_last_chunk = False
-    manager._pyramidkv_long_prefill_offload_prefetch_stream = None
-    manager._pyramidkv_long_prefill_offload_prefetch_states = {}
     manager.raw_kv_offload_buffer = SimpleNamespace(
         release_layer=lambda **_kwargs: None,
     )
@@ -985,9 +983,6 @@ def _initialize_glm_method_cache_manager(
             "decode_evictions": 0,
             "dropped_tokens": 0,
         }
-        manager._h2o_final_prefill_workspace = None
-        manager._h2o_decode_static_rows = None
-        manager._h2o_decode_static_topology = None
 
     if method == "rkv":
         obs = int(config.rkv_observation_tokens)

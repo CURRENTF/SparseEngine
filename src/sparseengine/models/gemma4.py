@@ -22,6 +22,7 @@ from sparseengine.layers.linear import (
     RowParallelLinear,
 )
 from sparseengine.layers.rotary_embedding import apply_rotary_emb
+from sparseengine.models.moe_common import nonexpert_parameter_names
 from sparseengine.operators.gemma4 import (
     Gemma4OperatorProvider,
     Gemma4OpSpec,
@@ -37,7 +38,7 @@ from sparseengine.operators.moe import model_activation_dtype
 from sparseengine.operators.moe_execution import MoeExecutionPlan
 from sparseengine.platforms import device_runtime
 from sparseengine.utils.context import get_context
-from sparseengine.utils.config import config_get, config_layer_get
+from sparseengine.utils.config import config_layer_get
 from sparseengine.utils.weight_target import WeightTarget
 
 _EXPERT_SOURCE_RE = re.compile(
@@ -810,17 +811,11 @@ class Gemma4ForCausalLM(nn.Module):
         return 1
 
     def validate_loaded_weights(self, loaded_parameter_names: set[str]) -> None:
-        packed_experts = {
-            name
-            for name, _ in self.named_parameters()
-            if name.endswith((".experts.w13_weight", ".experts.w2_weight"))
-        }
         optional_tied_head = (
             {"lm_head.weight"} if self.config.tie_word_embeddings else set()
         )
         missing = sorted(
-            {name for name, _ in self.named_parameters()}
-            - packed_experts
+            nonexpert_parameter_names(self)
             - optional_tied_head
             - loaded_parameter_names
         )

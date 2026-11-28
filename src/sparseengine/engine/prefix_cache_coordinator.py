@@ -1,35 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from weakref import WeakKeyDictionary
+from dataclasses import dataclass
 
 import torch
 
 from sparseengine.config import Config
-from sparseengine.engine.prefix_cache import (
-    PrefixCacheBlock,
-    PrefixBlockPayload,
-    PrefixTransferKind,
-    RadixPrefixIndex,
-    build_prefix_cache_fingerprint,
-    select_write_through_candidates,
-    usable_prefix_cache_tokens,
-)
+from sparseengine.engine.prefix_cache import PrefixCacheBlock
 from sparseengine.engine.mixed_prefix_offload import (
-    MixedQuestPrefixOffloadController,
     MixedPrefixOffloadController,
     PinnedMixedPrefixPool,
-    PinnedMixedQuestPrefixPool,
 )
 from sparseengine.engine.recurrent_state_manager import RecurrentPrefixPayload
 from sparseengine.platforms import device_runtime
 from sparseengine.engine.sequence import Sequence
-from sparseengine.engine.cache_manager.prefix_cache_mixin import (
-    PrefixHitCapacityCacheEntry,
-    PrefixLookupCache,
-    lookup_prefix_cache_hit,
-    prefix_hit_capacity_counts,
-)
+from sparseengine.engine.cache_manager.prefix_cache_mixin import PendingPrefixBlock, RadixPrefixRuntime
 from sparseengine.utils.profiler import profiler
 
 
@@ -42,57 +26,43 @@ class MixedPrefixBlockPayload:
     recurrent_bytes: int
     host_block_index: int | None = None
 
-
-@dataclass
-class _PendingMixedPrefixBlock:
-    stable_block_id: bytes
-    parent_block_id: bytes | None
-    logical_block_idx: int
-    token_ids: list[int]
-    payload: MixedPrefixBlockPayload
+    def resident_tokens(self, block_size: int) -> int:
+        return block_size
 
 
-@dataclass
-class _MixedPrefixRuntimeState:
-    parent_block_id: bytes | None
-    next_logical_block_idx: int
-    pending_tokens: list[int] = field(default_factory=list)
-
-
-class PrefixCacheCoordinator:
+class PrefixCacheCoordinator(RadixPrefixRuntime):
     """Owns mixed KV+recurrent prefix radix state for mixed runtimes."""
+
+    _prefix_label = "Mixed prefix"
+    _prefix_profile = "mixed_prefix_cache"
+    _prefix_wait_label = "Mixed prefix KV"
+    _prefix_disabled_reason = "prefix cache is not enabled for this runtime."
+    _prefix_payload_type = MixedPrefixBlockPayload
+
+    def _prefix_cache_negative_refcount_message(self) -> str:
+        return "Mixed prefix cache block ref_count became negative."
+
+    def clear_prefix_cache_hit(self, seq: Sequence) -> None:
+        seq.clear_prefix_cache_hit()
+
+    def synchronize_prefix_cache_delete_plan(self, plan) -> None:
+        self.cache_manager.synchronize_prefix_cache_delete_plan(plan)
 
     def __init__(self, config: Config, cache_manager, recurrent_state_manager):
         self.config = config
         self.cache_manager = cache_manager
         self.recurrent_state_manager = recurrent_state_manager
-        self.enabled = bool(config.enable_prefix_caching)
-        self.block_size = int(config.prefix_cache_block_size or 0)
+        self.enable_prefix_caching = bool(config.enable_prefix_caching)
+        self.prefix_cache_block_size = int(config.prefix_cache_block_size or 0)
         self.max_recurrent_bytes = int(config.prefix_recurrent_capacity_bytes)
-        self.prefix_cache = None
-        if self.enabled:
-            self.prefix_cache = RadixPrefixIndex(
-                block_size=self.block_size,
-                fingerprint=build_prefix_cache_fingerprint(config, self.block_size),
-                max_blocks=config.prefix_cache_max_blocks,
-            )
-        self.seq_id_to_prefix_blocks: dict[int, list[PrefixCacheBlock]] = {}
-        self.seq_id_to_materialized_blocks: dict[int, dict[bytes, PrefixCacheBlock]] = {}
-        self.runtime_states: dict[int, _MixedPrefixRuntimeState] = {}
-        self.pending_blocks: dict[int, list[_PendingMixedPrefixBlock]] = {}
+        self._init_prefix_index()
+        self._init_prefix_cache_runtime()
         self.pending_duplicate_refs: dict[int, list[bytes]] = {}
         self.pending_block_ids: set[bytes] = set()
         self.pending_recurrent_bytes = 0
         self._recurrent_bytes_cache = None
-        self.prefix_lookup_cache = PrefixLookupCache()
-        self.prefix_hit_capacity_cache: WeakKeyDictionary[
-            Sequence, PrefixHitCapacityCacheEntry
-        ] = WeakKeyDictionary()
         self.capacity_limited_seq_ids: set[int] = set()
         self.skipped_capacity_blocks = 0
-        self.offload_controller: MixedPrefixOffloadController | None = None
-        self._step_h2d_operations = {}
-        self._write_through_candidates: dict[bytes, PrefixCacheBlock] = {}
         if bool(getattr(config, "enable_prefix_cache_offload", False)):
             self._init_offload()
 
@@ -114,12 +84,12 @@ class PrefixCacheCoordinator:
             int(layer_idx)
             for layer_idx in self.config.runtime_layout.linear_attention_layer_indices
         )
-        kv_items_per_block = self.block_size
+        kv_items_per_block = self.prefix_cache_block_size
         if is_quest:
             page_size = int(self.cache_manager.page_size)
-            if self.block_size % page_size != 0:
+            if self.prefix_cache_block_size % page_size != 0:
                 raise RuntimeError("Mixed QuEST prefix block must contain whole pages.")
-            kv_items_per_block += self.block_size // page_size
+            kv_items_per_block += self.prefix_cache_block_size // page_size
         kv_bytes = int(
             kv_items_per_block
             * self.cache_manager.num_kv_layers
@@ -140,111 +110,31 @@ class PrefixCacheCoordinator:
                 f"host_blocks={host_capacity_blocks} required_blocks={required_blocks} "
                 f"bytes_per_block={bytes_per_block}."
             )
-        pool_type = PinnedMixedQuestPrefixPool if is_quest else PinnedMixedPrefixPool
-        pool_kwargs = {}
-        if is_quest:
-            pool_kwargs["page_size"] = int(self.cache_manager.page_size)
-        host_pool = pool_type(
+        host_pool = PinnedMixedPrefixPool(
             capacity_blocks=host_capacity_blocks,
             num_layers=self.cache_manager.num_kv_layers,
-            block_size=self.block_size,
+            block_size=self.prefix_cache_block_size,
             num_kv_heads=self.cache_manager.num_kv_heads,
             head_dim=self.cache_manager.head_dim,
             dtype=self.cache_manager.kv_cache.dtype,
             state_spec=state_spec,
             recurrent_layer_indices=recurrent_layers,
-            **pool_kwargs,
+            page_size=page_size if is_quest else None,
         )
-        controller_type = (
-            MixedQuestPrefixOffloadController if is_quest else MixedPrefixOffloadController
-        )
-        controller_kwargs = {}
-        if is_quest:
-            controller_kwargs["device_metadata_cache"] = self.cache_manager.metadata_cache
-        self.offload_controller = controller_type(
+        self.prefix_offload_controller = MixedPrefixOffloadController(
             prefix_cache=self.prefix_cache,
             kv_cache=self.cache_manager.kv_cache,
             host_pool=host_pool,
-            block_size=self.block_size,
+            block_size=self.prefix_cache_block_size,
             device=self.cache_manager.device,
             kv_transformer_layer_indices=tuple(
                 int(layer_idx) for layer_idx in self.config.runtime_layout.kv_idx_to_layer_idx
             ),
-            **controller_kwargs,
-        )
-
-    def _offload_enabled(self) -> bool:
-        return getattr(self, "offload_controller", None) is not None
-
-    def _poll_offload(self) -> None:
-        controller = getattr(self, "offload_controller", None)
-        if controller is not None:
-            controller.poll()
-
-    def _require_prefix_cache(self) -> RadixPrefixIndex:
-        if self.prefix_cache is None:
-            raise RuntimeError("prefix cache is not enabled for this runtime.")
-        return self.prefix_cache
-
-    def inspect(self, token_ids: list[int], *, include_subtree: bool = False) -> dict[str, object]:
-        self._poll_offload()
-        return self._require_prefix_cache().inspect_prefix(
-            [int(token_id) for token_id in token_ids],
-            include_subtree=include_subtree,
-        )
-
-    def match(self, token_ids: list[int]) -> dict[str, object]:
-        self._poll_offload()
-        if self.prefix_cache is None:
-            return {
-                "supported": True,
-                "enabled": False,
-                "method": str(getattr(self.config, "sparse_method", "") or ""),
-                "matched_tokens": 0,
-                "matched_blocks": 0,
-                "match_ratio": 0.0,
-                "reason": "prefix cache is not enabled for this runtime.",
-            }
-        token_ids = [int(token_id) for token_id in token_ids]
-        usable_tokens = usable_prefix_cache_tokens(len(token_ids), self.block_size)
-        hit_len, hit_last_block_id, hit_blocks = self.prefix_cache.match_longest_prefix(
-            token_ids,
-            max_usable_tokens=usable_tokens,
-        )
-        return {
-            "supported": True,
-            "enabled": True,
-            "method": str(getattr(self.config, "sparse_method", "") or ""),
-            "block_size": int(self.block_size),
-            "prompt_tokens": int(len(token_ids)),
-            "usable_tokens": int(usable_tokens),
-            "matched_tokens": int(hit_len),
-            "matched_blocks": int(hit_blocks),
-            "match_ratio": 0.0 if usable_tokens <= 0 else float(hit_len) / float(usable_tokens),
-            "last_block_id": None if hit_last_block_id is None else hit_last_block_id.hex(),
-            "live_blocks": int(len(self.prefix_cache)),
-        }
-
-    def delete_subtree(self, token_ids: list[int]) -> dict[str, object]:
-        controller = getattr(self, "offload_controller", None)
-        if controller is not None:
-            controller.synchronize_all()
-        normalized = [int(token_id) for token_id in token_ids]
-        prefix_cache = self._require_prefix_cache()
-        plan = prefix_cache.preview_delete_subtree(normalized)
-        self.cache_manager.synchronize_prefix_cache_delete_plan(plan.to_dict())
-        result = prefix_cache.safe_delete_subtree(normalized)
-        self._free_blocks(result.deleted_blocks)
-        return result.to_dict()
-
-    def set_eviction_priority(self, token_ids: list[int], *, priority: int) -> dict[str, object]:
-        return self._require_prefix_cache().set_subtree_eviction_priority(
-            [int(token_id) for token_id in token_ids],
-            int(priority),
+            device_metadata_cache=self.cache_manager.metadata_cache if is_quest else None,
         )
 
     def stats(self) -> dict[str, int]:
-        self._poll_offload()
+        self._poll_prefix_offload()
         if self.prefix_cache is None:
             return {}
         accounting_bytes = 0
@@ -263,92 +153,43 @@ class PrefixCacheCoordinator:
         stats["mixed_prefix_cache_max_recurrent_bytes"] = int(self.max_recurrent_bytes)
         stats["mixed_prefix_cache_skipped_capacity_blocks"] = int(self.skipped_capacity_blocks)
         stats["mixed_prefix_cache_evictable_slots"] = int(self.evictable_slots())
-        controller = getattr(self, "offload_controller", None)
+        controller = getattr(self, "prefix_offload_controller", None)
         if controller is not None:
             stats.update(controller.stats())
         return stats
 
     def debug_state_summary(self) -> dict[str, object] | None:
         """Return the coordinator-owned radix state for synchronized TP tests."""
-        self._poll_offload()
+        self._poll_prefix_offload()
         if self.prefix_cache is None:
             return None
-        blocks = []
-        for block_id, block in sorted(self.prefix_cache.blocks.items()):
-            blocks.append(
-                {
-                    "stable_block_id": block_id.hex(),
-                    "parent_block_id": (
-                        None
-                        if block.parent_block_id is None
-                        else block.parent_block_id.hex()
-                    ),
-                    "logical_block_idx": int(block.logical_block_idx),
-                    "token_ids": [int(token_id) for token_id in block.token_ids],
-                    "ref_count": int(block.ref_count),
-                    "last_access": int(block.last_access),
-                    "eviction_priority": int(block.eviction_priority),
-                    "device_present": bool(block.residency.device_present),
-                    "host_present": bool(block.residency.host_present),
-                    "transfer": (
-                        None
-                        if block.residency.transfer is None
-                        else block.residency.transfer.value
-                    ),
-                }
-            )
-        return {
-            "fingerprint": self.prefix_cache.fingerprint.hex(),
-            "stats": {
-                str(key): int(value) for key, value in self.stats().items()
-            },
-            "blocks": blocks,
-        }
+        return self.prefix_cache.debug_state_summary(stats=self.stats)
 
     def evictable_slots(self) -> int:
         if self.prefix_cache is None:
             return 0
         freeable = (
             self.prefix_cache.device_freeable_blocks()
-            if self._offload_enabled()
+            if self._prefix_offload_enabled()
             else self.prefix_cache.freeable_blocks()
         )
-        return int(freeable * self.block_size)
+        return int(freeable * self.prefix_cache_block_size)
 
     def step_reclaimable_slots(self) -> int:
         if self.prefix_cache is None:
             return 0
         reclaimable = (
             self.prefix_cache.device_reclaimable_blocks()
-            if self._offload_enabled()
+            if self._prefix_offload_enabled()
             else self.prefix_cache.freeable_blocks()
         )
-        return int(reclaimable * self.block_size)
-
-    def admission_reclaimable_slots(self) -> int:
-        if self.prefix_cache is None:
-            return 0
-        reclaimable = (
-            self.prefix_cache.device_reclaimable_blocks()
-            if self._offload_enabled()
-            else self.prefix_cache.freeable_blocks()
-        )
-        return int(reclaimable * self.block_size)
+        return int(reclaimable * self.prefix_cache_block_size)
 
     def prefix_hit_evictable_slots(self, seq: Sequence) -> int:
-        if self.prefix_cache is None or int(getattr(seq, "prefix_cache_hit_len", 0) or 0) <= 0:
+        if int(getattr(seq, "prefix_cache_hit_len", 0) or 0) <= 0:
             return 0
-        cache = getattr(self, "prefix_hit_capacity_cache", None)
-        if cache is None:
-            cache = WeakKeyDictionary()
-            self.prefix_hit_capacity_cache = cache
-        reclaimable_blocks, promotion_blocks = prefix_hit_capacity_counts(
-            self.prefix_cache,
-            cache,
-            seq,
-            offload_enabled=self._offload_enabled(),
-        )
-        return int((reclaimable_blocks + promotion_blocks) * self.block_size)
+        reclaimable, promotion = self._prefix_hit_capacity_counts(seq)
+        return (reclaimable + promotion) * self.prefix_cache_block_size
 
     def prefix_hit_shared_costs(self, seq: Sequence) -> dict[object, int]:
         if self.prefix_cache is None or int(getattr(seq, "prefix_cache_hit_len", 0) or 0) <= 0:
@@ -363,119 +204,36 @@ class PrefixCacheCoordinator:
             )
         reclaimable_ids = (
             self.prefix_cache.device_reclaimable_block_ids()
-            if self._offload_enabled()
+            if self._prefix_offload_enabled()
             else self.prefix_cache.freeable_block_ids()
         )
         costs: dict[object, int] = {}
         for block in self.prefix_cache.get_chain(last_block_id, hit_blocks):
             if block.stable_block_id in reclaimable_ids or (
-                self._offload_enabled() and not block.residency.device_present
+                self._prefix_offload_enabled() and not block.residency.device_present
             ):
-                costs[block.stable_block_id] = int(self.block_size)
+                costs[block.stable_block_id] = int(self.prefix_cache_block_size)
         return costs
-
-    def refresh_prefix_cache_hit(self, seq: Sequence) -> None:
-        self._poll_offload()
-        seq.clear_prefix_cache_hit()
-        if self.prefix_cache is None:
-            return
-        if seq.num_prefilled_tokens != 0 or seq.num_completion_tokens != 0:
-            return
-        usable_tokens = usable_prefix_cache_tokens(seq.num_prompt_tokens, self.block_size)
-        if usable_tokens <= 0:
-            return
-        with profiler.record("mixed_prefix_cache_lookup"):
-            hit_len, last_block_id, hit_blocks = lookup_prefix_cache_hit(
-                self.prefix_cache,
-                self.prefix_lookup_cache,
-                seq,
-                usable_tokens,
-            )
-        if hit_len <= 0:
-            return
-        if last_block_id is None or hit_blocks <= 0:
-            raise RuntimeError("Mixed prefix cache lookup returned an invalid hit.")
-        if hit_len >= seq.num_prompt_tokens or hit_len % self.block_size != 0:
-            raise RuntimeError(
-                "Mixed prefix cache lookup returned an unusable hit length: "
-                f"seq_id={seq.seq_id} hit_len={hit_len} prompt_len={seq.num_prompt_tokens} "
-                f"block_size={self.block_size}."
-            )
-        seq.prefix_cache_enabled = True
-        seq.prefix_cache_hit_len = int(hit_len)
-        seq.prefix_cache_hit_block_count = int(hit_blocks)
-        seq.prefix_cache_hit_last_block_id = last_block_id
-        seq.prefix_cache_block_size = self.block_size
-        seq.prefix_cache_method = str(self.config.sparse_method or "")
 
     def attach_prefix_cache_hits(self, seqs: list[Sequence]) -> None:
         if self.prefix_cache is None:
             return
-        self._poll_offload()
-        self._step_h2d_operations = {}
+        self._poll_prefix_offload()
+        self._prefix_offload_step_h2d_operations = {}
         for seq in seqs:
             self._attach_seq(seq)
 
     def before_prefill_layer_attention(self, layer_idx: int) -> None:
-        controller = getattr(self, "offload_controller", None)
-        if controller is None or not self._step_h2d_operations:
-            return
-        if device_runtime.is_stream_capturing():
-            raise RuntimeError("Mixed prefix KV H2D waits are forbidden during graph capture.")
-        kv_layer_index = self.cache_manager.kv_layer_index(layer_idx)
-        for operation in self._step_h2d_operations.values():
-            controller.wait_for_layer(operation, kv_layer_index)
+        self._wait_for_prefix_layer(layer_idx, self.cache_manager)
 
     def _attach_seq(self, seq: Sequence) -> None:
         hit_len = int(getattr(seq, "prefix_cache_hit_len", 0) or 0)
         if hit_len <= 0 or seq.seq_id in self.seq_id_to_prefix_blocks:
             return
-        if seq.prefix_cache_hit_last_block_id is None:
-            raise RuntimeError(f"seq_id={seq.seq_id} has mixed prefix hit length but no last block id.")
-        if hit_len % self.block_size != 0:
-            raise RuntimeError(
-                f"seq_id={seq.seq_id} mixed prefix hit length is not block aligned: "
-                f"hit_len={hit_len} block_size={self.block_size}."
-            )
-        chain = self._require_prefix_cache().get_chain(
-            seq.prefix_cache_hit_last_block_id,
-            int(seq.prefix_cache_hit_block_count),
-        )
-        if len(chain) * self.block_size != hit_len:
-            raise RuntimeError(
-                "Mixed prefix cache chain length does not match scheduler metadata: "
-                f"seq_id={seq.seq_id} hit_len={hit_len} blocks={len(chain)} block_size={self.block_size}."
-            )
-
         with profiler.record("mixed_prefix_cache_attach"):
-            cpu_only_blocks: list[PrefixCacheBlock] = []
-            existing_operations = {}
-            saw_cpu_only = False
-            for block in chain:
-                payload = block.payload
-                if not isinstance(payload, MixedPrefixBlockPayload):
-                    raise RuntimeError("Mixed prefix cache block has an invalid payload.")
-                block.residency.validate()
-                if not block.residency.device_present:
-                    saw_cpu_only = True
-                    if not self._offload_enabled() or not block.residency.host_present:
-                        raise RuntimeError(
-                            "Mixed prefix lookup returned a non-device block that cannot be promoted."
-                        )
-                    if block.residency.transfer is not None or payload.host_block_index is None:
-                        raise RuntimeError("Host-only mixed prefix block has invalid transfer state.")
-                    cpu_only_blocks.append(block)
-                    continue
-                if saw_cpu_only:
-                    raise RuntimeError("Mixed prefix device residency is not root-contiguous.")
-                if block.residency.transfer == PrefixTransferKind.H2D:
-                    controller = self.offload_controller
-                    assert controller is not None
-                    operation = controller.h2d_operation_for_block(block)
-                    if operation is None:
-                        raise RuntimeError("Mixed prefix H2D block has no tracked operation.")
-                    existing_operations[id(operation)] = operation
-
+            chain, _, cpu_only_blocks, existing_operations, _, promotion_tokens = (
+                self._prefix_chain_for_attachment(seq, hit_len)
+            )
             row_preexisted = bool(self.cache_manager.validate_prefix_kv_attach(seq))
             for block in chain:
                 self.prefix_cache.acquire_block_ref(block)
@@ -487,39 +245,27 @@ class PrefixCacheCoordinator:
                         raise RuntimeError("Mixed prefix H2D is forbidden during graph capture.")
                     missing_slots = max(
                         0,
-                        len(cpu_only_blocks) * self.block_size
+                        promotion_tokens
                         - int(self.cache_manager.num_free_slots),
                     )
                     if missing_slots:
                         self.evict_for_slots(missing_slots)
-                    kv_payloads = []
-                    for block in cpu_only_blocks:
-                        payload = block.payload
-                        assert isinstance(payload, MixedPrefixBlockPayload)
-                        kv_payloads.append(payload.kv_payload)
+                    kv_payloads = [block.payload.kv_payload for block in cpu_only_blocks]
                     self.cache_manager.allocate_prefix_kv_payloads_device(kv_payloads)
-                    controller = self.offload_controller
+                    controller = self.prefix_offload_controller
                     assert controller is not None
                     controller.allocate_device_recurrent(cpu_only_blocks)
                     submitted_operation = controller.submit_h2d(cpu_only_blocks)
                 kv_payloads = [block.payload.kv_payload for block in chain]
                 self.cache_manager.attach_prefix_kv_payloads(seq, kv_payloads)
                 attached_kv_payloads = kv_payloads
-                last_payload = chain[-1].payload
-                if not isinstance(last_payload, MixedPrefixBlockPayload):
-                    raise RuntimeError("Mixed prefix cache block has an invalid recurrent payload.")
-                last_operation = None
-                controller = getattr(self, "offload_controller", None)
-                if controller is not None:
-                    last_operation = controller.h2d_operation_for_block(chain[-1])
+                controller = self.prefix_offload_controller
+                last_operation = (
+                    controller.h2d_operation_for_block(chain[-1]) if controller is not None else None
+                )
                 self.recurrent_state_manager.attach_prefix_recurrent_payload(
-                    seq,
-                    last_payload.recurrent_payload,
-                    readiness_events=(
-                        None
-                        if last_operation is None
-                        else last_operation.auxiliary_layer_events
-                    ),
+                    seq, chain[-1].payload.recurrent_payload,
+                    readiness_events=None if last_operation is None else last_operation.auxiliary_layer_events,
                 )
             except BaseException as attach_error:
                 rollback_error = None
@@ -535,7 +281,7 @@ class PrefixCacheCoordinator:
                 for block in chain:
                     self.prefix_cache.release_block_ref(block)
                 if cpu_only_blocks and submitted_operation is None:
-                    controller = self.offload_controller
+                    controller = self.prefix_offload_controller
                     assert controller is not None
                     for block in cpu_only_blocks:
                         payload = block.payload
@@ -555,9 +301,8 @@ class PrefixCacheCoordinator:
 
             if submitted_operation is not None:
                 existing_operations[id(submitted_operation)] = submitted_operation
-            self._step_h2d_operations.update(existing_operations)
-            self.seq_id_to_prefix_blocks[int(seq.seq_id)] = chain
-            self.prefix_cache.touch_chain(chain)
+            self._prefix_offload_step_h2d_operations.update(existing_operations)
+            self._hold_prefix_chain(int(seq.seq_id), chain)
 
     def record_step_tokens(self, seqs: list[Sequence], is_prefill: bool) -> None:
         if self.prefix_cache is None:
@@ -571,13 +316,11 @@ class PrefixCacheCoordinator:
                     continue
                 start = int(seq.num_prefilled_tokens)
                 end = start + chunk_size
-                boundary = start + (self.block_size - (start % self.block_size))
-                if start % self.block_size == 0:
-                    boundary = start + self.block_size
+                boundary = start + (self.prefix_cache_block_size - (start % self.prefix_cache_block_size))
                 if end > boundary:
                     raise RuntimeError(
                         "Mixed prefix prefill chunks must not cross recurrent snapshot boundaries: "
-                        f"seq_id={seq.seq_id} start={start} end={end} block_size={self.block_size}. "
+                        f"seq_id={seq.seq_id} start={start} end={end} block_size={self.prefix_cache_block_size}. "
                         "Schedule the prefill suffix up to the next prefix block boundary first."
                     )
                 token_ids = seq.token_ids
@@ -588,34 +331,24 @@ class PrefixCacheCoordinator:
                 self._record_tokens(seq, [seq.decode_input_token])
 
     def finish_step(self) -> None:
-        self._step_h2d_operations.clear()
+        self._prefix_offload_step_h2d_operations.clear()
 
     def _record_tokens(self, seq: Sequence, token_ids: list[int]) -> None:
         if getattr(seq, "multimodal_digest", None) is not None:
             return
         if not token_ids:
             return
-        state = self.runtime_states.get(int(seq.seq_id))
-        if state is None:
-            hit_blocks = int(getattr(seq, "prefix_cache_hit_block_count", 0) or 0)
-            state = _MixedPrefixRuntimeState(
-                parent_block_id=getattr(seq, "prefix_cache_hit_last_block_id", None),
-                next_logical_block_idx=hit_blocks,
-            )
-            self.runtime_states[int(seq.seq_id)] = state
-
-        pending = self.pending_blocks.setdefault(int(seq.seq_id), [])
-
-        def add_block(block_tokens: list[int]) -> None:
-            block_start = int(state.next_logical_block_idx) * self.block_size
-            block_end = block_start + self.block_size
+        state, pending = self._prefix_record_state(seq)
+        for block_tokens, _ in self._iter_completed_prefix_blocks(state, token_ids):
+            block_start = int(state.next_logical_block_idx) * self.prefix_cache_block_size
+            block_end = block_start + self.prefix_cache_block_size
             stable_block_id = self.prefix_cache.stable_block_id(block_tokens, state.parent_block_id)
             existing = self.prefix_cache.get_block(stable_block_id)
             if existing is not None:
-                self._hold_materialized_ref(seq, existing)
+                self._hold_materialized_prefix_block_ref(seq, existing)
                 state.parent_block_id = stable_block_id
                 state.next_logical_block_idx += 1
-                return
+                continue
             if stable_block_id in self.pending_block_ids:
                 duplicate_refs = self.pending_duplicate_refs.setdefault(
                     int(seq.seq_id),
@@ -625,7 +358,7 @@ class PrefixCacheCoordinator:
                     duplicate_refs.append(stable_block_id)
                 state.parent_block_id = stable_block_id
                 state.next_logical_block_idx += 1
-                return
+                continue
 
             recurrent_bytes = int(
                 self.recurrent_state_manager.prefix_recurrent_snapshot_nbytes()
@@ -633,7 +366,7 @@ class PrefixCacheCoordinator:
             if not self._reserve_pending_block(stable_block_id, recurrent_bytes):
                 self.capacity_limited_seq_ids.add(int(seq.seq_id))
                 self.skipped_capacity_blocks += 1
-                return
+                continue
             recurrent_payload = None
             try:
                 kv_payload = self.cache_manager.build_prefix_kv_payload(
@@ -659,7 +392,7 @@ class PrefixCacheCoordinator:
                     self.cache_manager.prefix_kv_payload_nbytes(kv_payload)
                 ) + recurrent_bytes
                 pending.append(
-                    _PendingMixedPrefixBlock(
+                    PendingPrefixBlock(
                         stable_block_id=stable_block_id,
                         parent_block_id=state.parent_block_id,
                         logical_block_idx=state.next_logical_block_idx,
@@ -667,7 +400,7 @@ class PrefixCacheCoordinator:
                         payload=MixedPrefixBlockPayload(
                             kv_payload=kv_payload,
                             recurrent_payload=recurrent_payload,
-                            token_count=self.block_size,
+                            token_count=self.prefix_cache_block_size,
                             accounting_bytes=accounting_bytes,
                             recurrent_bytes=recurrent_bytes,
                         ),
@@ -683,33 +416,15 @@ class PrefixCacheCoordinator:
             state.parent_block_id = stable_block_id
             state.next_logical_block_idx += 1
 
-        offset = 0
-        if state.pending_tokens:
-            need = self.block_size - len(state.pending_tokens)
-            take = min(need, len(token_ids))
-            state.pending_tokens.extend(token_ids[:take])
-            offset = take
-            if len(state.pending_tokens) == self.block_size:
-                add_block(list(state.pending_tokens))
-                state.pending_tokens = []
-            else:
-                return
-
-        full_tokens = ((len(token_ids) - offset) // self.block_size) * self.block_size
-        end_full = offset + full_tokens
-        for block_start in range(offset, end_full, self.block_size):
-            add_block(token_ids[block_start : block_start + self.block_size])
-        state.pending_tokens = token_ids[end_full:] if end_full < len(token_ids) else []
 
     def commit_pending_blocks(self, seqs: list[Sequence]) -> None:
         if self.prefix_cache is None:
             return
         with profiler.record("mixed_prefix_cache_commit"):
             for seq in seqs:
-                pending_blocks = self.pending_blocks.pop(int(seq.seq_id), [])
+                pending_prefix_blocks = self.pending_prefix_blocks.pop(int(seq.seq_id), [])
                 materialized = self.seq_id_to_materialized_blocks.setdefault(int(seq.seq_id), {})
-                for pending_idx, pending in enumerate(pending_blocks):
-                    inserted = None
+                for pending_idx, pending in enumerate(pending_prefix_blocks):
                     inserted_new = False
                     recurrent_released = False
                     try:
@@ -717,21 +432,11 @@ class PrefixCacheCoordinator:
                             raise RuntimeError(
                                 "Mixed prefix block became duplicate after unique pending reservation."
                             )
-                        block = PrefixCacheBlock(
-                            stable_block_id=pending.stable_block_id,
-                            parent_block_id=pending.parent_block_id,
-                            block_size=self.block_size,
-                            logical_block_idx=pending.logical_block_idx,
-                            payload=pending.payload,
-                            token_ids=tuple(pending.token_ids),
-                            ref_count=1,
-                        )
-                        inserted = self.prefix_cache.insert_block(block)
-                        if inserted is not block:
+                        inserted, inserted_new = self._insert_pending_prefix_block(pending)
+                        if not inserted_new:
                             raise RuntimeError(
                                 "Mixed prefix insertion returned an unexpected duplicate block."
                             )
-                        inserted_new = True
                         materialized[inserted.stable_block_id] = inserted
                         try:
                             self.cache_manager.mark_materialized_prefix_kv_payload(
@@ -757,14 +462,7 @@ class PrefixCacheCoordinator:
                             self.recurrent_state_manager.free_prefix_recurrent_payload(
                                 pending.payload.recurrent_payload
                             )
-                        for unprocessed in pending_blocks[pending_idx + 1 :]:
-                            self.recurrent_state_manager.free_prefix_recurrent_payload(
-                                unprocessed.payload.recurrent_payload
-                            )
-                            self._release_pending_reservation(
-                                unprocessed.stable_block_id,
-                                int(unprocessed.payload.recurrent_bytes),
-                            )
+                        self._release_pending_blocks(pending_prefix_blocks[pending_idx + 1 :])
                         self.pending_duplicate_refs.pop(int(seq.seq_id), None)
                         if not materialized:
                             self.seq_id_to_materialized_blocks.pop(
@@ -786,26 +484,7 @@ class PrefixCacheCoordinator:
                         raise RuntimeError(
                             "Mixed prefix duplicate reservation was not committed by its owner."
                         )
-                    self._hold_materialized_ref(seq, block)
-
-    def _hold_materialized_ref(
-        self,
-        seq: Sequence,
-        block: PrefixCacheBlock,
-    ) -> None:
-        seq_id = int(seq.seq_id)
-        attached = self.seq_id_to_prefix_blocks.get(seq_id, ())
-        logical_idx = int(block.logical_block_idx)
-        if (0 <= logical_idx < len(attached)
-                and attached[logical_idx].stable_block_id == block.stable_block_id):
-            return
-        materialized = self.seq_id_to_materialized_blocks.get(seq_id)
-        if materialized is not None and block.stable_block_id in materialized:
-            return
-        self._require_prefix_cache().acquire_block_ref(block)
-        if materialized is None:
-            materialized = self.seq_id_to_materialized_blocks[seq_id] = {}
-        materialized[block.stable_block_id] = block
+                    self._hold_materialized_prefix_block_ref(seq, block)
 
     def _live_recurrent_bytes(self) -> int:
         prefix_cache = self._require_prefix_cache()
@@ -878,12 +557,12 @@ class PrefixCacheCoordinator:
                 - int(prefix_cache.max_blocks)
             )
             if over_capacity > 0:
-                if self._offload_enabled():
+                if self._prefix_offload_enabled():
                     if not self._evict_host_blocks(over_capacity):
                         return False
                 else:
                     evicted = prefix_cache.evict_until_freeable(over_capacity)
-                    self._free_blocks(evicted)
+                    self._free_prefix_cache_blocks(evicted)
                     if len(evicted) != over_capacity:
                         return False
         missing_bytes = (
@@ -893,18 +572,18 @@ class PrefixCacheCoordinator:
             - self.max_recurrent_bytes
         )
         if missing_bytes > 0:
-            if self._offload_enabled():
+            if self._prefix_offload_enabled():
                 return self._evict_host_blocks(0, needed_recurrent_bytes=missing_bytes)
             byte_evicted = prefix_cache.evict_until_weight(
                 missing_bytes, lambda block: int(block.payload.recurrent_bytes),
             )
             freed_bytes = sum(int(block.payload.recurrent_bytes) for block in byte_evicted)
-            self._free_blocks(byte_evicted)
+            self._free_prefix_cache_blocks(byte_evicted)
             return freed_bytes >= missing_bytes
         return True
 
     def _evict_host_blocks(self, needed_blocks: int, *, needed_recurrent_bytes: int = 0) -> bool:
-        controller = getattr(self, "offload_controller", None)
+        controller = getattr(self, "prefix_offload_controller", None)
         if controller is None:
             raise RuntimeError("Mixed host eviction requested without an offload controller.")
         needed_weight = int(needed_recurrent_bytes or needed_blocks)
@@ -912,29 +591,7 @@ class PrefixCacheCoordinator:
             (lambda block: int(block.payload.recurrent_bytes))
             if needed_recurrent_bytes else (lambda _block: 1)
         )
-        freed_weight = 0
-        while freed_weight < needed_weight:
-            self._poll_offload()
-            remaining = needed_weight - freed_weight
-            host_evicted = self._require_prefix_cache().evict_host_until_weight(remaining, block_weight)
-            freed_weight += sum(block_weight(block) for block in host_evicted)
-            self._free_blocks(host_evicted)
-            if freed_weight >= needed_weight:
-                break
-            remaining = needed_weight - freed_weight
-            demoted = self._require_prefix_cache().demote_device_until_weight(remaining, block_weight)
-            for block in demoted:
-                self._free_device_block(block)
-            newly_evicted = self._require_prefix_cache().evict_host_until_weight(remaining, block_weight)
-            freed_weight += sum(block_weight(block) for block in newly_evicted)
-            self._free_blocks(newly_evicted)
-            if freed_weight >= needed_weight:
-                break
-            # A successful wait retires one queued D2H operation.
-            # Queue exhaustion bounds retries without scanning the radix.
-            if not controller.wait_oldest_d2h():
-                break
-        return freed_weight >= needed_weight
+        return self._reclaim_host_prefix_weight(needed_weight, block_weight) >= needed_weight
 
     def evict_for_slots(self, needed_slots: int) -> None:
         if self.prefix_cache is None:
@@ -942,48 +599,31 @@ class PrefixCacheCoordinator:
         needed_slots = int(needed_slots)
         if needed_slots <= 0:
             return
-        needed_blocks = (needed_slots + self.block_size - 1) // self.block_size
-        if self._offload_enabled():
-            controller = self.offload_controller
-            assert controller is not None
-            freed_blocks = 0
-            while freed_blocks < needed_blocks:
-                self._poll_offload()
-                demoted = self.prefix_cache.demote_device_until_freeable(
-                    needed_blocks - freed_blocks
-                )
-                for block in demoted:
-                    self._free_device_block(block)
-                freed_blocks += len(demoted)
-                if freed_blocks >= needed_blocks:
-                    break
-                if not controller.wait_oldest_d2h():
-                    break
-            success = freed_blocks == needed_blocks
-        else:
-            evicted = self.prefix_cache.evict_until_freeable(needed_blocks)
-            self._free_blocks(evicted)
-            freed_blocks = len(evicted)
-            success = freed_blocks == needed_blocks
-        if not success:
+        needed_blocks = (needed_slots + self.prefix_cache_block_size - 1) // self.prefix_cache_block_size
+        freed_blocks = self._reclaim_device_prefix_weight(needed_blocks, lambda _block: 1)
+        if freed_blocks != needed_blocks:
             raise RuntimeError(
                 "Mixed prefix cache could not evict enough blocks for KV allocation: "
-                f"needed_slots={needed_slots} block_size={self.block_size} "
+                f"needed_slots={needed_slots} block_size={self.prefix_cache_block_size} "
                 f"needed_blocks={needed_blocks} freed_blocks={freed_blocks}."
             )
+
+    def _free_device_prefix_blocks(self, blocks: list[PrefixCacheBlock]) -> None:
+        for block in blocks:
+            self._free_device_block(block)
 
     def _free_device_block(self, block: PrefixCacheBlock) -> None:
         payload = block.payload
         if not isinstance(payload, MixedPrefixBlockPayload):
             raise RuntimeError("Mixed prefix cache block has an invalid payload.")
-        controller = self.offload_controller
+        controller = self.prefix_offload_controller
         if controller is None:
             raise RuntimeError("Mixed device demotion requires an offload controller.")
         self.cache_manager.free_prefix_kv_payload_device(payload.kv_payload)
         controller.free_device_recurrent(block)
 
-    def _free_blocks(self, blocks: list[PrefixCacheBlock]) -> None:
-        pending = getattr(self, "_write_through_candidates", None)
+    def _free_prefix_cache_blocks(self, blocks: list[PrefixCacheBlock]) -> None:
+        pending = getattr(self, "_prefix_write_through_candidates", None)
         if pending is not None:
             for block in blocks:
                 pending.pop(block.stable_block_id, None)
@@ -1004,7 +644,7 @@ class PrefixCacheCoordinator:
                 prefix_cache, prefix_cache.insert_epoch, prefix_cache.remove_epoch,
                 cached[3] - sum(int(payload.recurrent_bytes) for payload in payloads),
             )
-        if self._offload_enabled():
+        if self._prefix_offload_enabled():
             host_blocks = []
             for block, payload in zip(blocks, payloads):
                 if block.residency.device_present:
@@ -1015,7 +655,7 @@ class PrefixCacheCoordinator:
                 if isinstance(recurrent, RecurrentPrefixPayload):
                     recurrent.layer_states = {}
             if host_blocks:
-                controller = self.offload_controller
+                controller = self.prefix_offload_controller
                 assert controller is not None
                 controller.free_host_payloads(host_blocks)
             return
@@ -1023,8 +663,8 @@ class PrefixCacheCoordinator:
             self.cache_manager.free_prefix_kv_payload(payload.kv_payload)
             self.recurrent_state_manager.free_prefix_recurrent_payload(payload.recurrent_payload)
 
-    def _ensure_host_capacity(self, needed_blocks: int) -> None:
-        controller = self.offload_controller
+    def _ensure_prefix_host_capacity(self, needed_blocks: int) -> None:
+        controller = self.prefix_offload_controller
         if controller is None:
             raise RuntimeError("Mixed host capacity requested without an offload controller.")
         if controller.host_pool.free_blocks >= int(needed_blocks):
@@ -1036,49 +676,17 @@ class PrefixCacheCoordinator:
                 f"need={needed_blocks} free={controller.host_pool.free_blocks}."
             )
 
-    def _schedule_write_through(
-        self,
-        newly_unreferenced: list[PrefixCacheBlock] | None = None,
-    ) -> None:
-        if not self._offload_enabled():
-            return
-        if device_runtime.is_stream_capturing():
-            raise RuntimeError("Mixed prefix D2H scheduling is forbidden during graph capture.")
-        self._poll_offload()
-        prefix_cache = self._require_prefix_cache()
-        pending = getattr(self, "_write_through_candidates", None)
-        if pending is None:
-            pending = {}
-            self._write_through_candidates = pending
-        selected = select_write_through_candidates(
-            prefix_cache,
-            pending,
-            newly_unreferenced,
-        )
-        if not selected:
-            return
-        self._ensure_host_capacity(len(selected))
-        controller = self.offload_controller
-        assert controller is not None
-        controller.submit_d2h(selected)
-        for block in selected:
-            pending.pop(block.stable_block_id, None)
-
     def release_seq(self, seq_id: int) -> None:
-        seq_id = int(seq_id)
-        self.prefix_lookup_cache.discard(seq_id)
-        released_blocks = self.seq_id_to_prefix_blocks.pop(seq_id, [])
-        materialized = self.seq_id_to_materialized_blocks.pop(seq_id, None)
-        if materialized:
-            released_blocks.extend(materialized.values())
-        prefix_cache = self._require_prefix_cache()
-        for block in released_blocks:
-            prefix_cache.release_block_ref(
-                block,
-                negative_error="Mixed prefix cache block ref_count became negative.",
-            )
-        self.runtime_states.pop(seq_id, None)
-        for pending in self.pending_blocks.pop(seq_id, []):
+        released = self._release_prefix_request(int(seq_id))
+        self._schedule_write_through_prefix_blocks(released)
+
+    def _discard_pending_prefix_blocks(self, seq_id: int) -> None:
+        self._release_pending_blocks(self.pending_prefix_blocks.pop(seq_id, []))
+        self.pending_duplicate_refs.pop(seq_id, None)
+        self.capacity_limited_seq_ids.discard(seq_id)
+
+    def _release_pending_blocks(self, pending_blocks: list[PendingPrefixBlock]) -> None:
+        for pending in pending_blocks:
             self.recurrent_state_manager.free_prefix_recurrent_payload(
                 pending.payload.recurrent_payload
             )
@@ -1086,24 +694,14 @@ class PrefixCacheCoordinator:
                 pending.stable_block_id,
                 int(pending.payload.recurrent_bytes),
             )
-        self.pending_duplicate_refs.pop(seq_id, None)
-        self.capacity_limited_seq_ids.discard(seq_id)
-        self._schedule_write_through(released_blocks)
 
     def reset_after_warmup(self) -> None:
         if self.prefix_cache is None:
             return
         if self.seq_id_to_prefix_blocks or self.seq_id_to_materialized_blocks:
             raise RuntimeError("Cannot reset mixed prefix cache while sequences still reference blocks.")
-        for pending_blocks in self.pending_blocks.values():
-            for pending in pending_blocks:
-                self.recurrent_state_manager.free_prefix_recurrent_payload(
-                    pending.payload.recurrent_payload
-                )
-                self._release_pending_reservation(
-                    pending.stable_block_id,
-                    int(pending.payload.recurrent_bytes),
-                )
+        for pending_blocks in self.pending_prefix_blocks.values():
+            self._release_pending_blocks(pending_blocks)
         blocks = list(self.prefix_cache.blocks.values())
         referenced = [block for block in blocks if int(block.ref_count) != 0]
         if referenced:
@@ -1111,30 +709,16 @@ class PrefixCacheCoordinator:
                 "Cannot reset mixed prefix cache while blocks are referenced: "
                 f"referenced_blocks={len(referenced)}."
             )
-        controller = getattr(self, "offload_controller", None)
+        controller = getattr(self, "prefix_offload_controller", None)
         if controller is not None:
             controller.synchronize_all()
-        self._free_blocks(blocks)
+        self._free_prefix_cache_blocks(blocks)
         if controller is not None:
             controller.reset()
-        self.prefix_cache = RadixPrefixIndex(
-            block_size=self.block_size,
-            fingerprint=build_prefix_cache_fingerprint(self.config, self.block_size),
-            max_blocks=self.config.prefix_cache_max_blocks,
-        )
-        self.seq_id_to_prefix_blocks.clear()
-        self.seq_id_to_materialized_blocks.clear()
-        self.runtime_states.clear()
-        self.pending_blocks.clear()
+        self._reset_prefix_index()
         self.pending_duplicate_refs.clear()
         self.pending_block_ids.clear()
         self.pending_recurrent_bytes = 0
         self._recurrent_bytes_cache = None
-        self.prefix_lookup_cache = PrefixLookupCache()
-        self.prefix_hit_capacity_cache = WeakKeyDictionary()
         self.capacity_limited_seq_ids.clear()
         self.skipped_capacity_blocks = 0
-        getattr(self, "_step_h2d_operations", []).clear()
-        getattr(self, "_write_through_candidates", {}).clear()
-        if controller is not None:
-            controller.prefix_cache = self.prefix_cache

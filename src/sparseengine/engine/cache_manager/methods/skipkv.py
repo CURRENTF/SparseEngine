@@ -439,62 +439,6 @@ class SkipKVCacheManager(SnapKVCacheManager):
         ]
         self._update_sentence_cache_ranges(layer_idx, seq, int(row_idx))
 
-    def free_part_slots_batch(
-        self,
-        layer_idx: int,
-        seqs: list[Sequence],
-        keep_indices: torch.Tensor,
-        *,
-        keep_indices_sorted: bool = False,
-    ):
-        self.kv_layer_index(layer_idx)
-        if not seqs:
-            return
-        if len(seqs) == 1:
-            self.free_part_slots(
-                layer_idx,
-                seqs[0],
-                keep_indices[0],
-                keep_indices_sorted=keep_indices_sorted,
-            )
-            return
-
-        row_indices = []
-        old_gen_indices = []
-        for seq in seqs:
-            row_idx = self.seq_id_to_row[layer_idx].get(seq.seq_id)
-            row_indices.append(row_idx)
-            if row_idx is None:
-                old_gen_indices.append(None)
-            else:
-                old_gen_indices.append(self._skipkv_row_gen_indices[layer_idx].get(int(row_idx), []))
-
-        keep_sorted = keep_indices.to(device=self.device, dtype=torch.long)
-        if not keep_indices_sorted:
-            keep_sorted = torch.sort(keep_sorted, dim=1).values
-        keep_cpu = keep_sorted.detach().to(device="cpu").tolist()
-        result = super().free_part_slots_batch(
-            layer_idx,
-            seqs,
-            keep_sorted,
-            keep_indices_sorted=True,
-        )
-        for seq, row_idx, seq_old_gen_indices, seq_keep_cpu in zip(
-            seqs,
-            row_indices,
-            old_gen_indices,
-            keep_cpu,
-        ):
-            if row_idx is None or seq_old_gen_indices is None:
-                continue
-            self._skipkv_row_gen_indices[layer_idx][int(row_idx)] = [
-                seq_old_gen_indices[int(i)]
-                for i in seq_keep_cpu
-                if 0 <= int(i) < len(seq_old_gen_indices)
-            ]
-            self._update_sentence_cache_ranges(layer_idx, seq, int(row_idx))
-        return result
-
     def free_part_slots_batch_layers(
         self,
         layer_indices: list[int],
@@ -507,11 +451,11 @@ class SkipKVCacheManager(SnapKVCacheManager):
             return
         for layer_idx in layer_indices:
             self.kv_layer_index(int(layer_idx))
-        if len(layer_indices) == 1:
-            self.free_part_slots_batch(
+        if len(layer_indices) == 1 and len(seqs) == 1:
+            self.free_part_slots(
                 int(layer_indices[0]),
-                seqs,
-                keep_indices[0],
+                seqs[0],
+                keep_indices[0, 0],
                 keep_indices_sorted=keep_indices_sorted,
             )
             return

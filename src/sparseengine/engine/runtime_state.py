@@ -211,15 +211,10 @@ class RuntimeState:
             return 0
         return int(self.prefix_cache_coordinator.step_reclaimable_slots())
 
-    def _mixed_prefix_admission_reclaimable_slots(self) -> int:
-        if self.prefix_cache_coordinator is None:
-            return 0
-        return int(self.prefix_cache_coordinator.admission_reclaimable_slots())
-
     def _mixed_prefix_boundary_limit(self, seq: Sequence) -> int:
         if self.prefix_cache_coordinator is None:
             return int(seq.num_prompt_tokens - seq.num_prefilled_tokens)
-        block_size = int(self.prefix_cache_coordinator.block_size)
+        block_size = int(self.prefix_cache_coordinator.prefix_cache_block_size)
         if block_size <= 0:
             return int(seq.num_prompt_tokens - seq.num_prefilled_tokens)
         start = max(
@@ -727,11 +722,11 @@ class RuntimeState:
             free_slots = self.cache_manager.prefill_capacity_after_decode_reservations(
                 free_slots, reserved, admission=True,
             )
-        return max(0, free_slots + self._mixed_prefix_admission_reclaimable_slots())
+        return max(0, free_slots + self._mixed_prefix_step_reclaimable_slots())
 
     def prompt_admission_budgets(self, waiting_seqs, engine_prefill_chunk_size: int) -> dict[str, int]:
         budgets = dict(self.cache_manager.prompt_admission_budgets(waiting_seqs, engine_prefill_chunk_size))
-        extra = self._mixed_prefix_admission_reclaimable_slots()
+        extra = self._mixed_prefix_step_reclaimable_slots()
         if extra > 0:
             if "slots" in budgets:
                 budgets["slots"] = int(budgets["slots"]) + extra
@@ -837,22 +832,22 @@ class RuntimeState:
 
     def prefix_cache_inspect(self, token_ids: list[int], *, include_subtree: bool = False) -> dict[str, object]:
         if self.prefix_cache_coordinator is not None:
-            return self.prefix_cache_coordinator.inspect(token_ids, include_subtree=include_subtree)
+            return self.prefix_cache_coordinator.prefix_cache_inspect(token_ids, include_subtree=include_subtree)
         return self.cache_manager.prefix_cache_inspect(token_ids, include_subtree=include_subtree)
 
     def prefix_cache_match(self, token_ids: list[int]) -> dict[str, object]:
         if self.prefix_cache_coordinator is not None:
-            return self.prefix_cache_coordinator.match(token_ids)
+            return self.prefix_cache_coordinator.prefix_cache_match(token_ids)
         return self.cache_manager.prefix_cache_match(token_ids)
 
     def prefix_cache_delete_subtree(self, token_ids: list[int]) -> dict[str, object]:
         if self.prefix_cache_coordinator is not None:
-            return self.prefix_cache_coordinator.delete_subtree(token_ids)
+            return self.prefix_cache_coordinator.prefix_cache_delete_subtree(token_ids)
         return self.cache_manager.prefix_cache_delete_subtree(token_ids)
 
     def prefix_cache_set_eviction_priority(self, token_ids: list[int], *, priority: int) -> dict[str, object]:
         if self.prefix_cache_coordinator is not None:
-            return self.prefix_cache_coordinator.set_eviction_priority(token_ids, priority=priority)
+            return self.prefix_cache_coordinator.prefix_cache_set_eviction_priority(token_ids, priority=priority)
         return self.cache_manager.prefix_cache_set_eviction_priority(token_ids, priority=priority)
 
     def free_slot_stats(self) -> dict[str, int]:

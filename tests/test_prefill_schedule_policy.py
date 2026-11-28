@@ -2655,7 +2655,7 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         manager._pyramidkv_long_prefill_offload_seq_id = 10
         manager._pyramidkv_long_prefill_offload_start = 2
         manager.has_prefill_staging_view = lambda layer_idx: True
-        manager._pyramidkv_consume_long_prefill_offload_staged_prefetch = lambda **kwargs: True
+        manager._raw_kv_prefetcher = SimpleNamespace(consume=lambda *args: True)
         manager.raw_kv_offload_buffer = SimpleNamespace(
             copy_prefix_to=lambda **kwargs: (_ for _ in ()).throw(AssertionError("unexpected synchronous restore"))
         )
@@ -2667,8 +2667,6 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
         manager.runtime_layout = identity_runtime_layout(2)
         manager.device = "cuda:0"
         manager.num_layers = 2
-        manager._pyramidkv_long_prefill_offload_prefetch_stream = None
-        manager._pyramidkv_long_prefill_offload_prefetch_states = {}
         manager._pyramidkv_long_prefill_offload_seq_id = 10
         manager.seq_id_to_row = [{10: 0}, {10: 5}]
         manager._pyramidkv_long_prefill_offload_prefetch_enabled = lambda: True
@@ -2764,9 +2762,10 @@ class SchedulerPrefillPolicyTest(unittest.TestCase):
             ],
         )
         key = (1, 5, "pyramidkv_post_rope", 2)
-        state = manager._pyramidkv_long_prefill_offload_prefetch_states[key]
-        self.assertIs(state["staging_available_event"], created_events[0])
-        self.assertIs(state["event"], created_events[1])
+        pending_key, staging_event, completion_event = manager._raw_kv_prefetcher.pending
+        self.assertEqual(pending_key, key)
+        self.assertIs(staging_event, created_events[0])
+        self.assertIs(completion_event, created_events[1])
 
     def test_deltakv_short_prefill_fails_fast_when_no_work_can_free_slots(self):
         scheduler = make_scheduler(
@@ -3758,6 +3757,7 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
 
     def test_layer_attention_end_triggers_layer_local_staging_compression(self):
         manager = object.__new__(DeltaKVCacheManager)
+        manager.device = torch.device("cpu")
         manager._deltakv_prefill_staging_active = True
         manager.deltakv_layer_to_idx = {0: 0}
         manager.deltakv_layer_ids = [0]
@@ -3778,6 +3778,7 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
 
     def test_finish_full_prefill_staging_clears_completed_plans(self):
         manager = object.__new__(DeltaKVCacheManager)
+        manager.device = torch.device("cpu")
         released_rows = []
         manager.raw_kv_offload_buffer = SimpleNamespace(
             release_row=lambda row_idx: released_rows.append(int(row_idx))
@@ -3818,7 +3819,7 @@ class DeltaKVFullPrefillStagingTest(unittest.TestCase):
         manager.deltakv_slot_to_pos = torch.empty((0,), dtype=torch.int32)
         manager._full_layer_kivi_full_prefill_plans = {4: {"row_idx": 4}}
         manager._full_layer_kivi_full_prefill_materialized_layers = {0}
-        manager._deltakv_clear_long_prefill_offload_prefetch = lambda: None
+        manager._raw_kv_prefetcher = SimpleNamespace(clear=lambda: None)
 
         DeltaKVCacheManager._deltakv_finish_full_prefill_staging(manager)
 
@@ -3877,7 +3878,7 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
         manager._deltakv_long_prefill_offload_row_idx = 0
         manager.has_prefill_staging_view = lambda layer_idx: True
         manager._deltakv_long_prefill_offload_kind = lambda layer_idx: "sparse_pre_rope"
-        manager._deltakv_consume_long_prefill_offload_staged_prefetch = lambda **kwargs: True
+        manager._raw_kv_prefetcher = SimpleNamespace(consume=lambda *args: True)
         manager.deltakv_layer_to_idx = {1: 0}
         manager.deltakv_prefill_staging_pre_rope_k_cache = torch.arange(16, dtype=torch.float32).view(4, 1, 4)
         manager.deltakv_prefill_staging_kv_cache = torch.zeros((2, 4, 1, 4), dtype=torch.float32)
@@ -3903,8 +3904,6 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
     def test_long_prefill_offload_prefetch_waits_for_current_stream_before_staging_write(self):
         manager = object.__new__(DeltaKVCacheManager)
         manager.device = "cuda:0"
-        manager._deltakv_long_prefill_offload_prefetch_stream = None
-        manager._deltakv_long_prefill_offload_prefetch_states = {}
         manager._deltakv_long_prefill_offload_layer_order = lambda: [0, 1]
         manager._deltakv_long_prefill_offload_kind = lambda layer_idx: "sparse_pre_rope"
         manager._deltakv_long_prefill_offload_prefetch_enabled = lambda: True
@@ -4005,9 +4004,10 @@ class DeltaKVLessMemoryStorageContractTest(unittest.TestCase):
             ],
         )
         key = (1, 3, "sparse_pre_rope", 2)
-        state = manager._deltakv_long_prefill_offload_prefetch_states[key]
-        self.assertIs(state["staging_available_event"], created_events[0])
-        self.assertIs(state["event"], created_events[1])
+        pending_key, staging_event, completion_event = manager._raw_kv_prefetcher.pending
+        self.assertEqual(pending_key, key)
+        self.assertIs(staging_event, created_events[0])
+        self.assertIs(completion_event, created_events[1])
 
     def test_compressor_residual_quant_group_size_uses_payload_dim(self):
 

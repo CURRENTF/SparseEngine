@@ -1669,7 +1669,7 @@ class _BoundaryCacheManager:
 
 
 class _BoundaryCoordinator:
-    block_size = 4096
+    prefix_cache_block_size = 4096
 
     def step_reclaimable_slots(self):
         return 0
@@ -1710,8 +1710,8 @@ def test_mixed_admission_counts_inflight_d2h_before_pressure_prompt():
     prefix_cache.begin_d2h(block)
     coordinator = object.__new__(PrefixCacheCoordinator)
     coordinator.prefix_cache = prefix_cache
-    coordinator.block_size = 4
-    coordinator.offload_controller = object()
+    coordinator.prefix_cache_block_size = 4
+    coordinator.prefix_offload_controller = object()
     cache_manager = _ResidentAdmissionCache()
     cache_manager.num_free_slots = 4
     runtime_state = RuntimeState(
@@ -1722,7 +1722,6 @@ def test_mixed_admission_counts_inflight_d2h_before_pressure_prompt():
 
     assert coordinator.evictable_slots() == 0
     assert coordinator.step_reclaimable_slots() == 4
-    assert coordinator.admission_reclaimable_slots() == 4
     assert runtime_state.prefill_step_free_slots() == 8
     assert runtime_state.decode_step_free_slots() == 8
     assert runtime_state.prompt_admission_free_slots() == 8
@@ -1773,8 +1772,8 @@ def mixed_decode_capacity():
     index.insert_block(block)
     coordinator = object.__new__(PrefixCacheCoordinator)
     coordinator.prefix_cache = index
-    coordinator.block_size = 4
-    coordinator.offload_controller = None
+    coordinator.prefix_cache_block_size = 4
+    coordinator.prefix_offload_controller = None
     coordinator.cache_manager = cache
     coordinator.recurrent_state_manager = SimpleNamespace(
         free_prefix_recurrent_payload=lambda payload: released.append("recurrent"),
@@ -1830,7 +1829,7 @@ def test_mixed_sole_decode_shortens_window_to_reclaimable_capacity(mixed_decode_
     _, runtime, scheduler, block, _ = mixed_decode_capacity
     if inflight_d2h:
         coordinator = runtime.prefix_cache_coordinator
-        coordinator.offload_controller = object()
+        coordinator.prefix_offload_controller = object()
         coordinator.prefix_cache.begin_d2h(block)
         assert coordinator.evictable_slots() == 0
     scheduler.decoding.pop()
@@ -1957,8 +1956,8 @@ def test_mixed_cpu_only_hit_reclaims_other_device_block_before_promotion():
 
     recurrent_attachments = []
     coordinator = object.__new__(PrefixCacheCoordinator)
-    coordinator.enabled = True
-    coordinator.block_size = 4
+    coordinator.enable_prefix_caching = True
+    coordinator.prefix_cache_block_size = 4
     coordinator.prefix_cache = prefix_cache
     coordinator.cache_manager = FakeCacheManager()
     coordinator.recurrent_state_manager = SimpleNamespace(
@@ -1966,9 +1965,9 @@ def test_mixed_cpu_only_hit_reclaims_other_device_block_before_promotion():
             recurrent_attachments.append((seq.seq_id, payload, readiness_events))
         )
     )
-    coordinator.offload_controller = FakeController()
+    coordinator.prefix_offload_controller = FakeController()
     coordinator.seq_id_to_prefix_blocks = {}
-    coordinator._step_h2d_operations = {}
+    coordinator._prefix_offload_step_h2d_operations = {}
     seq = SimpleNamespace(
         seq_id=7,
         prefix_cache_hit_len=4,
@@ -2055,15 +2054,15 @@ def test_mixed_recurrent_attach_failure_rolls_back_kv_row_and_prefix_ref(
         raise RuntimeError("injected recurrent attach failure")
 
     coordinator = object.__new__(PrefixCacheCoordinator)
-    coordinator.block_size = 4
+    coordinator.prefix_cache_block_size = 4
     coordinator.prefix_cache = prefix_cache
     coordinator.cache_manager = manager
     coordinator.recurrent_state_manager = SimpleNamespace(
         attach_prefix_recurrent_payload=fail_recurrent_attach,
     )
-    coordinator.offload_controller = None
+    coordinator.prefix_offload_controller = None
     coordinator.seq_id_to_prefix_blocks = {}
-    coordinator._step_h2d_operations = {}
+    coordinator._prefix_offload_step_h2d_operations = {}
     seq = SimpleNamespace(
         seq_id=7,
         prefix_cache_hit_len=4,
@@ -2076,7 +2075,7 @@ def test_mixed_recurrent_attach_failure_rolls_back_kv_row_and_prefix_ref(
 
     assert block.ref_count == 0
     assert coordinator.seq_id_to_prefix_blocks == {}
-    assert not coordinator._step_h2d_operations
+    assert not coordinator._prefix_offload_step_h2d_operations
     assert manager.seq_id_to_row == ({7: 0} if row_preexisted else {})
     assert list(manager.free_rows) == ([1] if row_preexisted else [0, 1])
     assert manager.row_seq_lens == [0, 0]
@@ -2105,7 +2104,7 @@ def test_mixed_runtime_uses_prefix_hit_as_virtual_prefill_boundary():
 def test_mixed_runtime_drops_step_h2d_references_after_forward():
     coordinator = object.__new__(PrefixCacheCoordinator)
     operation = SimpleNamespace(auxiliary_tensors=(torch.ones(2),))
-    coordinator._step_h2d_operations = {id(operation): operation}
+    coordinator._prefix_offload_step_h2d_operations = {id(operation): operation}
     coordinator.record_step_tokens = lambda seqs, is_prefill: None
     coordinator.commit_pending_blocks = lambda seqs: None
     cache_manager = SimpleNamespace(on_forward_end=lambda seqs, is_prefill: None)
@@ -2117,13 +2116,13 @@ def test_mixed_runtime_drops_step_h2d_references_after_forward():
 
     runtime_state.on_forward_end([], is_prefill=True)
 
-    assert not coordinator._step_h2d_operations
+    assert not coordinator._prefix_offload_step_h2d_operations
 
 
 def test_mixed_prefix_rejects_prefill_chunk_crossing_recurrent_snapshot_boundary():
     coordinator = object.__new__(PrefixCacheCoordinator)
     coordinator.prefix_cache = object()
-    coordinator.block_size = 4096
+    coordinator.prefix_cache_block_size = 4096
     coordinator.capacity_limited_seq_ids = set()
     seq = SimpleNamespace(
         seq_id=11,
@@ -2186,7 +2185,7 @@ def test_mixed_prefix_warmup_reset_clears_dummy_blocks_and_accounting():
             token_ids=(1, 2, 3, 4),
         )
     )
-    coordinator.runtime_states[99] = object()
+    coordinator.prefix_runtime_states[99] = object()
     coordinator.capacity_limited_seq_ids.add(99)
     coordinator.skipped_capacity_blocks = 1
 
@@ -2212,7 +2211,7 @@ def test_mixed_prefix_warmup_reset_clears_dummy_blocks_and_accounting():
     coordinator.reset_after_warmup()
 
     assert len(coordinator.prefix_cache) == 0
-    assert coordinator.runtime_states == {}
+    assert coordinator.prefix_runtime_states == {}
     assert coordinator.pending_recurrent_bytes == 0
     assert coordinator.capacity_limited_seq_ids == set()
     assert coordinator.skipped_capacity_blocks == 0
@@ -2238,15 +2237,15 @@ def test_mixed_offload_reset_drains_and_rebinds_controller():
     )
     coordinator = object.__new__(PrefixCacheCoordinator)
     coordinator.config = config
-    coordinator.block_size = 4
+    coordinator.prefix_cache_block_size = 4
     coordinator.prefix_cache = old_prefix_cache
-    coordinator.offload_controller = controller
+    coordinator.prefix_offload_controller = controller
     coordinator.cache_manager = SimpleNamespace()
     coordinator.recurrent_state_manager = SimpleNamespace()
     coordinator.seq_id_to_prefix_blocks = {}
     coordinator.seq_id_to_materialized_blocks = {}
-    coordinator.runtime_states = {}
-    coordinator.pending_blocks = {}
+    coordinator.prefix_runtime_states = {}
+    coordinator.pending_prefix_blocks = {}
     coordinator.pending_duplicate_refs = {}
     coordinator.pending_block_ids = set()
     coordinator.pending_recurrent_bytes = 0
@@ -2289,7 +2288,7 @@ def test_generic_loader_only_applies_model_declared_weight_rules():
 def test_mixed_prefix_recurrent_byte_budget_evicts_freeable_block():
     freed = []
     coordinator = object.__new__(PrefixCacheCoordinator)
-    coordinator.block_size = 4
+    coordinator.prefix_cache_block_size = 4
     coordinator.max_recurrent_bytes = 8
     coordinator.cache_manager = SimpleNamespace(free_prefix_kv_payload=lambda payload: freed.append(("kv", payload)))
     coordinator.recurrent_state_manager = SimpleNamespace(
@@ -2377,10 +2376,10 @@ def test_mixed_offload_release_demotes_both_payloads_then_host_evicts():
     prefix_cache.insert_block(block)
     controller = FakeController()
     coordinator = object.__new__(PrefixCacheCoordinator)
-    coordinator.block_size = 4
+    coordinator.prefix_cache_block_size = 4
     coordinator.max_recurrent_bytes = 8
     coordinator.prefix_cache = prefix_cache
-    coordinator.offload_controller = controller
+    coordinator.prefix_offload_controller = controller
     coordinator.cache_manager = SimpleNamespace(
         free_prefix_kv_payload_device=lambda payload: (
             freed_device_kv.append(payload.token_slots.clone()),
@@ -2393,8 +2392,8 @@ def test_mixed_offload_release_demotes_both_payloads_then_host_evicts():
     coordinator.seq_id_to_prefix_blocks = {}
     coordinator.seq_id_to_materialized_blocks = {7: {block.stable_block_id: block}}
     coordinator.prefix_lookup_cache = PrefixLookupCache()
-    coordinator.runtime_states = {}
-    coordinator.pending_blocks = {}
+    coordinator.prefix_runtime_states = {}
+    coordinator.pending_prefix_blocks = {}
     coordinator.pending_duplicate_refs = {}
     coordinator.pending_block_ids = set()
     coordinator.pending_recurrent_bytes = 0
@@ -2423,7 +2422,7 @@ def test_mixed_offload_release_demotes_both_payloads_then_host_evicts():
 
 def test_mixed_prefix_capacity_skips_insert_when_live_chain_is_referenced():
     coordinator = object.__new__(PrefixCacheCoordinator)
-    coordinator.block_size = 4
+    coordinator.prefix_cache_block_size = 4
     coordinator.max_recurrent_bytes = 8
     coordinator.cache_manager = SimpleNamespace(free_prefix_kv_payload=lambda payload: None)
     coordinator.recurrent_state_manager = SimpleNamespace(free_prefix_recurrent_payload=lambda payload: None)
@@ -2453,7 +2452,7 @@ def test_mixed_prefix_capacity_skips_insert_when_live_chain_is_referenced():
 def test_mixed_prefix_referenced_leaf_protects_its_ancestor_chain():
     freed = []
     coordinator = object.__new__(PrefixCacheCoordinator)
-    coordinator.block_size = 4
+    coordinator.prefix_cache_block_size = 4
     coordinator.max_recurrent_bytes = 8
     coordinator.cache_manager = SimpleNamespace(
         free_prefix_kv_payload=lambda payload: freed.append(("kv", payload))
@@ -2504,7 +2503,7 @@ def test_mixed_prefix_free_validates_all_payloads_before_releasing_any_resource(
     invalid = SimpleNamespace(payload=object())
 
     with pytest.raises(RuntimeError, match="invalid payload"):
-        coordinator._free_blocks([valid, invalid])
+        coordinator._free_prefix_cache_blocks([valid, invalid])
 
     assert freed == []
 
@@ -2525,14 +2524,14 @@ def _make_pending_capacity_coordinator(*, max_recurrent_bytes: int):
         free_prefix_recurrent_payload=lambda payload: None,
     )
     coordinator = object.__new__(PrefixCacheCoordinator)
-    coordinator.block_size = 4
+    coordinator.prefix_cache_block_size = 4
     coordinator.max_recurrent_bytes = max_recurrent_bytes
     coordinator.cache_manager = cache_manager
     coordinator.recurrent_state_manager = recurrent_manager
     coordinator.prefix_cache = RadixPrefixIndex(block_size=4, fingerprint=b"test")
     coordinator.prefix_lookup_cache = PrefixLookupCache()
-    coordinator.runtime_states = {}
-    coordinator.pending_blocks = {}
+    coordinator.prefix_runtime_states = {}
+    coordinator.pending_prefix_blocks = {}
     coordinator.pending_duplicate_refs = {}
     coordinator.pending_block_ids = set()
     coordinator.pending_recurrent_bytes = 0
@@ -2562,7 +2561,7 @@ def test_mixed_prefix_enforces_capacity_before_recurrent_snapshot_clone():
     coordinator._record_tokens(seq, [1, 2, 3, 4])
 
     assert clone_calls == []
-    assert coordinator.pending_blocks[7] == []
+    assert coordinator.pending_prefix_blocks[7] == []
     assert coordinator.pending_recurrent_bytes == 0
     assert coordinator.capacity_limited_seq_ids == {7}
     assert coordinator.skipped_capacity_blocks == 1
@@ -2583,7 +2582,7 @@ def test_mixed_prefix_pending_snapshots_count_and_duplicate_does_not_clone():
     assert clone_calls == [(1, 4), (2, 4)]
     assert coordinator.pending_recurrent_bytes == 12
     assert len(coordinator.pending_block_ids) == 2
-    assert coordinator.pending_blocks[4] == []
+    assert coordinator.pending_prefix_blocks[4] == []
     assert coordinator.capacity_limited_seq_ids == {3}
 
 
@@ -2618,7 +2617,7 @@ def test_mixed_prefix_snapshot_error_rolls_back_pending_accounting():
 
     assert coordinator.pending_recurrent_bytes == 0
     assert coordinator.pending_block_ids == set()
-    assert coordinator.pending_blocks[1] == []
+    assert coordinator.pending_prefix_blocks[1] == []
 
 
 def test_mixed_prefix_mark_failure_rolls_back_radix_ref_and_allocator_ownership():

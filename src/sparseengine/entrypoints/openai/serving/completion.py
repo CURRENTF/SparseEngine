@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
-from fastapi.responses import JSONResponse
-from fastapi.responses import StreamingResponse
 
 from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 from sparseengine.entrypoints.openai.dispatcher import RequestHandle
@@ -14,15 +12,23 @@ from sparseengine.entrypoints.openai.protocol.completion import CompletionReques
 from sparseengine.entrypoints.openai.sampling import _normalize_prompts
 from sparseengine.entrypoints.openai.sampling import _normalize_stop
 from sparseengine.entrypoints.openai.sampling import _sampling_params_from_request
-from sparseengine.entrypoints.openai.serving.base import _completion_logprobs
-from sparseengine.entrypoints.openai.serving.base import _model_dump_json
-from sparseengine.entrypoints.openai.serving.base import _sse
-from sparseengine.entrypoints.openai.serving.base import _tokens_per_second
-from sparseengine.entrypoints.openai.serving.base import DisconnectChecker
-from sparseengine.entrypoints.openai.serving.base import _wait_for_any_or_disconnect
-from sparseengine.entrypoints.openai.serving.base import _wait_final
-from sparseengine.entrypoints.openai.serving.base import _write_request_log
-from sparseengine.entrypoints.openai.serving.base import _chain_http_exception
+from sparseengine.entrypoints.openai.serving.base import (
+    DisconnectChecker,
+    _cancel_requests,
+    _chain_headers,
+    _chain_http_exception,
+    _completion_logprobs,
+    _json_response,
+    _log_request_cancel,
+    _log_request_finish,
+    _log_request_payload,
+    _request_submitter,
+    _sse,
+    _stream_response,
+    _submit_request,
+    _wait_final,
+    _wait_for_any_or_disconnect,
+)
 from sparseengine.engine.chain_cache import ChainCacheError
 from sparseengine.utils.log import logger
 
@@ -61,6 +67,7 @@ async def serve_completion(
     request_id = f"cmpl-{uuid.uuid4().hex}"
     created = int(time.time())
     started = time.perf_counter()
+    endpoint = "/v1/completions"
     prompts = _normalize_prompts(request.prompt)
     logger.info(
         "request_start id={} model={} stream={} prompts={} max_tokens={} temperature={} top_p={} top_k={}",
@@ -76,56 +83,25 @@ async def serve_completion(
     sampling_params = _sampling_params_from_request(request)
     stop = _normalize_stop(request.stop)
     if request.stream:
-        _write_request_log(
-            request_log_path,
-            {
-                "status": "stream_started",
-                "endpoint": "/v1/completions",
-                "request_id": request_id,
-                "request": _model_dump_json(request),
-            },
+        _log_request_payload(
+            request_log_path, request, endpoint, request_id, "stream_started"
         )
 
     handles: list[RequestHandle] = []
     try:
-        submit = (
-            getattr(dispatcher, "submit_admitted", dispatcher.submit)
-            if bool(getattr(dispatcher, "admission_ack_enabled", False))
-            else dispatcher.submit
-        )
+        submit = _request_submitter(dispatcher)
         for index, prompt in enumerate(prompts):
-            handle = (
-                await submit(prompt, sampling_params, index, stop, stream=request.stream)
-                if request.chain_id is None
-                else await submit(
-                    prompt,
-                    sampling_params,
-                    index,
-                    stop,
-                    chain_id=request.chain_id,
-                    stream=request.stream,
-                )
-            )
-            handles.append(handle)
+            handles.append(await _submit_request(submit, request, prompt, sampling_params, index, stop))
     except ChainCacheError as exc:
         await _discard_partial_admissions(dispatcher, handles)
         raise _chain_http_exception(exc) from exc
     except BaseException:
         await _discard_partial_admissions(dispatcher, handles)
         raise
-    chain_id = (
-        getattr(handles[0], "chain_id", None)
-        if len(handles) == 1
-        else None
-    )
-    headers = (
-        {"X-SparseVLLM-Chain-ID": chain_id}
-        if chain_id is not None
-        else None
-    )
+    headers = _chain_headers(handles)
 
     if request.stream:
-        return StreamingResponse(
+        return _stream_response(
             _completion_stream(
                 dispatcher,
                 request_id,
@@ -136,58 +112,20 @@ async def serve_completion(
                 tokenizer,
                 is_disconnected=is_disconnected,
             ),
-            media_type="text/event-stream",
-            headers=headers,
+            headers,
         )
 
-    try:
-        response = await _completion_response(
+    return await _json_response(
+        _completion_response(
             request_id,
             created,
             request.model,
             handles,
             tokenizer,
             is_disconnected=is_disconnected,
-        )
-    except asyncio.CancelledError:
-        for handle in handles:
-            dispatcher.cancel(handle)
-        logger.info(
-            "request_cancel id={} model={} stream=false elapsed_s={:.3f}",
-            request_id,
-            request.model,
-            time.perf_counter() - started,
-        )
-        raise
-    except Exception:
-        for handle in handles:
-            dispatcher.cancel(handle)
-        raise
-    usage = response["usage"]
-    elapsed_s = time.perf_counter() - started
-    logger.info(
-        "request_finish id={} model={} stream=false prompt_tokens={} completion_tokens={} total_tokens={} elapsed_s={:.3f} completion_tps={:.2f} total_tps={:.2f}",
-        request_id,
-        request.model,
-        usage["prompt_tokens"],
-        usage["completion_tokens"],
-        usage["total_tokens"],
-        elapsed_s,
-        _tokens_per_second(usage["completion_tokens"], elapsed_s),
-        _tokens_per_second(usage["total_tokens"], elapsed_s),
+        ),
+        dispatcher, handles, request, request_log_path, endpoint, request_id, started, headers,
     )
-    _write_request_log(
-        request_log_path,
-        {
-            "status": "success",
-            "endpoint": "/v1/completions",
-            "request_id": request_id,
-            "elapsed_s": elapsed_s,
-            "request": _model_dump_json(request),
-            "response": response,
-        },
-    )
-    return JSONResponse(response, headers=headers)
 
 
 def _validate_request(request: CompletionRequest, served_model_name: str):
@@ -373,27 +311,14 @@ async def _completion_stream(
                     pending.pop(tasks[task], None)
         yield "data: [DONE]\n\n"
         if started is not None:
-            elapsed_s = time.perf_counter() - started
-            total_tokens = prompt_tokens + completion_tokens
-            logger.info(
-                "request_finish id={} model={} stream=true prompt_tokens={} completion_tokens={} total_tokens={} elapsed_s={:.3f} completion_tps={:.2f} total_tps={:.2f}",
-                request_id,
-                model,
-                prompt_tokens,
-                completion_tokens,
-                total_tokens,
-                elapsed_s,
-                _tokens_per_second(completion_tokens, elapsed_s),
-                _tokens_per_second(total_tokens, elapsed_s),
+            _log_request_finish(
+                request_id, model, time.perf_counter() - started,
+                prompt_tokens, completion_tokens, prompt_tokens + completion_tokens, stream=True,
             )
     except asyncio.CancelledError:
-        for handle in pending.values():
-            dispatcher.cancel(handle)
-        logger.info(
-            "request_cancel id={} model={} stream=true completion_tokens={} elapsed_s={:.3f}",
-            request_id,
-            model,
-            completion_tokens,
-            time.perf_counter() - started if started is not None else 0.0,
+        _cancel_requests(dispatcher, pending.values())
+        _log_request_cancel(
+            request_id, model, time.perf_counter() - started if started is not None else 0.0,
+            completion_tokens=completion_tokens,
         )
         raise

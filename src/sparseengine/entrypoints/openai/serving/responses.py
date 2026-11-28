@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
-from fastapi.responses import JSONResponse
-from fastapi.responses import StreamingResponse
 
 from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 from sparseengine.entrypoints.openai.dispatcher import RequestHandle
@@ -17,18 +15,25 @@ from sparseengine.entrypoints.openai.render import normalize_tools
 from sparseengine.entrypoints.openai.render import resolve_response_chat_template_kwargs
 from sparseengine.entrypoints.openai.responses import events as response_events
 from sparseengine.entrypoints.openai.sampling import _sampling_params_from_response_request
-from sparseengine.entrypoints.openai.serving.base import _model_dump_json
-from sparseengine.entrypoints.openai.serving.base import _tokens_per_second
-from sparseengine.entrypoints.openai.serving.base import DisconnectChecker
-from sparseengine.entrypoints.openai.serving.base import _queue_get_or_disconnect
-from sparseengine.entrypoints.openai.serving.base import _wait_final
-from sparseengine.entrypoints.openai.serving.base import _write_request_log
-from sparseengine.entrypoints.openai.serving.base import _chain_http_exception
+from sparseengine.entrypoints.openai.serving.base import (
+    DisconnectChecker,
+    _chain_headers,
+    _chain_http_exception,
+    _json_response,
+    _log_request_cancel,
+    _log_request_payload,
+    _log_success,
+    _prepare_parser_prompt,
+    _queue_get_or_disconnect,
+    _request_submitter,
+    _stream_response,
+    _submit_request,
+    _wait_final,
+)
 from sparseengine.engine.chain_cache import ChainCacheError
 from sparseengine.entrypoints.openai.serving.response_parsing import ParsedModelResponse
 from sparseengine.entrypoints.openai.serving.response_parsing import ResponseParseError
 from sparseengine.entrypoints.openai.serving.response_parsing import TransformersResponseParser
-from sparseengine.entrypoints.openai.serving.response_parsing import response_parser_prefix
 from sparseengine.utils.log import logger
 
 
@@ -55,6 +60,7 @@ async def serve_response(
     request_id = f"resp_{uuid.uuid4().hex}"
     created_at = int(time.time())
     started = time.perf_counter()
+    endpoint = "/v1/responses"
     logger.info(
         "request_start id={} model={} endpoint=responses stream={} max_output_tokens={} temperature={} top_p={} top_k={}",
         request_id,
@@ -72,56 +78,26 @@ async def serve_response(
 
     try:
         sampling_params = _sampling_params_from_response_request(request)
-        submit = (
-            getattr(dispatcher, "submit_admitted", dispatcher.submit)
-            if bool(getattr(dispatcher, "admission_ack_enabled", False))
-            else dispatcher.submit
-        )
-        handle = (
-            await submit(prompt, sampling_params, 0, [], stream=request.stream)
-            if request.chain_id is None
-            else await submit(
-                prompt,
-                sampling_params,
-                0,
-                [],
-                chain_id=request.chain_id,
-                stream=request.stream,
-            )
+        handle = await _submit_request(
+            _request_submitter(dispatcher), request, prompt, sampling_params, 0, [],
         )
     except ChainCacheError as exc:
         raise _chain_http_exception(exc) from exc
     except (ValueError, TypeError, NotImplementedError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    should_parse = reasoning_parser_name is not None or bool(request.tools)
-    try:
-        parser_prompt = (
-            response_parser_prefix(tokenizer, prompt, handle)
-            if should_parse
-            else ""
-        )
-    except ResponseParseError as exc:
-        dispatcher.cancel(handle)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Responses parser setup failed: {exc}",
-        ) from exc
-    headers = (
-        {"X-SparseVLLM-Chain-ID": getattr(handle, "chain_id", None)}
-        if getattr(handle, "chain_id", None) is not None
-        else None
+    parser_prompt = _prepare_parser_prompt(
+        dispatcher, tokenizer, prompt, handle,
+        enabled=reasoning_parser_name is not None or bool(request.tools),
+        endpoint="Responses",
     )
+    handles = [handle]
+    headers = _chain_headers(handles)
+
     if request.stream:
-        _write_request_log(
-            request_log_path,
-            {
-                "status": "stream_started",
-                "endpoint": "/v1/responses",
-                "request_id": request_id,
-                "request": _model_dump_json(request),
-            },
+        _log_request_payload(
+            request_log_path, request, endpoint, request_id, "stream_started"
         )
-        return StreamingResponse(
+        return _stream_response(
             _response_stream(
                 dispatcher,
                 request_id,
@@ -136,12 +112,11 @@ async def serve_response(
                 response_parser=response_parser,
                 is_disconnected=is_disconnected,
             ),
-            media_type="text/event-stream",
-            headers=headers,
+            headers,
         )
 
-    try:
-        response = await _response_response(
+    return await _json_response(
+        _response_response(
             request_id,
             created_at,
             request.model,
@@ -151,48 +126,9 @@ async def serve_response(
             parse_tools=bool(request.tools),
             response_parser=response_parser,
             is_disconnected=is_disconnected,
-        )
-    except asyncio.CancelledError:
-        dispatcher.cancel(handle)
-        logger.info(
-            "request_cancel id={} model={} endpoint=responses stream=false elapsed_s={:.3f}",
-            request_id,
-            request.model,
-            time.perf_counter() - started,
-        )
-        raise
-    except HTTPException:
-        dispatcher.cancel(handle)
-        raise
-    except Exception:
-        dispatcher.cancel(handle)
-        raise
-
-    usage = response["usage"]
-    elapsed_s = time.perf_counter() - started
-    logger.info(
-        "request_finish id={} model={} endpoint=responses stream=false prompt_tokens={} completion_tokens={} total_tokens={} elapsed_s={:.3f} completion_tps={:.2f} total_tps={:.2f}",
-        request_id,
-        request.model,
-        usage["input_tokens"],
-        usage["output_tokens"],
-        usage["total_tokens"],
-        elapsed_s,
-        _tokens_per_second(usage["output_tokens"], elapsed_s),
-        _tokens_per_second(usage["total_tokens"], elapsed_s),
+        ),
+        dispatcher, handles, request, request_log_path, endpoint, request_id, started, headers,
     )
-    _write_request_log(
-        request_log_path,
-        {
-            "status": "success",
-            "endpoint": "/v1/responses",
-            "request_id": request_id,
-            "elapsed_s": elapsed_s,
-            "request": _model_dump_json(request),
-            "response": response,
-        },
-    )
-    return JSONResponse(response, headers=headers)
 
 
 def _validate_response_request(
@@ -365,49 +301,19 @@ async def _response_stream(
                 yield response_events.response_completed(response)
                 yield "data: [DONE]\n\n"
 
-                elapsed_s = time.perf_counter() - started
-                logger.info(
-                    "request_finish id={} model={} endpoint=responses stream=true prompt_tokens={} completion_tokens={} total_tokens={} elapsed_s={:.3f} completion_tps={:.2f} total_tps={:.2f}",
-                    request_id,
-                    model,
-                    usage["input_tokens"],
-                    usage["output_tokens"],
-                    usage["total_tokens"],
-                    elapsed_s,
-                    _tokens_per_second(usage["output_tokens"], elapsed_s),
-                    _tokens_per_second(usage["total_tokens"], elapsed_s),
-                )
-                _write_request_log(
-                    request_log_path,
-                    {
-                        "status": "success",
-                        "endpoint": "/v1/responses",
-                        "request_id": request_id,
-                        "elapsed_s": elapsed_s,
-                        "request": _model_dump_json(request),
-                        "response": response,
-                    },
+                _log_success(
+                    request_log_path, request, "/v1/responses", request_id, started, response,
+                    stream=True,
                 )
                 return
     except asyncio.CancelledError:
         dispatcher.cancel(handle)
         elapsed_s = time.perf_counter() - started
-        logger.info(
-            "request_cancel id={} model={} endpoint=responses stream=true completion_tokens={} elapsed_s={:.3f}",
-            request_id,
-            model,
-            completion_tokens,
-            elapsed_s,
+        _log_request_cancel(
+            request_id, model, elapsed_s, completion_tokens=completion_tokens, responses=True
         )
-        _write_request_log(
-            request_log_path,
-            {
-                "status": "cancelled",
-                "endpoint": "/v1/responses",
-                "request_id": request_id,
-                "elapsed_s": elapsed_s,
-                "request": _model_dump_json(request),
-            },
+        _log_request_payload(
+            request_log_path, request, "/v1/responses", request_id, "cancelled", elapsed_s=elapsed_s
         )
         raise
     except Exception as exc:
@@ -469,16 +375,9 @@ def _log_response_stream_failure(
         elapsed_s,
         message,
     )
-    _write_request_log(
-        request_log_path,
-        {
-            "status": "failure",
-            "endpoint": "/v1/responses",
-            "request_id": request_id,
-            "elapsed_s": elapsed_s,
-            "request": _model_dump_json(request),
-            "error": message,
-        },
+    _log_request_payload(
+        request_log_path, request, "/v1/responses", request_id, "failure",
+        elapsed_s=elapsed_s, error=message,
     )
 
 

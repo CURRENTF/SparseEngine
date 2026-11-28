@@ -22,9 +22,10 @@ def test_lookup_batch_failure_keeps_previous_memo_and_next_pass_retires_it(mixed
     owner = manager
     if mixed:
         owner = object.__new__(PrefixCacheCoordinator)
+        owner.config = manager.config
         owner.prefix_cache = manager.prefix_cache
-        owner.block_size = 2
-        owner.offload_controller = None
+        owner.prefix_cache_block_size = 2
+        owner.prefix_offload_controller = None
     owner.prefix_lookup_cache = PrefixLookupCache(max_entries=1)
     runtime = RuntimeState(config=manager.config, cache_manager=manager,
                            prefix_cache_coordinator=owner if mixed else None)
@@ -161,11 +162,11 @@ def test_recurrent_failure_rolls_back_all_batched_aliases_and_refs(method):
         parent = block_id
     coordinator = object.__new__(PrefixCacheCoordinator)
     coordinator.prefix_cache = index
-    coordinator.block_size = 2
+    coordinator.prefix_cache_block_size = 2
     coordinator.cache_manager = manager
-    coordinator.offload_controller = None
+    coordinator.prefix_offload_controller = None
     coordinator.seq_id_to_prefix_blocks = {}
-    coordinator._step_h2d_operations = {}
+    coordinator._prefix_offload_step_h2d_operations = {}
 
     def fail_recurrent(*args, **kwargs):
         raise RuntimeError('injected recurrent failure')

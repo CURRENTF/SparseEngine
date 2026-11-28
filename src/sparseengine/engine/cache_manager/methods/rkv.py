@@ -218,28 +218,6 @@ class RKVCacheManager(SnapKVCacheManager):
             self._clear_rkv_query_cache_row(layer_idx, row_idx)
         return result
 
-    def free_part_slots_batch(
-        self,
-        layer_idx: int,
-        seqs: list[Sequence],
-        keep_indices: torch.Tensor,
-        *,
-        keep_indices_sorted: bool = False,
-    ):
-        self.kv_layer_index(layer_idx)
-        row_indices = [
-            self.seq_id_to_row[int(layer_idx)].get(seq.seq_id)
-            for seq in seqs
-        ]
-        result = super().free_part_slots_batch(
-            layer_idx,
-            seqs,
-            keep_indices,
-            keep_indices_sorted=keep_indices_sorted,
-        )
-        self._clear_rkv_query_cache_rows(layer_idx, row_indices)
-        return result
-
     def free_part_slots_batch_layers(
         self,
         layer_indices: list[int],

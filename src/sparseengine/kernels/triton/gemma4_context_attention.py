@@ -16,6 +16,7 @@ def _gemma4_context_attention_kernel(
     cached_prefix_lens,
     active_slots,
     req_indices,
+    image_groups,
     attn_score,
     stride_qt,
     stride_qh,
@@ -37,6 +38,7 @@ def _gemma4_context_attention_kernel(
     BLOCK_N: tl.constexpr,
     WINDOW: tl.constexpr,
     SCORE_MODE: tl.constexpr,
+    HAS_IMAGE_GROUPS: tl.constexpr,
 ):
     query_block = tl.program_id(0)
     batch_head = tl.program_id(1)
@@ -57,12 +59,21 @@ def _gemma4_context_attention_kernel(
         mask=query_positions[:, None] < query_len,
         other=0.0,
     )
+    if HAS_IMAGE_GROUPS:
+        query_groups = tl.load(
+            image_groups + query_start + query_positions,
+            mask=query_positions < query_len,
+            other=0,
+        )
     max_logit = tl.full((BLOCK_M,), -float("inf"), tl.float32)
     denominator = tl.zeros((BLOCK_M,), tl.float32)
     accumulator = tl.zeros((BLOCK_M, HEAD_DIM), tl.float32)
-    max_key = tl.minimum(
-        prefix_len + (query_block + 1) * BLOCK_M, prefix_len + query_len
-    )
+    if HAS_IMAGE_GROUPS:
+        max_key = prefix_len + query_len
+    else:
+        max_key = tl.minimum(
+            prefix_len + (query_block + 1) * BLOCK_M, prefix_len + query_len
+        )
     for key_start in range(0, max_key, BLOCK_N):
         key_positions = key_start + tl.arange(0, BLOCK_N)
         slots = tl.load(
@@ -78,8 +89,21 @@ def _gemma4_context_attention_kernel(
         logits = tl.dot(query, key) * 1.4426950408889634
         absolute_queries = prefix_len + query_positions[:, None]
         visible = key_positions[None, :] <= absolute_queries
+        if HAS_IMAGE_GROUPS:
+            key_relative = key_positions - prefix_len
+            key_groups = tl.load(
+                image_groups + query_start + key_relative,
+                mask=(key_relative >= 0) & (key_relative < query_len),
+                other=0,
+            )
+            same_image = (query_groups[:, None] > 0) & (
+                query_groups[:, None] == key_groups[None, :]
+            )
+            visible |= same_image
         if WINDOW > 0:
             visible &= key_positions[None, :] > absolute_queries - WINDOW
+        if HAS_IMAGE_GROUPS:
+            visible &= key_positions[None, :] < max_key
         if SCORE_MODE == 3:
             score = tl.sum(
                 tl.where(visible, logits * 0.6931471805599453, 0.0),
@@ -152,34 +176,47 @@ def gemma4_context_attention(
     active_slots: torch.Tensor,
     *,
     sliding_window: int | None,
+    image_groups: torch.Tensor | None = None,
     attn_score: torch.Tensor | None = None,
 ) -> None:
+    has_image_groups = image_groups is not None
+    operation = "Gemma 4 multimodal attention" if has_image_groups else "Gemma 4 attention"
     head_dim = int(q.shape[-1])
     if q.ndim != 3 or k.ndim != 3 or v.shape != k.shape or output.shape != q.shape:
-        raise ValueError("Gemma 4 attention requires matching rank-3 Q/K/V/output.")
+        raise ValueError(f"{operation} requires matching rank-3 Q/K/V/output.")
     if head_dim not in {256, 512} or k.shape[-1] != head_dim:
         raise ValueError(
-            f"Gemma 4 attention requires head_dim 256 or 512, got {head_dim}."
+            f"{operation} requires head_dim 256 or 512, got {head_dim}."
         )
-    if not all(t.is_cuda for t in (q, k, v, output)):
-        raise TypeError("Gemma 4 attention requires CUDA tensors.")
+    if not all(t.is_cuda for t in (q, k, v, output)) or (
+        has_image_groups and not image_groups.is_cuda
+    ):
+        raise TypeError(f"{operation} requires CUDA tensors.")
     if q.dtype not in {torch.float16, torch.bfloat16} or any(
         t.dtype != q.dtype for t in (k, v, output)
     ):
-        raise TypeError("Gemma 4 attention requires matching FP16 or BF16 tensors.")
+        raise TypeError(f"{operation} requires matching FP16 or BF16 tensors.")
     if any(t.stride(-1) != 1 for t in (q, k, v, output)):
-        raise ValueError(
-            "Gemma 4 attention requires contiguous BF16/FP16 head dimensions."
-        )
+        dtype_label = "" if has_image_groups else "BF16/FP16 "
+        raise ValueError(f"{operation} requires contiguous {dtype_label}head dimensions.")
     if int(q.shape[1]) % int(k.shape[1]):
-        raise ValueError("Gemma 4 attention requires divisible Q and KV heads.")
-    block_m = 32 if head_dim == 256 else 16
-    block_n = block_m
+        raise ValueError(f"{operation} requires divisible Q and KV heads.")
+    if has_image_groups:
+        if image_groups.shape != (q.shape[0],):
+            raise ValueError(
+                "Gemma 4 image groups must align with flattened queries: "
+                f"groups={tuple(image_groups.shape)} q={tuple(q.shape)}."
+            )
+        if image_groups.dtype != torch.int32:
+            raise TypeError("Gemma 4 image groups must use int32.")
+        if int(sliding_window) <= 0:
+            raise ValueError(
+                f"Gemma 4 multimodal sliding window must be positive, got {sliding_window}."
+            )
     if attn_score is not None and attn_score.dim() not in {2, 3}:
-        raise ValueError(
-            "Gemma 4 prefill attention scores must be [B, L] or [B, H, L], "
-            f"got {tuple(attn_score.shape)}."
-        )
+        label = "Gemma 4 multimodal prefill scores" if has_image_groups else "Gemma 4 prefill attention scores"
+        raise ValueError(f"{label} must be [B, L] or [B, H, L], got {tuple(attn_score.shape)}.")
+    block_m = 32 if head_dim == 256 else 16
     score = context_lens if attn_score is None else attn_score
     score_head_stride = score.stride(1) if score.dim() == 3 else 0
     score_length_stride = score.stride(-1)
@@ -196,6 +233,7 @@ def gemma4_context_attention(
         cached_prefix_lens,
         active_slots,
         req_indices,
+        image_groups,
         score,
         q.stride(0),
         q.stride(1),
@@ -214,9 +252,10 @@ def gemma4_context_attention(
         NUM_HEADS=num_heads,
         HEAD_DIM=head_dim,
         BLOCK_M=block_m,
-        BLOCK_N=block_n,
-        WINDOW=int(sliding_window or 0),
+        BLOCK_N=block_m,
+        WINDOW=int(sliding_window) if has_image_groups else int(sliding_window or 0),
         SCORE_MODE=0 if attn_score is None else attn_score.dim(),
+        HAS_IMAGE_GROUPS=has_image_groups,
         num_warps=8,
         num_stages=1,
     )

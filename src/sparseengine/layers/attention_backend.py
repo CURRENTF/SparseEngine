@@ -112,55 +112,66 @@ def debug_check_prefill_bounds(
     if device_runtime.is_stream_capturing():
         return
     payload = _require_explicit_payload(view, operation="Prefill bounds check")
-    meta = view.meta
-    if meta.active_slots.dim() != 2:
-        raise RuntimeError(
-            f"prefill bounds check expects 2D active_slots, got shape={tuple(meta.active_slots.shape)}"
-        )
+    _debug_check_slot_bounds(view.meta, payload, phase="prefill", q=q, chunk_lens=chunk_lens)
+
+
+def _debug_check_slot_bounds(meta, payload, *, phase, q=None, chunk_lens=None):
+    prefill = phase == "prefill"
+    active_slots = meta.active_slots
+    if active_slots.dim() != 2:
+        label = "prefill bounds check" if prefill else "debug slot bounds check"
+        raise RuntimeError(f"{label} expects 2D active_slots, got shape={tuple(active_slots.shape)}")
     rows = meta.req_indices.to(torch.long)
     row_min = int(rows.min().item()) if rows.numel() > 0 else 0
     row_max = int(rows.max().item()) if rows.numel() > 0 else -1
-    if row_min < 0 or row_max >= int(meta.active_slots.shape[0]):
+    if row_min < 0 or row_max >= int(active_slots.shape[0]):
         raise RuntimeError(
-            "prefill req row index out of bounds: "
-            f"row_min={row_min} row_max={row_max} num_rows={int(meta.active_slots.shape[0])}"
+            f"{phase} req row index out of bounds: "
+            f"row_min={row_min} row_max={row_max} num_rows={int(active_slots.shape[0])}"
         )
-    if int(chunk_lens.sum().item()) != int(q.shape[0]):
-        raise RuntimeError(
-            "prefill q/chunk length mismatch: "
-            f"q_tokens={int(q.shape[0])} chunk_tokens={int(chunk_lens.sum().item())}"
-        )
-    if bool((meta.context_lens < chunk_lens).any().item()):
-        raise RuntimeError(
-            "prefill context_lens shorter than chunk_lens: "
-            f"context_lens={meta.context_lens.detach().cpu().tolist()} "
-            f"chunk_lens={chunk_lens.detach().cpu().tolist()}"
-        )
+    if prefill:
+        if int(chunk_lens.sum().item()) != int(q.shape[0]):
+            raise RuntimeError(
+                "prefill q/chunk length mismatch: "
+                f"q_tokens={int(q.shape[0])} chunk_tokens={int(chunk_lens.sum().item())}"
+            )
+        if bool((meta.context_lens < chunk_lens).any().item()):
+            raise RuntimeError(
+                "prefill context_lens shorter than chunk_lens: "
+                f"context_lens={meta.context_lens.detach().cpu().tolist()} "
+                f"chunk_lens={chunk_lens.detach().cpu().tolist()}"
+            )
     visible_len = int(meta.context_lens.max().item()) if meta.context_lens.numel() > 0 else 0
-    if visible_len > int(meta.active_slots.shape[1]):
+    if visible_len > int(active_slots.shape[1]):
+        table = "active slot table" if prefill else "Req_to_tokens"
+        width = "active_slots_width" if prefill else "req_to_tokens_width"
         raise RuntimeError(
-            "prefill visible length exceeds active slot table width: "
-            f"visible_len={visible_len} active_slots_width={int(meta.active_slots.shape[1])}"
+            f"{phase} visible length exceeds {table} width: "
+            f"visible_len={visible_len} {width}={int(active_slots.shape[1])}"
         )
-    visible_slots = meta.active_slots.index_select(0, rows)[:, :visible_len]
+    visible_slots = active_slots.index_select(0, rows)[:, :visible_len]
     pos = torch.arange(visible_len, device=visible_slots.device)[None, :]
     valid_pos = pos < meta.context_lens[:, None]
     slot_cap = int(payload.k_cache.shape[0])
     bad = ((visible_slots < 0) | (visible_slots >= slot_cap)) & valid_pos
     if bool(bad.any().item()):
-        layer_idx = getattr(get_context(), "now_layer_idx", None)
         loc = bad.nonzero(as_tuple=False)[0]
         bad_b = int(loc[0].item())
         bad_pos = int(loc[1].item())
         bad_slot = int(visible_slots[bad_b, bad_pos].item())
         bad_req_row = int(rows[bad_b].item())
-        raise RuntimeError(
-            "prefill physical slot out of bounds before attention: "
-            f"layer={layer_idx} batch={bad_b} req_row={bad_req_row} pos={bad_pos} "
-            f"slot={bad_slot} slot_cap={slot_cap} context_len={int(meta.context_lens[bad_b].item())} "
-            f"k_shape={tuple(payload.k_cache.shape)} v_shape={tuple(payload.v_cache.shape)} "
-            f"active_slots_shape={tuple(meta.active_slots.shape)}"
+        details = (
+            f"batch={bad_b} req_row={bad_req_row} pos={bad_pos} "
+            f"slot={bad_slot} slot_cap={slot_cap} context_len={int(meta.context_lens[bad_b].item())}"
         )
+        if prefill:
+            layer_idx = getattr(get_context(), "now_layer_idx", None)
+            details = (
+                f"layer={layer_idx} {details} "
+                f"k_shape={tuple(payload.k_cache.shape)} v_shape={tuple(payload.v_cache.shape)} "
+                f"active_slots_shape={tuple(active_slots.shape)}"
+            )
+        raise RuntimeError(f"{phase} physical slot out of bounds before attention: {details}")
 
 
 class TritonAttentionBackend:
@@ -415,42 +426,8 @@ class TritonAttentionBackend:
         if not debug_decode_bounds_enabled():
             return
         payload = _require_explicit_payload(view, operation="Decode bounds check")
-        meta = view.meta
         if payload.backend not in {"dense", "flash_attn_contiguous"}:
             return
         if device_runtime.is_stream_capturing():
             return
-        if meta.active_slots.dim() != 2:
-            raise RuntimeError(
-                f"debug slot bounds check expects 2D active_slots, got shape={tuple(meta.active_slots.shape)}"
-            )
-        rows = meta.req_indices.to(torch.long)
-        row_min = int(rows.min().item()) if rows.numel() > 0 else 0
-        row_max = int(rows.max().item()) if rows.numel() > 0 else -1
-        if row_min < 0 or row_max >= int(meta.active_slots.shape[0]):
-            raise RuntimeError(
-                "decode req row index out of bounds: "
-                f"row_min={row_min} row_max={row_max} num_rows={int(meta.active_slots.shape[0])}"
-            )
-        visible_len = int(meta.context_lens.max().item()) if meta.context_lens.numel() > 0 else 0
-        if visible_len > int(meta.active_slots.shape[1]):
-            raise RuntimeError(
-                "decode visible length exceeds Req_to_tokens width: "
-                f"visible_len={visible_len} req_to_tokens_width={int(meta.active_slots.shape[1])}"
-            )
-        visible_slots = meta.active_slots.index_select(0, rows)[:, :visible_len]
-        pos = torch.arange(visible_len, device=visible_slots.device)[None, :]
-        valid_pos = pos < meta.context_lens[:, None]
-        slot_cap = int(payload.k_cache.shape[0])
-        bad = ((visible_slots < 0) | (visible_slots >= slot_cap)) & valid_pos
-        if bool(bad.any().item()):
-            loc = bad.nonzero(as_tuple=False)[0]
-            bad_b = int(loc[0].item())
-            bad_pos = int(loc[1].item())
-            bad_slot = int(visible_slots[bad_b, bad_pos].item())
-            bad_req_row = int(rows[bad_b].item())
-            raise RuntimeError(
-                "decode physical slot out of bounds before attention: "
-                f"batch={bad_b} req_row={bad_req_row} pos={bad_pos} "
-                f"slot={bad_slot} slot_cap={slot_cap} context_len={int(meta.context_lens[bad_b].item())}"
-            )
+        _debug_check_slot_bounds(view.meta, payload, phase="decode")

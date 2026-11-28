@@ -33,6 +33,12 @@ from sparseengine.layers.linear import (
 from sparseengine.layers.mla_attention import MLAAttention
 from sparseengine.layers.packed_moe import PackedMoeExperts
 from sparseengine.layers.rotary_embedding import RotaryEmbedding, get_rope
+from sparseengine.models.moe_common import (
+    MLP_EXPERT_SOURCE_RE,
+    ExpertWeightLoader,
+    nonexpert_parameter_names,
+    warmup_local_experts,
+)
 from sparseengine.operators.glm_rope import resolve_glm_rope_provider
 from sparseengine.method_registry import (
     resolve_decode_context_capacity,
@@ -60,16 +66,7 @@ from sparseengine.operators.moe_router import (
 from sparseengine.platforms import device_runtime
 from sparseengine.utils.profiler import profiler
 from sparseengine.utils.context import get_context
-from sparseengine.utils.weight_target import WeightTarget
 
-_EXPERT_SOURCE_RE = re.compile(
-    r"^model\.layers\.(\d+)\.mlp\.experts\.(\d+)\."
-    r"(gate_proj|up_proj|down_proj)\.weight$"
-)
-_EXPERT_TARGET_RE = re.compile(
-    r"^model\.layers\.(\d+)\.mlp\.experts\.(\d+)\."
-    r"(gate_proj|up_proj|down_proj)\.expert_weight$"
-)
 _SHARED_EXPERT_SOURCE_RE = re.compile(
     r"^model\.layers\.(\d+)\.mlp\.shared_experts\."
     r"(gate_proj|up_proj|down_proj)\.weight$"
@@ -828,7 +825,7 @@ class Glm4MoeLiteModel(nn.Module):
         return hidden_states
 
 
-class Glm4MoeLiteForCausalLM(nn.Module):
+class Glm4MoeLiteForCausalLM(ExpertWeightLoader, nn.Module):
     special_weight_loaders = (".expert_weight",)
     packed_modules_mapping = {
         "self_attn.q_a_proj": ("self_attn.fused_qkv_a_proj", 0),
@@ -958,6 +955,9 @@ class Glm4MoeLiteForCausalLM(nn.Module):
                 continue
             yield source_name, weight
 
+    def _experts_at(self, layer_idx):
+        return self._sparse_block(layer_idx).experts
+
     def map_weight_name(self, source_weight_name: str) -> str | None:
         shared_match = _SHARED_EXPERT_SOURCE_RE.match(source_weight_name)
         if shared_match is not None:
@@ -968,7 +968,7 @@ class Glm4MoeLiteForCausalLM(nn.Module):
                     f"model.layers.{layer_idx}.mlp.experts."
                     f"{experts.shared_expert_id}.{projection}.expert_weight"
                 )
-        match = _EXPERT_SOURCE_RE.match(source_weight_name)
+        match = MLP_EXPERT_SOURCE_RE.match(source_weight_name)
         if match is None:
             return source_weight_name
         layer_idx, global_expert_id, projection = match.groups()
@@ -980,47 +980,9 @@ class Glm4MoeLiteForCausalLM(nn.Module):
             f"{projection}.expert_weight"
         )
 
-    def resolve_special_weight(
-        self,
-        target_weight_name: str,
-    ) -> WeightTarget | None:
-        match = _EXPERT_TARGET_RE.match(target_weight_name)
-        if match is None:
-            return None
-        layer_idx, global_expert_id, projection = match.groups()
-        return WeightTarget(
-            self._sparse_block(int(layer_idx)).experts,
-            (int(global_expert_id), projection),
-        )
-
-    def load_special_weight(
-        self,
-        target_weight_name: str,
-        loaded_weight: torch.Tensor,
-        loaded_scale: torch.Tensor | None,
-    ) -> int:
-        target = self.resolve_special_weight(target_weight_name)
-        if target is None:
-            return 0
-        expert_id, projection = target.shard_id
-        target.module.load_expert_weight(
-            expert_id,
-            projection,
-            loaded_weight,
-            loaded_scale,
-        )
-        return 1
-
     def validate_loaded_weights(self, loaded_parameter_names: set[str]) -> None:
-        packed_experts = {
-            name
-            for name, _ in self.named_parameters()
-            if name.endswith((".mlp.experts.w13_weight", ".mlp.experts.w2_weight"))
-        }
         missing = sorted(
-            {name for name, _ in self.named_parameters()}
-            - packed_experts
-            - loaded_parameter_names
+            nonexpert_parameter_names(self, ".mlp.experts.") - loaded_parameter_names
         )
         if missing:
             raise ValueError(f"Missing replicated GLM base weights: {missing[:8]}.")
@@ -1051,23 +1013,11 @@ class Glm4MoeLiteForCausalLM(nn.Module):
         )
         block.gate(hidden_states)
         top_k = int(self.config.num_experts_per_tok)
-        topk_ids = (
-            torch.arange(
-                num_tokens * top_k,
-                dtype=torch.int64,
-                device=hidden_states.device,
-            )
-            .remainder(experts.routed_num_experts)
-            .add(experts.local_expert_start)
-            .view(num_tokens, top_k)
+        warmup_local_experts(
+            experts, hidden_states, top_k,
+            num_experts=experts.routed_num_experts,
+            weights_dtype=torch.float32,
         )
-        topk_weights = torch.full(
-            (num_tokens, top_k),
-            1.0 / top_k,
-            dtype=torch.float32,
-            device=hidden_states.device,
-        )
-        experts(hidden_states, topk_ids, topk_weights)
         device_runtime.synchronize()
 
     def forward(

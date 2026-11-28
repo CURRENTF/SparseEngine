@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import replace
+from functools import cached_property
 
 import torch
 
@@ -26,6 +27,7 @@ from ..base import (
     ExplicitKVPayload,
     SparseSelection,
 )
+from ..raw_kv_offload import LongPrefillOffloadPrefetcher
 from .deltakv_base import DeltaKVCacheManager
 
 
@@ -225,7 +227,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheManager):
 
     def _deltakv_reset_full_prefill_staging(self, *, clear_plans: bool = True):
         super()._deltakv_reset_full_prefill_staging(clear_plans=clear_plans)
-        self._deltakv_clear_long_prefill_offload_prefetch()
+        self._raw_kv_prefetcher.clear()
         if hasattr(self, "_full_layer_kivi_full_prefill_plans"):
             if clear_plans:
                 self._full_layer_kivi_full_prefill_plans = {}
@@ -1372,7 +1374,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheManager):
 
     def _deltakv_finish_full_prefill_staging(self):
         super()._deltakv_finish_full_prefill_staging()
-        self._deltakv_clear_long_prefill_offload_prefetch()
+        self._raw_kv_prefetcher.clear()
         self._full_layer_kivi_full_prefill_plans = {}
         self._full_layer_kivi_full_prefill_materialized_layers = set()
 
@@ -1471,40 +1473,9 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheManager):
             return False
         return device_runtime.supports_streams(self.device)
 
-    def _deltakv_clear_long_prefill_offload_prefetch(self):
-        states = getattr(self, "_deltakv_long_prefill_offload_prefetch_states", None) or {}
-        for state in list(states.values()):
-            event = state.get("event")
-            if event is not None:
-                device_runtime.wait_event(event, device=self.device)
-        self._deltakv_long_prefill_offload_prefetch_states = {}
-
-    def _deltakv_drop_long_prefill_offload_prefetch(self, key: tuple[int, int, str, int]):
-        states = getattr(self, "_deltakv_long_prefill_offload_prefetch_states", None) or {}
-        state = states.pop(key, None)
-        if state is not None:
-            event = state.get("event")
-            if event is not None:
-                device_runtime.wait_event(event, device=self.device)
-        self._deltakv_long_prefill_offload_prefetch_states = states
-
-    def _deltakv_consume_long_prefill_offload_staged_prefetch(
-        self,
-        *,
-        layer_idx: int,
-        row_idx: int,
-        kind: str,
-        end: int,
-    ) -> bool:
-        key = (int(layer_idx), int(row_idx), str(kind), int(end))
-        states = getattr(self, "_deltakv_long_prefill_offload_prefetch_states", None) or {}
-        state = states.pop(key, None)
-        if state is None:
-            return False
-        with profiler.record("deltakv_long_prefill_offload_prefetch_wait"):
-            device_runtime.wait_event(state["event"], device=self.device)
-        self._deltakv_long_prefill_offload_prefetch_states = states
-        return True
+    @cached_property
+    def _raw_kv_prefetcher(self) -> LongPrefillOffloadPrefetcher:
+        return LongPrefillOffloadPrefetcher(self.device, "DeltaKV")
 
     def _deltakv_copy_long_prefill_offload_prefix_to_staging(
         self,
@@ -1514,12 +1485,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheManager):
         kind: str,
         end: int,
     ) -> None:
-        if kind == "sparse_pre_rope":
-            k_dst = self.deltakv_prefill_staging_pre_rope_k_cache[:end]
-            v_dst = self.deltakv_prefill_staging_kv_cache[1, :end]
-        else:
-            k_dst = self.deltakv_prefill_staging_kv_cache[0, :end]
-            v_dst = self.deltakv_prefill_staging_kv_cache[1, :end]
+        k_dst, v_dst = self._deltakv_long_prefill_staging_views(kind, end)
         with profiler.record("deltakv_long_prefill_offload_direct_stage_miss_copy"):
             self.raw_kv_offload_buffer.copy_prefix_to(
                 layer_idx=layer_idx,
@@ -1530,77 +1496,30 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheManager):
                 v_out=v_dst,
             )
 
+    def _deltakv_long_prefill_staging_views(
+        self, kind: str, end: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        k = (
+            self.deltakv_prefill_staging_pre_rope_k_cache[:end]
+            if kind == "sparse_pre_rope"
+            else self.deltakv_prefill_staging_kv_cache[0, :end]
+        )
+        return k, self.deltakv_prefill_staging_kv_cache[1, :end]
+
     def _deltakv_schedule_next_long_prefill_offload_prefetch(self, *, layer_idx: int, row_idx: int, end: int):
         if int(end) <= 0 or not self._deltakv_long_prefill_offload_prefetch_enabled():
             return
-        future_layers = [
-            candidate
-            for candidate in self._deltakv_long_prefill_offload_layer_order()
-            if int(candidate) > int(layer_idx)
-        ][:1]
-        if not future_layers:
+        next_layer = next(
+            (layer for layer in self._deltakv_long_prefill_offload_layer_order() if layer > layer_idx), None,
+        )
+        if next_layer is None:
             return
-        states = getattr(self, "_deltakv_long_prefill_offload_prefetch_states", None) or {}
-        keep_layers = set(int(layer) for layer in future_layers)
-        for key in list(states):
-            key_layer, key_row, _key_kind, key_end = key
-            if key_layer <= int(layer_idx) or key_row != int(row_idx) or key_end != int(end) or key_layer not in keep_layers:
-                self._deltakv_drop_long_prefill_offload_prefetch(key)
-                states = getattr(self, "_deltakv_long_prefill_offload_prefetch_states", None) or {}
-        stream = getattr(self, "_deltakv_long_prefill_offload_prefetch_stream", None)
-        if stream is None:
-            stream = device_runtime.new_stream(device=self.device)
-            if stream is None:
-                raise RuntimeError(
-                    "DeltaKV long-prefill offload prefetch is enabled, but the active platform "
-                    f"does not support streams for device={self.device}."
-                )
-            self._deltakv_long_prefill_offload_prefetch_stream = stream
-        for next_layer in future_layers:
-            kind = self._deltakv_long_prefill_offload_kind(next_layer)
-            key = (int(next_layer), int(row_idx), kind, int(end))
-            if key in states:
-                continue
-            with profiler.record("deltakv_long_prefill_offload_prefetch_schedule"):
-                staging_available_event = device_runtime.new_event(device=self.device)
-                if staging_available_event is None:
-                    raise RuntimeError(
-                        "DeltaKV long-prefill offload prefetch could not create a staging event "
-                        f"for device={self.device}."
-                    )
-                device_runtime.record_event(staging_available_event, device=self.device)
-                with device_runtime.stream_context(stream):
-                    device_runtime.stream_wait_event(stream, staging_available_event)
-                    if kind == "sparse_pre_rope":
-                        k_dst = self.deltakv_prefill_staging_pre_rope_k_cache[:end]
-                        v_dst = self.deltakv_prefill_staging_kv_cache[1, :end]
-                    else:
-                        k_dst = self.deltakv_prefill_staging_kv_cache[0, :end]
-                        v_dst = self.deltakv_prefill_staging_kv_cache[1, :end]
-                    self.raw_kv_offload_buffer.copy_prefix_to(
-                        layer_idx=next_layer,
-                        row_idx=row_idx,
-                        kind=kind,
-                        end=end,
-                        k_out=k_dst,
-                        v_out=v_dst,
-                    )
-                    event = device_runtime.new_event(device=self.device)
-                    if event is None:
-                        raise RuntimeError(
-                            "DeltaKV long-prefill offload prefetch could not create a completion event "
-                            f"for device={self.device}."
-                        )
-                    device_runtime.record_event(event, device=self.device)
-            states[key] = {
-                "layer_idx": int(next_layer),
-                "row_idx": int(row_idx),
-                "kind": kind,
-                "end": int(end),
-                "staging_available_event": staging_available_event,
-                "event": event,
-            }
-        self._deltakv_long_prefill_offload_prefetch_states = states
+        kind = self._deltakv_long_prefill_offload_kind(next_layer)
+        self._raw_kv_prefetcher.schedule(
+            self.raw_kv_offload_buffer,
+            (next_layer, row_idx, kind, end),
+            lambda: self._deltakv_long_prefill_staging_views(kind, end),
+        )
 
     def _deltakv_schedule_post_layer_long_prefill_offload_prefetch(self, layer_idx: int):
         if not bool(getattr(self, "_deltakv_long_prefill_offload_step_active", False)):
@@ -1652,12 +1571,7 @@ class DeltaKVLessMemoryCacheManager(DeltaKVCacheManager):
 
         kind = self._deltakv_long_prefill_offload_kind(layer_idx)
         with profiler.record("deltakv_long_prefill_offload_before_attention_wait_or_restore"):
-            staged = self._deltakv_consume_long_prefill_offload_staged_prefetch(
-                layer_idx=layer_idx,
-                row_idx=row_idx,
-                kind=kind,
-                end=start,
-            )
+            staged = self._raw_kv_prefetcher.consume(layer_idx, row_idx, kind, start)
             if not staged:
                 self._deltakv_copy_long_prefill_offload_prefix_to_staging(
                     layer_idx=layer_idx,

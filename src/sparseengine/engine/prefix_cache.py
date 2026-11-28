@@ -6,7 +6,7 @@ import json
 import struct
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 from sparseengine.method_registry import prefill_sparse_method_fingerprint
 from sparseengine.utils.profiler import cpu_timing
@@ -1432,90 +1432,7 @@ class RadixPrefixIndex:
         needed_weight: int,
         block_weight: Callable[[PrefixCacheBlock], int],
     ) -> list[PrefixCacheBlock]:
-        """Demote device leaves in priority order with one candidate-tree scan."""
-        demoted: list[PrefixCacheBlock] = []
-        needed_weight = int(needed_weight)
-        if needed_weight <= 0:
-            return demoted
-        demoted_weight = 0
-        candidate_heap: list[tuple[int, int, bytes]] = []
-        queued: set[bytes] = set()
-        # Each edge is counted once. Recounting a parent's resident children
-        # after every demotion makes a wide branch quadratic in its fanout.
-        device_children = {
-            block_id: 0 for block_id, block in self.blocks.items()
-            if block.residency.device_present
-        }
-        for block_id in device_children:
-            parent_id = self.blocks[block_id].parent_block_id
-            if parent_id is not None:
-                device_children[parent_id] += 1
-
-        def demotable(block: PrefixCacheBlock) -> bool:
-            residency = block.residency
-            return (
-                int(block.ref_count) == 0
-                and int(block.eviction_priority) >= 0
-                and residency.device_present
-                and residency.host_present
-                and residency.transfer is None
-                and device_children[block.stable_block_id] == 0
-            )
-
-        def queue_if_demotable(
-            block_id: bytes | None,
-            *,
-            heap_ready: bool = True,
-        ) -> None:
-            if block_id is None or block_id in queued:
-                return
-            block = self.blocks.get(block_id)
-            if block is None or not demotable(block):
-                return
-            candidate = (
-                -int(block.eviction_priority),
-                int(block.last_access),
-                block_id,
-            )
-            if heap_ready:
-                heapq.heappush(candidate_heap, candidate)
-            else:
-                candidate_heap.append(candidate)
-            queued.add(block_id)
-
-        for block_id, child_count in device_children.items():
-            if child_count == 0:
-                queue_if_demotable(block_id, heap_ready=False)
-        heapq.heapify(candidate_heap)
-
-        while demoted_weight < needed_weight:
-            while candidate_heap:
-                _, _, block_id = heapq.heappop(candidate_heap)
-                queued.discard(block_id)
-                block = self.blocks.get(block_id)
-                if block is not None and demotable(block):
-                    break
-            else:
-                break
-            weight = int(block_weight(block))
-            if weight < 0:
-                raise ValueError(
-                    "Prefix cache demotion weight must be non-negative: "
-                    f"block={block.stable_block_id.hex()[:16]} weight={weight}."
-                )
-            block.residency.device_present = False
-            self._resident_payload_epoch += 1
-            block.residency.validate()
-            demoted.append(block)
-            demoted_weight += weight
-            self.device_demoted_blocks += 1
-            self._mark_capacity_mutated()
-            parent_id = block.parent_block_id
-            if parent_id is not None:
-                device_children[parent_id] -= 1
-                if device_children[parent_id] == 0:
-                    queue_if_demotable(parent_id)
-        return demoted
+        return self._reclaim_until_weight(needed_weight, block_weight, operation="demotion")
 
     def can_evict_host(self, block: PrefixCacheBlock) -> bool:
         residency = block.residency
@@ -1537,53 +1454,7 @@ class RadixPrefixIndex:
         needed_weight: int,
         block_weight: Callable[[PrefixCacheBlock], int],
     ) -> list[PrefixCacheBlock]:
-        """Evict host leaves once per batch, including variable-size payloads."""
-        evicted: list[PrefixCacheBlock] = []
-        needed_weight = int(needed_weight)
-        if needed_weight <= 0:
-            return evicted
-        evicted_weight = 0
-        candidate_heap: list[tuple[int, int, bytes]] = []
-        queued: set[bytes] = set()
-
-        def queue_if_evictable(block_id: bytes | None, *, heap_ready: bool = True) -> None:
-            if block_id is None or block_id in queued:
-                return
-            block = self.blocks.get(block_id)
-            if block is None or not self.can_evict_host(block):
-                return
-            candidate = (-int(block.eviction_priority), int(block.last_access), block_id)
-            if heap_ready:
-                heapq.heappush(candidate_heap, candidate)
-            else:
-                candidate_heap.append(candidate)
-            queued.add(block_id)
-
-        for block_id in self.backend.leaf_block_ids():
-            queue_if_evictable(block_id, heap_ready=False)
-        heapq.heapify(candidate_heap)
-
-        while evicted_weight < needed_weight:
-            while candidate_heap:
-                _, _, block_id = heapq.heappop(candidate_heap)
-                queued.discard(block_id)
-                block = self.blocks.get(block_id)
-                if block is not None and self.can_evict_host(block):
-                    break
-            else:
-                break
-            weight = int(block_weight(block))
-            if weight < 0:
-                raise ValueError(
-                    "Prefix cache host eviction weight must be non-negative: "
-                    f"block={block.stable_block_id.hex()[:16]} weight={weight}."
-                )
-            parent_id = block.parent_block_id
-            evicted.append(self._remove_block_from_index(block.stable_block_id))
-            evicted_weight += weight
-            self.host_evicted_blocks += 1
-            queue_if_evictable(parent_id)
-        return evicted
+        return self._reclaim_until_weight(needed_weight, block_weight, operation="host eviction")
 
     def evictable_blocks(self) -> int:
         return len(self.evictable_block_ids())
@@ -1700,61 +1571,129 @@ class RadixPrefixIndex:
         needed_weight: int,
         block_weight: Callable[[PrefixCacheBlock], int],
     ) -> list[PrefixCacheBlock]:
-        """Evict leaves in priority order with one candidate-tree scan."""
-        evicted: list[PrefixCacheBlock] = []
+        return self._reclaim_until_weight(needed_weight, block_weight, operation="eviction")
+
+    def _reclaim_until_weight(
+        self,
+        needed_weight: int,
+        block_weight: Callable[[PrefixCacheBlock], int],
+        *,
+        operation: Literal["demotion", "host eviction", "eviction"],
+    ) -> list[PrefixCacheBlock]:
+        reclaimed: list[PrefixCacheBlock] = []
         needed_weight = int(needed_weight)
         if needed_weight <= 0:
-            return evicted
-        evicted_weight = 0
+            return reclaimed
+
+        if operation == "demotion":
+            # Count each edge once to avoid quadratic scans of wide branches.
+            device_children = {
+                block_id: 0 for block_id, block in self.blocks.items()
+                if block.residency.device_present
+            }
+            for block_id in device_children:
+                parent_id = self.blocks[block_id].parent_block_id
+                if parent_id is not None:
+                    device_children[parent_id] += 1
+
+            def can_reclaim(block: PrefixCacheBlock) -> bool:
+                residency = block.residency
+                return (
+                    int(block.ref_count) == 0
+                    and int(block.eviction_priority) >= 0
+                    and residency.device_present
+                    and residency.host_present
+                    and residency.transfer is None
+                    and device_children[block.stable_block_id] == 0
+                )
+
+            leaves = (block_id for block_id, count in device_children.items() if count == 0)
+        else:
+            can_reclaim = self.can_evict_host if operation == "host eviction" else self.can_evict
+            leaves = self.backend.leaf_block_ids()
+
         candidate_heap: list[tuple[int, int, bytes]] = []
         queued: set[bytes] = set()
 
-        def queue_if_evictable(
-            block_id: bytes | None,
-            *,
-            heap_ready: bool = True,
-        ) -> None:
+        def queue_leaf(block_id: bytes | None, *, heap_ready: bool = True) -> None:
             if block_id is None or block_id in queued:
                 return
             block = self.blocks.get(block_id)
-            if block is None or not self.can_evict(block):
+            if block is None or not can_reclaim(block):
                 return
-            candidate = (
-                -int(block.eviction_priority),
-                int(block.last_access),
-                block_id,
-            )
+            candidate = (-int(block.eviction_priority), int(block.last_access), block_id)
             if heap_ready:
                 heapq.heappush(candidate_heap, candidate)
             else:
                 candidate_heap.append(candidate)
             queued.add(block_id)
 
-        for block_id in self.backend.leaf_block_ids():
-            queue_if_evictable(block_id, heap_ready=False)
+        for block_id in leaves:
+            queue_leaf(block_id, heap_ready=False)
         heapq.heapify(candidate_heap)
 
-        while evicted_weight < needed_weight:
-            while candidate_heap:
-                _, _, block_id = heapq.heappop(candidate_heap)
-                queued.discard(block_id)
-                block = self.blocks.get(block_id)
-                if block is not None and self.can_evict(block):
-                    break
-            else:
-                break
+        reclaimed_weight = 0
+        while candidate_heap and reclaimed_weight < needed_weight:
+            _, _, block_id = heapq.heappop(candidate_heap)
+            queued.discard(block_id)
+            block = self.blocks.get(block_id)
+            if block is None or not can_reclaim(block):
+                continue
             weight = int(block_weight(block))
             if weight < 0:
                 raise ValueError(
-                    "Prefix cache eviction weight must be non-negative: "
+                    f"Prefix cache {operation} weight must be non-negative: "
                     f"block={block.stable_block_id.hex()[:16]} weight={weight}."
                 )
-            parent_block_id = block.parent_block_id
-            evicted.append(self._remove_block_from_index(block.stable_block_id))
-            evicted_weight += weight
-            self.evicted_blocks += 1
-            queue_if_evictable(parent_block_id)
-        return evicted
+            parent_id = block.parent_block_id
+            if operation == "demotion":
+                block.residency.device_present = False
+                self._resident_payload_epoch += 1
+                block.residency.validate()
+                self.device_demoted_blocks += 1
+                self._mark_capacity_mutated()
+                if parent_id is not None:
+                    device_children[parent_id] -= 1
+            else:
+                block = self._remove_block_from_index(block.stable_block_id)
+                if operation == "host eviction":
+                    self.host_evicted_blocks += 1
+                else:
+                    self.evicted_blocks += 1
+            reclaimed.append(block)
+            reclaimed_weight += weight
+            queue_leaf(parent_id)
+        return reclaimed
+
+    def debug_state_summary(
+        self,
+        *,
+        summarize_payload: Callable[[Any], Any] | None = None,
+        stats: Callable[[], dict[str, int]] | None = None,
+    ) -> dict[str, Any]:
+        blocks = []
+        for block_id, block in sorted(self.blocks.items()):
+            residency = block.residency
+            record = {
+                "stable_block_id": block_id.hex(),
+                "parent_block_id": None if block.parent_block_id is None else block.parent_block_id.hex(),
+                "logical_block_idx": int(block.logical_block_idx),
+                "token_ids": [int(token_id) for token_id in block.token_ids],
+                "ref_count": int(block.ref_count),
+                "last_access": int(block.last_access),
+                "eviction_priority": int(block.eviction_priority),
+                "device_present": bool(residency.device_present),
+                "host_present": bool(residency.host_present),
+                "transfer": None if residency.transfer is None else residency.transfer.value,
+            }
+            if summarize_payload is not None:
+                record["payload"] = summarize_payload(block.payload)
+            blocks.append(record)
+        return {
+            "fingerprint": self.fingerprint.hex(),
+            "stats": {str(key): int(value) for key, value in (stats or self.stats)().items()},
+            "blocks": blocks,
+        }
 
     def inspect_prefix(
         self,

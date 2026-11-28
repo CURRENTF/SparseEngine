@@ -450,8 +450,7 @@ def test_replay_ref_is_unique_across_attached_and_materialized_blocks(monkeypatc
     m.seq_id_to_prefix_blocks = {71: blocks[:1]}
     m.seq_id_to_materialized_blocks = {}
     c.prefix_cache.acquire_block_ref(blocks[0])
-    hold = (m._hold_materialized_prefix_block_ref if kind == 'radix'
-            else m._hold_materialized_ref)
+    hold = m._hold_materialized_prefix_block_ref
     seq = SimpleNamespace(seq_id=71)
     for block in (*blocks, *reversed(blocks), *blocks):
         hold(seq, block)
@@ -475,10 +474,10 @@ def test_mixed_attach_waits_once_for_shared_operations_across_requests():
         operation.auxiliary_layer_events = {}
     c = object.__new__(PrefixCacheCoordinator)
     c.prefix_cache = m.prefix_cache
-    c.block_size = 2
-    c.offload_controller = controller
+    c.prefix_cache_block_size = 2
+    c.prefix_offload_controller = controller
     c.seq_id_to_prefix_blocks = {}
-    c._step_h2d_operations = {}
+    c._prefix_offload_step_h2d_operations = {}
     c.cache_manager = SimpleNamespace(
         validate_prefix_kv_attach=lambda seq: False,
         attach_prefix_kv_payloads=lambda seq, payloads: None,

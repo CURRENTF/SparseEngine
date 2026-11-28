@@ -102,8 +102,7 @@ def _manager_with_layer_rows(
         "decode_evictions": 0,
         "dropped_tokens": 0,
     }
-    manager._h2o_final_prefill_workspace = None
-    manager._uniform_decode_metadata = False
+    manager._uniform_decode_metadata = True
     manager.seq_id_to_row = [
         {idx: idx for idx in range(batch_size)}
         for _ in lengths_by_layer
@@ -1309,36 +1308,36 @@ def test_h2o_mixed_prefill_lifecycle_uses_exact_eviction_counters():
     }
 
 
-@pytest.mark.parametrize("kv_layout", ["tensor", "list"])
+@pytest.mark.parametrize("kv_layout, second_length", [("tensor", 6), ("list", 5)])
 def test_h2o_final_prefill_page_table_compaction_preserves_logical_kv_alignment(
-    kv_layout: str,
+    kv_layout: str, second_length: int,
 ):
     manager = _manager_with_layer_rows(
-        [[6, 6], [6, 6]], decode_budget=4, prefill_budget=8
+        [[6, second_length], [6, second_length]], decode_budget=4, prefill_budget=8
     )
     rows_by_layer = [
         [[9, 2, 7, 1, 6, 4], [29, 22, 27, 21, 26, 24]],
         [[109, 102, 107, 101, 106, 104], [129, 122, 127, 121, 126, 124]],
     ]
     for layer_idx, rows in enumerate(rows_by_layer):
+        rows[1] = rows[1][:second_length]
         _set_layer_row_slots(manager, layer_idx, rows)
         for seq_id in range(2):
             manager._h2o_scores[(layer_idx, seq_id)] = torch.tensor(
-                [1.0, 9.0, 2.0, 8.0, 0.0, 0.0]
+                [1.0, 9.0, 2.0, 8.0, 0.0, 0.0][:len(rows[seq_id])]
             )
     _use_kv_layout(manager, kv_layout)
     _fill_kv_by_physical_slot(manager)
     seqs = [
         _seq(0, 6, prefilled=0, chunk=6),
-        _seq(1, 6, prefilled=0, chunk=6),
+        _seq(1, second_length, prefilled=0, chunk=second_length),
     ]
-    keep = torch.tensor([1, 3, 4, 5], dtype=torch.long)
-    keep_set = set(keep.tolist())
+    keep_by_length = {6: [1, 3, 4, 5], 5: [1, 2, 3, 4]}
     expected = {}
     for layer_idx in range(2):
         k_cache, v_cache = manager.get_layer_kv_cache(layer_idx)
         for seq_id, row_slots in enumerate(rows_by_layer[layer_idx]):
-            selected_slots = torch.tensor(row_slots, dtype=torch.long)[keep]
+            selected_slots = torch.tensor(row_slots, dtype=torch.long)[keep_by_length[len(row_slots)]]
             expected[(layer_idx, seq_id)] = (
                 k_cache.index_select(0, selected_slots).clone(),
                 v_cache.index_select(0, selected_slots).clone(),
@@ -1351,9 +1350,9 @@ def test_h2o_final_prefill_page_table_compaction_preserves_logical_kv_alignment(
         released = []
         active = []
         for seq_id, row_slots in enumerate(rows):
-            destination = torch.tensor(row_slots, dtype=torch.long)[keep].tolist()
+            destination = torch.tensor(row_slots, dtype=torch.long)[keep_by_length[len(row_slots)]].tolist()
             released.extend(
-                slot for idx, slot in enumerate(row_slots) if idx not in keep_set
+                slot for idx, slot in enumerate(row_slots) if idx not in keep_by_length[len(row_slots)]
             )
             active.extend(destination)
             actual_slots = manager.buffer_req_to_token_slots[layer_idx][
@@ -1363,17 +1362,15 @@ def test_h2o_final_prefill_page_table_compaction_preserves_logical_kv_alignment(
             expected_k, expected_v = expected[(layer_idx, seq_id)]
             assert torch.equal(k_cache.index_select(0, actual_slots), expected_k)
             assert torch.equal(v_cache.index_select(0, actual_slots), expected_v)
+            scores = [1.0, 9.0, 2.0, 8.0, 0.0, 0.0]
             assert manager._h2o_scores[(layer_idx, seq_id)].tolist() == [
-                9.0,
-                8.0,
-                0.0,
-                0.0,
+                scores[i] for i in keep_by_length[len(row_slots)]
             ]
         assert len(active) == len(set(active))
-        assert manager.free_slots_stack[layer_idx][32:36].tolist() == released
-        assert manager._num_free_slots[layer_idx] == 36
+        free_end = 32 + len(released)
+        assert manager.free_slots_stack[layer_idx][32:free_end].tolist() == released
+        assert manager._num_free_slots[layer_idx] == free_end
 
-    assert manager._h2o_final_prefill_workspace is None
 
 
 def test_h2o_final_prefill_compacts_mla_latent_and_rope_slots():
@@ -1412,7 +1409,6 @@ def test_h2o_final_prefill_compacts_mla_latent_and_rope_slots():
         expected_sources + 100,
     )
     assert manager._h2o_scores[(0, 0)].tolist() == [9.0, 8.0, 0.0, 0.0]
-    assert manager._h2o_final_prefill_workspace is None
 
 
 def test_h2o_intermediate_prefill_does_not_move_kv_payloads():
@@ -1430,7 +1426,6 @@ def test_h2o_intermediate_prefill_does_not_move_kv_payloads():
     assert manager.buffer_req_to_token_slots[0][0, :4].tolist() == [2, 1, 6, 4]
     assert torch.equal(k_cache, old_k)
     assert torch.equal(v_cache, old_v)
-    assert manager._h2o_final_prefill_workspace is None
 
 
 def test_h2o_final_prefill_capacity_preflight_prevents_partial_layer_updates():
@@ -1452,7 +1447,6 @@ def test_h2o_final_prefill_capacity_preflight_prevents_partial_layer_updates():
     assert torch.equal(layer0_v, expected_v)
     assert manager.row_seq_lens[0].tolist() == [6]
     assert manager._num_free_slots[0] == 32
-    assert manager._h2o_final_prefill_workspace is None
 
 
 def test_h2o_decode_waits_for_interval_then_drops_full_burst():
@@ -1862,7 +1856,7 @@ def test_h2o_layer_end_keeps_fused_2d_logits_for_batched_normalization():
     assert torch.equal(score, torch.tensor([[0.0, 1.0, 2.0]]))
 
 
-def test_h2o_static_decode_reuses_uniform_rows_without_generic_metadata_rebuild():
+def test_h2o_static_decode_writes_layer_specific_slots():
     manager = _manager_with_layer_rows([[4], [4]])
     manager.max_buffer_rows = 1
     manager.layer_batch_states = [LayerBatchStates(), LayerBatchStates()]
@@ -1888,19 +1882,14 @@ def test_h2o_static_decode_reuses_uniform_rows_without_generic_metadata_rebuild(
     context_lens = torch.empty(1, dtype=torch.int32)
     req_indices = torch.empty(1, dtype=torch.int32)
 
-    with patch.object(
-        SnapKVCacheManager,
-        "_allocate_decode_batch_all_layers",
-        side_effect=AssertionError("generic metadata rebuild must not run"),
-    ):
-        manager.prepare_decode_static(
-            [seq],
-            input_ids,
-            positions,
-            slot_mapping,
-            context_lens,
-            req_indices,
-        )
+    manager.prepare_decode_static(
+        [seq],
+        input_ids,
+        positions,
+        slot_mapping,
+        context_lens,
+        req_indices,
+    )
 
     assert manager._num_free_slots == [31, 31]
     assert [int(lengths[0]) for lengths in manager.row_seq_lens] == [5, 5]
@@ -1914,12 +1903,11 @@ def test_h2o_static_decode_reuses_uniform_rows_without_generic_metadata_rebuild(
     assert manager.layer_batch_states[1].max_context_len == 5
 
 
-@pytest.mark.parametrize("graph_publish", [False, True])
-def test_snapkv_decode_graph_populates_host_mirrors_for_provider_planning(
-    graph_publish,
-):
+@pytest.mark.parametrize("mode", ["per-layer", "snapkv", "h2o"])
+def test_sparse_decode_graph_populates_host_mirrors_for_provider_planning(mode):
     manager = _manager_with_layer_rows([[4], [4]])
-    if graph_publish:
+    if mode == "snapkv":
+        manager._decode_graph_uses_context_capacity = False
         manager.config.sparse_method = "snapkv"
         manager.config.sink_keep_tokens = 0
         manager.config.decode_keep_tokens = manager.max_model_len
@@ -1942,6 +1930,8 @@ def test_snapkv_decode_graph_populates_host_mirrors_for_provider_planning(
         manager.free_slots_stack_tensor[1],
     ]
     manager._num_free_slots = [32, 32]
+    if mode == "per-layer":
+        manager.free_slots_stack_tensor = None
     seq = _seq(0, 5, prefilled=4, chunk=1)
     contract = DecodeGraphContract(
         method=manager.config.sparse_method,
@@ -1968,7 +1958,7 @@ def test_snapkv_decode_graph_populates_host_mirrors_for_provider_planning(
     assert inputs.host.request_indices.tolist() == inputs.request_indices.tolist()
     assert inputs.host.active_mask.tolist() == [True, False, False, False]
     assert inputs.host.active_mask.tolist() == inputs.active_mask.tolist()
-    expected_before_graph = [0, 0] if graph_publish else [131, 231]
+    expected_before_graph = [131, 231] if mode == "per-layer" else [0, 0]
     assert (
         manager.buffer_req_to_token_slots_tensor[:, 0, 4].tolist()
         == expected_before_graph
@@ -2012,7 +2002,7 @@ def test_h2o_static_decode_rejects_divergent_layer_row_lengths_before_allocation
         torch.empty(1, dtype=torch.int32),
     )
 
-    with pytest.raises(RuntimeError, match="uniform row lengths"):
+    with pytest.raises(RuntimeError, match="identical row lengths"):
         manager.prepare_decode_static([seq], *buffers)
 
     assert manager._num_free_slots == [32, 32]
@@ -2051,11 +2041,10 @@ def test_h2o_static_decode_rechecks_row_lengths_after_row_cache_reuse():
     )
 
     manager.prepare_decode_static([seq], *buffers)
-    assert getattr(manager, "_h2o_decode_static_rows", None) is not None
     manager.row_seq_lens[1][0] = 4
     manager.buffer_req_to_token_slots[1][0, 4] = 0
 
-    with pytest.raises(RuntimeError, match="uniform row lengths"):
+    with pytest.raises(RuntimeError, match="identical row lengths"):
         manager.prepare_decode_static([seq], *buffers)
 
     assert manager._num_free_slots == [31, 31]

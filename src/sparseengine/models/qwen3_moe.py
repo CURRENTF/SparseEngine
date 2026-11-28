@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 from functools import partial
 
 import torch
@@ -21,6 +20,20 @@ from sparseengine.models.attention_runtime import (
     bind_mha_full_attention_provider,
     build_mha_full_attention_provider,
 )
+from sparseengine.models.moe_common import (
+    MLP_EXPERT_SOURCE_RE,
+    ExpertWeightLoader,
+    check_remote_bf16_scale,
+    check_remote_fp8_dtype,
+    check_remote_shape,
+    expected_remote_expert_weights,
+    expert_matrix_shape,
+    expert_scale_name,
+    nonexpert_parameter_names,
+    remote_expert_skip_differences,
+    warmup_local_experts,
+    warmup_mha_projections,
+)
 from sparseengine.operators.moe import (
     model_activation_dtype,
     resolve_moe_provider,
@@ -32,17 +45,6 @@ from sparseengine.operators.moe_router import (
 from sparseengine.operators.full_attention import FullAttentionProvider
 from sparseengine.platforms import device_runtime
 from sparseengine.utils.log import logger
-from sparseengine.utils.weight_target import WeightTarget
-
-
-_EXPERT_SOURCE_RE = re.compile(
-    r"^model\.layers\.(\d+)\.mlp\.experts\.(\d+)\."
-    r"(gate_proj|up_proj|down_proj)\.weight$"
-)
-_EXPERT_TARGET_RE = re.compile(
-    r"^model\.layers\.(\d+)\.mlp\.experts\.(\d+)\."
-    r"(gate_proj|up_proj|down_proj)\.expert_weight$"
-)
 
 
 class Qwen3MoeRouter(nn.Module):
@@ -219,7 +221,7 @@ class Qwen3MoeModel(Qwen3ModelBase):
         )
 
 
-class Qwen3MoeForCausalLM(nn.Module):
+class Qwen3MoeForCausalLM(ExpertWeightLoader, nn.Module):
     special_weight_loaders = (".expert_weight",)
     packed_modules_mapping = {
         "q_proj": ("qkv_proj", "q"),
@@ -310,41 +312,22 @@ class Qwen3MoeForCausalLM(nn.Module):
         )
         if experts.fp8_enabled:
             layer = self.model.layers[0]
-            layer.self_attn.qkv_proj(hidden_states)
-            layer.self_attn.o_proj(
-                torch.zeros(
-                    (num_tokens, layer.self_attn.q_size),
-                    dtype=dtype,
-                    device=device,
-                )
-            )
+            warmup_mha_projections(layer.self_attn, hidden_states)
             block.gate(hidden_states)
-        topk_ids = (
-            torch.arange(
-                num_tokens * top_k,
-                dtype=torch.int64,
-                device=device,
-            )
-            .remainder(experts.num_local_experts)
-            .add(experts.local_expert_start)
-            .view(num_tokens, top_k)
+        warmup_local_experts(
+            experts, hidden_states, top_k,
+            num_experts=experts.num_local_experts,
+            weights_dtype=dtype,
         )
-        topk_weights = torch.full(
-            (num_tokens, top_k),
-            1.0 / top_k,
-            dtype=dtype,
-            device=device,
-        )
-        experts(hidden_states, topk_ids, topk_weights)
         device_runtime.synchronize()
 
     def map_weight_name(self, source_weight_name: str) -> str | None:
-        match = _EXPERT_SOURCE_RE.match(source_weight_name)
+        match = MLP_EXPERT_SOURCE_RE.match(source_weight_name)
         if match is None:
             return source_weight_name
         layer_idx, global_expert_id, projection = match.groups()
         global_expert_id = int(global_expert_id)
-        experts = self.model.layers[int(layer_idx)].mlp.experts
+        experts = self._experts_at(int(layer_idx))
         if not experts.is_local_expert(global_expert_id):
             self._intentionally_skipped_expert_weights.add(source_weight_name)
             return None
@@ -352,17 +335,6 @@ class Qwen3MoeForCausalLM(nn.Module):
             f"model.layers.{layer_idx}.mlp.experts.{global_expert_id}."
             f"{projection}.expert_weight"
         )
-
-    def resolve_special_weight(
-        self,
-        target_weight_name: str,
-    ) -> WeightTarget | None:
-        match = _EXPERT_TARGET_RE.match(target_weight_name)
-        if match is None:
-            return None
-        layer_idx, global_expert_id, projection = match.groups()
-        experts = self.model.layers[int(layer_idx)].mlp.experts
-        return WeightTarget(experts, (int(global_expert_id), projection))
 
     def record_skipped_weight(
         self,
@@ -372,56 +344,28 @@ class Qwen3MoeForCausalLM(nn.Module):
         loaded_scale_shape: tuple[int, ...] | None,
         loaded_scale_dtype: str | None,
     ) -> None:
-        match = _EXPERT_SOURCE_RE.match(source_weight_name)
+        match = MLP_EXPERT_SOURCE_RE.match(source_weight_name)
         if match is None:
             raise ValueError(
                 f"Qwen3MoE loader unexpectedly skipped {source_weight_name!r}."
             )
         layer_idx, global_expert_id, projection = match.groups()
-        experts = self.model.layers[int(layer_idx)].mlp.experts
+        experts = self._experts_at(int(layer_idx))
         if experts.is_local_expert(int(global_expert_id)):
             raise ValueError(
                 f"Qwen3MoE loader skipped local expert weight {source_weight_name!r}."
             )
-        expected_weight_shape = (
-            (experts.hidden_size, experts.global_intermediate_size)
-            if projection == "down_proj"
-            else (experts.global_intermediate_size, experts.hidden_size)
+        expected_weight_shape = expert_matrix_shape(experts, down=projection == "down_proj")
+        check_remote_shape(
+            "Qwen3MoE expert weight", source_weight_name, loaded_weight_shape, expected_weight_shape
         )
-        if loaded_weight_shape != expected_weight_shape:
-            raise ValueError(
-                "Remote Qwen3MoE expert weight shape mismatch for "
-                f"{source_weight_name!r}: expected={expected_weight_shape}, "
-                f"got={loaded_weight_shape}."
-            )
         if experts.fp8_enabled:
-            if loaded_weight_dtype != "F8_E4M3":
-                raise TypeError(
-                    "Remote Qwen3MoE expert weight must be FP8 E4M3, got "
-                    f"safetensors dtype {loaded_weight_dtype}."
-                )
-            expected_scale_shape = (
-                (experts.hidden_size // 128, experts.global_intermediate_size // 128)
-                if projection == "down_proj"
-                else (
-                    experts.global_intermediate_size // 128,
-                    experts.hidden_size // 128,
-                )
+            check_remote_fp8_dtype("Qwen3MoE", loaded_weight_dtype)
+            check_remote_bf16_scale(
+                "Qwen3MoE", "Qwen3MoE expert scale", source_weight_name,
+                loaded_scale_shape, loaded_scale_dtype, expected_weight_shape,
             )
-            if loaded_scale_shape != expected_scale_shape:
-                raise ValueError(
-                    "Remote Qwen3MoE expert scale shape mismatch for "
-                    f"{source_weight_name!r}: expected={expected_scale_shape}, "
-                    f"got={loaded_scale_shape}."
-                )
-            if loaded_scale_dtype != "BF16":
-                raise TypeError(
-                    "Remote Qwen3MoE expert scale must be BF16, got "
-                    f"safetensors dtype {loaded_scale_dtype}."
-                )
-            self._intentionally_skipped_expert_scales.add(
-                source_weight_name[: -len(".weight")] + ".weight_scale_inv"
-            )
+            self._intentionally_skipped_expert_scales.add(expert_scale_name(source_weight_name))
         elif loaded_scale_shape is not None or loaded_scale_dtype is not None:
             raise ValueError(
                 "Unquantized remote Qwen3MoE expert unexpectedly has "
@@ -434,35 +378,10 @@ class Qwen3MoeForCausalLM(nn.Module):
             )
         self._intentionally_skipped_expert_weights.add(source_weight_name)
 
-    def load_special_weight(
-        self,
-        target_weight_name: str,
-        loaded_weight: torch.Tensor,
-        loaded_scale: torch.Tensor | None,
-    ) -> int:
-        target = self.resolve_special_weight(target_weight_name)
-        if target is None:
-            return 0
-        global_expert_id, projection = target.shard_id
-        target.module.load_expert_weight(
-            global_expert_id,
-            projection,
-            loaded_weight,
-            loaded_scale,
-        )
-        return 1
-
     def validate_loaded_weights(self, loaded_parameter_names: set[str]) -> None:
-        packed_expert_parameters = {
-            name
-            for name, _ in self.named_parameters()
-            if name.endswith(".mlp.experts.w13_weight")
-            or name.endswith(".mlp.experts.w2_weight")
-        }
-        expected_dense_parameters = {
-            name for name, _ in self.named_parameters()
-        } - packed_expert_parameters
-        missing_dense = sorted(expected_dense_parameters - loaded_parameter_names)
+        missing_dense = sorted(
+            nonexpert_parameter_names(self, ".mlp.experts.") - loaded_parameter_names
+        )
         if missing_dense:
             raise ValueError(
                 f"Missing replicated Qwen3MoE weights: {missing_dense[:8]}."
@@ -471,35 +390,22 @@ class Qwen3MoeForCausalLM(nn.Module):
         for layer in self.model.layers:
             layer.mlp.experts.validate_loaded_weights()
 
-        expected_skipped = {
-            f"model.layers.{layer_idx}.mlp.experts.{expert_id}.{projection}.weight"
-            for layer_idx in range(int(self.config.num_hidden_layers))
-            for expert_id in range(int(self.config.num_experts))
-            if not self.model.layers[layer_idx].mlp.experts.is_local_expert(expert_id)
-            for projection in ("gate_proj", "up_proj", "down_proj")
-        }
-        expected_skipped_scales = (
-            {name[: -len(".weight")] + ".weight_scale_inv" for name in expected_skipped}
-            if self.model.layers[0].mlp.experts.fp8_enabled
-            else set()
+        expected_skipped = expected_remote_expert_weights(
+            self._experts_at, self.config.num_hidden_layers, self.config.num_experts,
+            ("gate_proj", "up_proj", "down_proj"), layer_prefix="model.layers",
         )
-        missing_skips = sorted(
-            expected_skipped - self._intentionally_skipped_expert_weights
+        missing_skips, unexpected_skips, missing_scale_skips, unexpected_scale_skips = (
+            remote_expert_skip_differences(
+                expected_skipped, self._intentionally_skipped_expert_weights,
+                self._intentionally_skipped_expert_scales,
+                fp8=self.model.layers[0].mlp.experts.fp8_enabled,
+            )
         )
         if missing_skips:
             raise ValueError(
                 "Checkpoint is missing expected remote expert entries: "
                 f"{missing_skips[:8]}."
             )
-        unexpected_skips = sorted(
-            self._intentionally_skipped_expert_weights - expected_skipped
-        )
-        missing_scale_skips = sorted(
-            expected_skipped_scales - self._intentionally_skipped_expert_scales
-        )
-        unexpected_scale_skips = sorted(
-            self._intentionally_skipped_expert_scales - expected_skipped_scales
-        )
         if missing_scale_skips:
             raise ValueError(
                 "Checkpoint is missing expected remote expert scales: "

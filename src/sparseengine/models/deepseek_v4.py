@@ -14,6 +14,11 @@ from sparseengine.layers.embed_head import VocabParallelEmbedding, ParallelLMHea
 from sparseengine.layers.layernorm import RMSNorm
 from sparseengine.layers.linear import ReplicatedLinear
 from sparseengine.layers.mxfp4_experts import PackedMxfp4Experts
+from sparseengine.models.moe_common import (
+    load_expert_weight,
+    nonexpert_parameter_names,
+    warmup_local_experts,
+)
 from sparseengine.operators.activation import clipped_swiglu
 from sparseengine.operators.compressed_index import CompressedIndexOpSpec, resolve_compressed_index_provider
 from sparseengine.operators.hyper_connection import HyperConnectionOpSpec, resolve_hyper_connection_provider
@@ -372,16 +377,10 @@ class DeepseekV4ForCausalLM(nn.Module):
         return WeightTarget(self.model.layers[int(layer)].ffn.experts, (int(expert), projection))
 
     def load_special_weight(self, target, weight, scale):
-        destination = self.resolve_special_weight(target)
-        if destination is None:
-            return 0
-        expert, projection = destination.shard_id
-        destination.module.load_expert_weight(expert, projection, weight, scale)
-        return 1
+        return load_expert_weight(self.resolve_special_weight(target), weight, scale)
 
     def validate_loaded_weights(self, loaded):
-        expected = {name for name, _ in self.named_parameters()
-                    if not name.endswith((".experts.w13_weight", ".experts.w2_weight"))}
+        expected = nonexpert_parameter_names(self)
         expected.update(name for name, _ in self.named_buffers() if name.endswith(".tid2eid"))
         missing = expected-loaded
         if missing:
@@ -418,9 +417,8 @@ class DeepseekV4ForCausalLM(nn.Module):
         device = experts.w13_weight.device
         hidden = torch.zeros(num_tokens, experts.hidden_size, device=device, dtype=torch.bfloat16)
         top_k = int(self.config.num_experts_per_tok)
-        ids = (torch.arange(num_tokens*top_k, device=device, dtype=torch.int32)
-               .remainder(experts.num_local_experts).add(experts.local_expert_start)
-               .view(num_tokens, top_k))
-        weights = torch.full((num_tokens, top_k), 1./top_k, device=device, dtype=torch.float32)
-        experts(hidden, ids, weights)
+        warmup_local_experts(
+            experts, hidden, top_k, num_experts=experts.num_local_experts,
+            weights_dtype=torch.float32, ids_dtype=torch.int32,
+        )
         synchronize()

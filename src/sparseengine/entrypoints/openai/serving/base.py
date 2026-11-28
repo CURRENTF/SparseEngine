@@ -8,8 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sparseengine.engine.chain_cache import ChainCacheError
+from sparseengine.entrypoints.openai.serving.response_parsing import (
+    ResponseParseError,
+    response_parser_prefix,
+)
+from sparseengine.utils.log import logger
 
 
 DisconnectChecker = Callable[[], Awaitable[bool]]
@@ -146,3 +152,130 @@ def _tokens_per_second(tokens: int, elapsed_s: float) -> float:
     if elapsed_s <= 0:
         return 0.0
     return tokens / elapsed_s
+
+
+def _request_submitter(dispatcher):
+    if bool(getattr(dispatcher, "admission_ack_enabled", False)):
+        return getattr(dispatcher, "submit_admitted", dispatcher.submit)
+    return dispatcher.submit
+
+
+async def _submit_request(
+    submit, request, prompt, sampling_params, index, stop, *, append_only=False
+):
+    kwargs = {}
+    if request.chain_id is not None:
+        kwargs["chain_id"] = request.chain_id
+        if append_only:
+            kwargs["chain_append_only"] = True
+    return await submit(prompt, sampling_params, index, stop, stream=request.stream, **kwargs)
+
+
+def _chain_headers(handles) -> dict[str, str] | None:
+    chain_id = getattr(handles[0], "chain_id", None) if len(handles) == 1 else None
+    return {"X-SparseVLLM-Chain-ID": chain_id} if chain_id is not None else None
+
+
+def _prepare_parser_prompt(dispatcher, tokenizer, prompt, handle, *, enabled, endpoint):
+    if not enabled:
+        return ""
+    try:
+        return response_parser_prefix(tokenizer, prompt, handle)
+    except ResponseParseError as exc:
+        dispatcher.cancel(handle)
+        raise HTTPException(
+            status_code=500, detail=f"{endpoint} parser setup failed: {exc}"
+        ) from exc
+
+
+def _stream_response(chunks, headers) -> StreamingResponse:
+    return StreamingResponse(chunks, media_type="text/event-stream", headers=headers)
+
+
+def _log_request_payload(path, request, endpoint, request_id, status, **fields) -> None:
+    _write_request_log(
+        path,
+        {
+            "status": status,
+            "endpoint": endpoint,
+            "request_id": request_id,
+            "request": _model_dump_json(request),
+            **fields,
+        },
+    )
+
+
+def _log_request_finish(
+    request_id, model, elapsed_s, prompt_tokens, completion_tokens, total_tokens,
+    *, stream, responses=False,
+) -> None:
+    endpoint = " endpoint=responses" if responses else ""
+    logger.info(
+        f"request_finish id={{}} model={{}}{endpoint} stream={{}} "
+        "prompt_tokens={} completion_tokens={} total_tokens={} elapsed_s={:.3f} "
+        "completion_tps={:.2f} total_tps={:.2f}",
+        request_id,
+        model,
+        "true" if stream else "false",
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        elapsed_s,
+        _tokens_per_second(completion_tokens, elapsed_s),
+        _tokens_per_second(total_tokens, elapsed_s),
+    )
+
+
+def _log_request_cancel(
+    request_id, model, elapsed_s, *, completion_tokens=None, responses=False
+) -> None:
+    endpoint = " endpoint=responses" if responses else ""
+    prefix = f"request_cancel id={{}} model={{}}{endpoint}"
+    if completion_tokens is None:
+        logger.info(prefix + " stream=false elapsed_s={:.3f}", request_id, model, elapsed_s)
+    else:
+        logger.info(
+            prefix + " stream=true completion_tokens={} elapsed_s={:.3f}",
+            request_id, model, completion_tokens, elapsed_s,
+        )
+
+
+def _cancel_requests(dispatcher, handles) -> None:
+    for handle in handles:
+        dispatcher.cancel(handle)
+
+
+def _log_success(path, request, endpoint, request_id, started, response, *, stream) -> None:
+    usage = response["usage"]
+    elapsed_s = time.perf_counter() - started
+    responses = endpoint == "/v1/responses"
+    _log_request_finish(
+        request_id, request.model, elapsed_s,
+        usage["input_tokens" if responses else "prompt_tokens"],
+        usage["output_tokens" if responses else "completion_tokens"],
+        usage["total_tokens"], stream=stream, responses=responses,
+    )
+    _log_request_payload(
+        path, request, endpoint, request_id, "success",
+        elapsed_s=elapsed_s, response=response,
+    )
+
+
+async def _json_response(
+    result: Awaitable[dict[str, Any]],
+    dispatcher, handles, request, request_log_path, endpoint, request_id, started, headers,
+) -> JSONResponse:
+    try:
+        response = await result
+    except asyncio.CancelledError:
+        _cancel_requests(dispatcher, handles)
+        _log_request_cancel(
+            request_id, request.model, time.perf_counter() - started,
+            responses=endpoint == "/v1/responses",
+        )
+        raise
+    except Exception:
+        _cancel_requests(dispatcher, handles)
+        raise
+    _log_success(request_log_path, request, endpoint, request_id, started, response, stream=False)
+    return JSONResponse(response, headers=headers)

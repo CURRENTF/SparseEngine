@@ -142,7 +142,7 @@ def _instantiate_model(config, context, full_attention_provider=None):
             )
         )
         stack.enter_context(
-            patch("sparseengine.models.qwen3.get_parallel_context", return_value=context)
+            patch("sparseengine.models.standard_mha.get_parallel_context", return_value=context)
         )
         stack.enter_context(
             patch("sparseengine.layers.linear.get_parallel_context", return_value=context)
@@ -410,7 +410,7 @@ def test_qwen3_attention_passes_raw_key_without_clone():
     cache = CacheRecorder()
     context = SimpleNamespace(cache_manager=cache, now_layer_idx=0)
 
-    with patch("sparseengine.models.qwen3.get_context", return_value=context):
+    with patch("sparseengine.models.standard_mha.get_context", return_value=context):
         attention(torch.arange(2), torch.empty(2, 8))
 
     assert cache.raw_key.data_ptr() == expected_raw_key.data_ptr()

@@ -157,7 +157,7 @@ def test_mixed_byte_pressure_respects_pins_zero_sizes_and_pending_bytes(residenc
         free_prefix_kv_payload_device=lambda payload: None,
     )
     c.recurrent_state_manager = SimpleNamespace(free_prefix_recurrent_payload=lambda payload: None)
-    c.offload_controller = None if residency == 'device' else SimpleNamespace(
+    c.prefix_offload_controller = None if residency == 'device' else SimpleNamespace(
         poll=lambda: None, wait_oldest_d2h=lambda: False,
         free_host_payloads=lambda blocks: freed.extend(block.payload.kv_payload for block in blocks),
         free_device_recurrent=lambda block: None,

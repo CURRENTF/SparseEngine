@@ -288,9 +288,7 @@ def test_multimodal_registration_error_survives_failed_rollback():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize("score_ndim", [2, 3])
 def test_gemma4_multimodal_context_attention_matches_reference(score_ndim):
-    from sparseengine.kernels.triton.gemma4_multimodal_context_attention import (
-        gemma4_multimodal_context_attention,
-    )
+    from sparseengine.kernels.triton.gemma4_context_attention import gemma4_context_attention
 
     device = torch.device("cuda")
     torch.manual_seed(0)
@@ -309,7 +307,7 @@ def test_gemma4_multimodal_context_attention_matches_reference(score_ndim):
     )
     groups = torch.zeros(length, device=device, dtype=torch.int32)
     groups[20:51] = 1
-    gemma4_multimodal_context_attention(
+    gemma4_context_attention(
         q,
         k,
         v,
@@ -320,8 +318,8 @@ def test_gemma4_multimodal_context_attention_matches_reference(score_ndim):
         torch.tensor([0], device=device, dtype=torch.int32),
         length,
         torch.arange(length, device=device, dtype=torch.int32).unsqueeze(0),
-        groups,
         sliding_window=window,
+        image_groups=groups,
         attn_score=attention_score,
     )
 

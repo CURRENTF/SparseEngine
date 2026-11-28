@@ -1956,42 +1956,11 @@ class CacheManager(ABC):
                 records.append(record)
             live_rows["shared" if layer_idx is None else str(layer_idx)] = records
 
-        prefix_state: dict[str, Any] | None = None
         prefix_cache = getattr(self, "prefix_cache", None)
-        if prefix_cache is not None:
-            blocks = []
-            for block_id, block in sorted(prefix_cache.blocks.items()):
-                blocks.append(
-                    {
-                        "stable_block_id": block_id.hex(),
-                        "parent_block_id": (
-                            None
-                            if block.parent_block_id is None
-                            else block.parent_block_id.hex()
-                        ),
-                        "logical_block_idx": int(block.logical_block_idx),
-                        "token_ids": [int(token_id) for token_id in block.token_ids],
-                        "ref_count": int(block.ref_count),
-                        "last_access": int(block.last_access),
-                        "eviction_priority": int(block.eviction_priority),
-                        "device_present": bool(block.residency.device_present),
-                        "host_present": bool(block.residency.host_present),
-                        "transfer": (
-                            None
-                            if block.residency.transfer is None
-                            else block.residency.transfer.value
-                        ),
-                        "payload": _debug_value_summary(block.payload),
-                    }
-                )
-            prefix_state = {
-                "fingerprint": prefix_cache.fingerprint.hex(),
-                "stats": {
-                    str(key): int(value)
-                    for key, value in prefix_cache.stats().items()
-                },
-                "blocks": blocks,
-            }
+        prefix_state = (
+            prefix_cache.debug_state_summary(summarize_payload=_debug_value_summary)
+            if prefix_cache is not None else None
+        )
 
         return {
             "cache_manager_class": type(self).__name__,

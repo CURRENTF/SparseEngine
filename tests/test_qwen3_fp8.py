@@ -85,7 +85,7 @@ def _checkpoint(model: Qwen3ForCausalLM) -> dict[str, torch.Tensor]:
 def test_qwen3_dense_loads_official_block_fp8_projection_layout(tmp_path):
     context = _parallel_context()
     with (
-        patch("sparseengine.models.qwen3.get_parallel_context", return_value=context),
+        patch("sparseengine.models.standard_mha.get_parallel_context", return_value=context),
         patch("sparseengine.layers.linear.get_parallel_context", return_value=context),
         patch("sparseengine.layers.embed_head.get_parallel_context", return_value=context),
         patch(
@@ -139,7 +139,7 @@ def test_qwen3_dense_loads_official_block_fp8_projection_layout(tmp_path):
 def test_qwen3_dense_fp8_forward_uses_loaded_scales(tmp_path):
     context = _parallel_context()
     with (
-        patch("sparseengine.models.qwen3.get_parallel_context", return_value=context),
+        patch("sparseengine.models.standard_mha.get_parallel_context", return_value=context),
         patch("sparseengine.layers.linear.get_parallel_context", return_value=context),
         patch("sparseengine.layers.embed_head.get_parallel_context", return_value=context),
         patch(

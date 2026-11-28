@@ -280,30 +280,6 @@ class Gemma4AttentionBackend(TritonAttentionBackend):
         payload = _require_explicit_payload(view, operation="Gemma 4 prefill")
         route = self._prefill_route(view)
         self._record_kernel_path(route)
-        if route == "triton_multimodal_context":
-            from sparseengine.utils.context import get_context
-            from sparseengine.kernels.triton.gemma4_multimodal_context_attention import (
-                gemma4_multimodal_context_attention,
-            )
-
-            image_groups = get_context().multimodal_image_groups
-            output = torch.empty_like(q)
-            gemma4_multimodal_context_attention(
-                q,
-                payload.k_cache,
-                payload.v_cache,
-                output,
-                view.meta.req_indices,
-                b_start_loc,
-                view.meta.context_lens,
-                view.meta.context_lens - chunk_lens,
-                max_input_len,
-                view.meta.active_slots,
-                image_groups,
-                sliding_window=self.sliding_window,
-                attn_score=view.meta.attn_score,
-            )
-            return output
         if route == "flashinfer_paged_prefill_fa2":
             assert self.flashinfer_prefill is not None
             return self.flashinfer_prefill.run(
@@ -319,6 +295,11 @@ class Gemma4AttentionBackend(TritonAttentionBackend):
             gemma4_context_attention,
         )
 
+        image_groups = None
+        if route == "triton_multimodal_context":
+            from sparseengine.utils.context import get_context
+
+            image_groups = get_context().multimodal_image_groups
         gemma4_context_attention(
             q,
             payload.k_cache,
@@ -331,6 +312,7 @@ class Gemma4AttentionBackend(TritonAttentionBackend):
             max_input_len,
             view.meta.active_slots,
             sliding_window=self.sliding_window,
+            image_groups=image_groups,
             attn_score=view.meta.attn_score,
         )
         return output

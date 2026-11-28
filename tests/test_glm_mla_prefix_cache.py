@@ -110,7 +110,6 @@ def _latent_chain_manager(manager_type, method: str):
         "decode_evictions": 0,
         "dropped_tokens": 0,
     }
-    manager._h2o_final_prefill_workspace = None
     manager._rkv_query_cache_enabled = True
     manager._rkv_observation_tokens = 2
     manager._rkv_vectorized_prefill_query_cache = True
@@ -126,7 +125,6 @@ def _latent_chain_manager(manager_type, method: str):
     manager._pyramidkv_prefill_staging_was_active = False
     manager.pyramidkv_prefill_staging_kv_cache = None
     manager.pyramidkv_prefill_staging_num_slots = 0
-    manager._pyramidkv_long_prefill_offload_prefetch_states = {}
     manager.raw_kv_offload_buffer = SimpleNamespace(
         release_layer=lambda **_kwargs: None,
     )
@@ -289,7 +287,6 @@ def test_h2o_chain_resume_preserves_aligned_scores_and_cleans_side_state():
         torch.tensor([101, 103, 104, 105], dtype=torch.bfloat16),
     )
     assert manager._h2o_scores[(0, owner.seq_id)].tolist() == [9.0, 8.0, 0.0, 0.0]
-    assert manager._h2o_final_prefill_workspace is None
     coordinator.index.finish(
         owner.chain_id,
         token_ids=owner_tokens,
@@ -344,7 +341,6 @@ def test_h2o_chain_resume_preserves_aligned_scores_and_cleans_side_state():
     )
     assert manager._h2o_scores[(0, resumed.seq_id)].tolist() == [9.0, 8.0, 7.0, 6.0]
     assert manager._h2o_counters["final_prefill_evictions"] == 2
-    assert manager._h2o_final_prefill_workspace is None
 
     coordinator.index.finish(
         owner.chain_id,

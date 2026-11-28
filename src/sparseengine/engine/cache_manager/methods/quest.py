@@ -28,13 +28,11 @@ from sparseengine.operators.quest_selection import (
     QuestPageSelectionOpSpec,
     resolve_quest_page_selection_provider,
 )
-from sparseengine.platforms import device_runtime
 from sparseengine.utils.context import get_context
 from sparseengine.utils.profiler import profiler
 
 from ..base import (
     AttentionCacheWrite,
-    AttentionPayload,
     AttentionViewMeta,
     CacheManager,
     DecodeComputeView,
@@ -45,10 +43,6 @@ from ..base import (
 )
 from ..prefix_cache_mixin import PrefixCacheMixin
 from ..prefix_prune_scoring import PrefixPruneScoringMixin
-from ..prefix_offload import (
-    PinnedQuestPrefixPool,
-    QuestPrefixOffloadController,
-)
 from ..storage import (
     ExplicitKVStorage,
     MlaLatentStorage,
@@ -99,6 +93,7 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
 
     _prefix_payload_type = QuestPrefixBlockPayload
     _prefix_label = "QuEST prefix"
+    _prefix_wait_label = "QuEST prefix"
     _prefix_profile = "quest_prefix_cache"
     _prefix_unit_name = "page"
     _prefix_hit_capacity_device_resident_only = True
@@ -259,23 +254,8 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             )
         )
 
-    def _build_explicit_prefix_offload_controller(self, host_capacity_blocks: int):
-        host_pool = PinnedQuestPrefixPool(
-            capacity_blocks=host_capacity_blocks,
-            num_layers=self.num_kv_layers,
-            block_size=self.page_size,
-            num_kv_heads=self.num_kv_heads,
-            head_dim=self.head_dim,
-            dtype=self.kv_cache.dtype,
-        )
-        return QuestPrefixOffloadController(
-            prefix_cache=self.prefix_cache,
-            kv_cache=self.kv_cache,
-            device_metadata_cache=self.metadata_cache,
-            host_pool=host_pool,
-            block_size=self.page_size,
-            device=self.device,
-        )
+    def _prefix_transfer_metadata(self) -> torch.Tensor:
+        return self.metadata_cache
 
     def allocate_kv_cache(self):
         available_memory, slot_bytes_per_layer = self._get_available_slots_info()
@@ -372,9 +352,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         )
         return int(token_kv_bytes + page_metadata_bytes)
 
-    def get_layer_batch_states(self, layer_idx: int) -> LayerBatchStates:
-        return self.layer_batch_state
-
     def get_layer_kv_cache(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         kv_idx = self.kv_layer_index(layer_idx)
         payload = self.attention_cache_storage.layer_payload(kv_idx)
@@ -384,10 +361,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
                 f"{type(self.attention_cache_storage).__name__}."
             )
         return payload.k_cache, payload.v_cache
-
-    def get_layer_store_view(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        k_cache, v_cache = self.get_layer_kv_cache(layer_idx)
-        return k_cache, v_cache, self.layer_batch_state.slot_mapping
 
     def store_attention_payload(
         self,
@@ -434,51 +407,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
                 payload,
             )
         return slot_mapping
-
-    def get_layer_compute_payload(
-        self,
-        layer_idx: int,
-        active_slots: torch.Tensor,
-        req_indices: torch.Tensor,
-        context_lens: torch.Tensor,
-        selection: SparseSelection | None = None,
-    ) -> tuple[AttentionPayload, torch.Tensor, torch.Tensor, torch.Tensor]:
-        del selection
-        return (
-            self.attention_cache_storage.layer_payload(
-                self.kv_layer_index(layer_idx)
-            ),
-            active_slots,
-            req_indices,
-            context_lens,
-        )
-
-    def get_prefill_compute_payload(
-        self,
-        layer_idx: int,
-        k_current: torch.Tensor,
-        v_current: torch.Tensor,
-        selection: SparseSelection,
-        active_slots: torch.Tensor,
-        req_indices: torch.Tensor,
-        context_lens: torch.Tensor,
-    ) -> tuple[AttentionPayload, torch.Tensor, torch.Tensor, torch.Tensor]:
-        del k_current, v_current
-        return self.get_layer_compute_payload(
-            layer_idx,
-            active_slots,
-            req_indices,
-            context_lens,
-            selection,
-        )
-
-    def get_layer_compute_tensors(self, layer_idx: int, selection: SparseSelection | None = None):
-        del selection
-        raise NotImplementedError
-
-    def get_layer_buffer_req_to_token_slots(self, layer_idx: int) -> torch.Tensor:
-        self.kv_layer_index(layer_idx)
-        return self.buffer_req_to_token_slots
 
     @property
     def num_free_slots(self) -> int:
@@ -617,19 +545,8 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
                 reserved += self._ceil_to_page_slots(remaining)
         return reserved
 
-    def free_slot_stats(self) -> dict[str, int]:
-        self._poll_prefix_offload()
-        stats = {
-            "free_slots": int(self.num_free_slots),
-            "quest_free_pages": int(self._num_free_pages),
-        }
-        if self.prefix_cache is not None:
-            stats.update(self.prefix_cache.stats())
-            stats["prefix_cache_evictable_slots"] = int(self._prefix_evictable_slots())
-        controller = getattr(self, "prefix_offload_controller", None)
-        if controller is not None:
-            stats.update(controller.stats())
-        return stats
+    def _prefix_free_allocator_stats(self) -> dict[str, int]:
+        return {"quest_free_pages": int(self._num_free_pages)}
 
     def _quest_payload(self, block: PrefixCacheBlock) -> QuestPrefixBlockPayload:
         payload = block.payload
@@ -976,12 +893,7 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         payload.block_slots = None
         payload.token_slots = None
 
-    def prefix_kv_payload_nbytes(self, payload: object) -> int:
-        if not isinstance(payload, QuestPrefixBlockPayload):
-            raise RuntimeError("Quest mixed prefix KV payload is missing page payload.")
-        if not isinstance(payload.token_slots, torch.Tensor):
-            raise RuntimeError("Quest mixed prefix KV payload has no device token slots.")
-        token_count = int(payload.token_slots.numel())
+    def _mixed_prefix_kv_nbytes(self, token_count: int) -> int:
         if token_count <= 0 or token_count % self.page_size != 0:
             raise RuntimeError(
                 "Quest mixed prefix KV payload must contain whole pages for memory accounting: "
@@ -1003,24 +915,11 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             range(start_page, start_page + page_count)
         )
 
-    def rollback_materialized_prefix_kv_payload(
-        self,
-        seq: Sequence,
-        payload: object,
-    ) -> None:
-        if not isinstance(payload, QuestPrefixBlockPayload):
-            raise RuntimeError("Quest mixed prefix KV payload is missing page payload.")
+    def _mixed_prefix_payload_range(self, payload: QuestPrefixBlockPayload) -> tuple[int, int]:
         if not isinstance(payload.token_slots, torch.Tensor):
             raise RuntimeError("Quest mixed prefix KV payload has no device token slots.")
-        seq_id = int(seq.seq_id)
-        start_page = int(payload.block_start) // int(self.page_size)
-        page_count = int(payload.token_slots.numel()) // int(self.page_size)
-        cached_pages = self.seq_id_to_cached_pages.get(seq_id)
-        if not cached_pages:
-            return
-        cached_pages.difference_update(range(start_page, start_page + page_count))
-        if not cached_pages:
-            self.seq_id_to_cached_pages.pop(seq_id, None)
+        start = (int(payload.block_start) // self.page_size) * self.page_size
+        return start, start + (int(payload.token_slots.numel()) // self.page_size) * self.page_size
 
     def _reset_prefix_cache_allocator_after_clear(self) -> None:
         if self.seq_id_to_row:
@@ -1252,16 +1151,8 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
         self.free_pages_stack[ptr:ptr + count] = pages
         self._num_free_pages += count
 
-    def _get_free_row(self, seq_id: int) -> int:
-        if not hasattr(self, "row_logical_lens"):
-            self.row_logical_lens = np.asarray(self.row_seq_lens, dtype=np.int32).copy()
-        if seq_id in self.seq_id_to_row:
-            return self.seq_id_to_row[seq_id]
-        if not self.free_rows:
-            raise RuntimeError("No free rows in cache manager buffer!")
-        row_idx = self.free_rows.popleft()
-        self.seq_id_to_row[seq_id] = row_idx
-        return row_idx
+    def _prefill_positions(self, seq: Sequence, start: int, end: int) -> np.ndarray:
+        return np.arange(start, end)
 
     def _required_new_pages(self, seq_id: int, size: int) -> int:
         row_idx = self.seq_id_to_row.get(seq_id)
@@ -1519,20 +1410,10 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
     @torch.no_grad()
     def _prepare_prefill(self, seqs: list[Sequence]):
         with profiler.record("cache_prepare_prefill"):
-            self._poll_prefix_offload()
-            self._prefix_offload_step_h2d_operations = {}
-            for seq in seqs:
-                self._attach_prefix_cache_if_needed(seq)
-
-            total_chunk_tokens = sum(seq.current_chunk_size for seq in seqs)
-
-            input_ids_np = np.empty(total_chunk_tokens, dtype=np.int64)
-            positions_np = np.empty(total_chunk_tokens, dtype=np.int64)
-            cu_seqlens_q = [0]
-
-            slot_mapping = torch.empty(total_chunk_tokens, dtype=torch.int32, device=self.device)
-            context_lens_list = []
-            req_indices = []
+            (
+                input_ids_np, positions_np, cu_seqlens_q, slot_mapping,
+                context_lens_list, req_indices,
+            ) = self._prepare_prefill_rows(seqs)
             metadata_full_pages = True
             page_segments: list[tuple[int, int]] = []
 
@@ -1540,7 +1421,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             for seq in seqs:
                 chunk_size = seq.current_chunk_size
                 start_idx = seq.num_prefilled_tokens
-                end_idx = start_idx + chunk_size
                 metadata_full_pages = metadata_full_pages and (
                     int(start_idx) % int(self.page_size) == 0
                     and int(chunk_size) > 0
@@ -1557,40 +1437,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
                         (token_offset + segment_token_offset, segment_size)
                     )
                     segment_token_offset += segment_size
-
-                if seq.seq_id in self.seq_id_to_row:
-                    row_idx = self.seq_id_to_row[seq.seq_id]
-                    if self.row_logical_lens[row_idx] != start_idx:
-                        raise ValueError(
-                            "KV cache logical row length mismatch in prefill: "
-                            f"seq_id={seq.seq_id} row_logical_len={self.row_logical_lens[row_idx]} "
-                            f"start_idx={start_idx}"
-                        )
-
-                resident_start = (
-                    0
-                    if seq.seq_id not in self.seq_id_to_row
-                    else int(self.row_seq_lens[self.seq_id_to_row[seq.seq_id]])
-                )
-                allocated_slots = self._allocate(seq.seq_id, chunk_size)
-                row_idx = self.seq_id_to_row[seq.seq_id]
-                resident_end = resident_start + chunk_size
-                slot_mapping[token_offset: token_offset + chunk_size] = self.buffer_req_to_token_slots[
-                    row_idx, resident_start:resident_end
-                ]
-                context_lens_list.append(resident_end)
-                req_indices.append(row_idx)
-
-                chunk_tokens = seq.token_ids
-                if len(chunk_tokens) > chunk_size:
-                    chunk_tokens = chunk_tokens[start_idx:end_idx]
-                chunk_tokens = list(chunk_tokens)
-
-                input_ids_np[token_offset: token_offset + chunk_size] = chunk_tokens
-                positions_np[token_offset: token_offset + chunk_size] = np.arange(start_idx, end_idx)
-                self._record_prefix_materialization(seq, chunk_tokens, allocated_slots)
-
-                cu_seqlens_q.append(cu_seqlens_q[-1] + chunk_size)
                 token_offset += chunk_size
 
             context_lens = torch.tensor(context_lens_list, dtype=torch.int32, device=self.device)
@@ -1650,21 +1496,6 @@ class QuestCacheManager(PrefixPruneScoringMixin, PrefixCacheMixin, CacheManager)
             input_ids = torch.tensor(input_ids_list, dtype=torch.int64, device=self.device)
             positions = torch.tensor(positions_list, dtype=torch.int64, device=self.device)
             return input_ids, positions, None
-
-    def before_prefill_layer_attention(
-        self,
-        layer_idx: int,
-        selection: SparseSelection,
-    ):
-        controller = getattr(self, "prefix_offload_controller", None)
-        if controller is not None and self._prefix_offload_step_h2d_operations:
-            if device_runtime.is_stream_capturing():
-                raise RuntimeError("QuEST prefix H2D waits are forbidden during graph capture.")
-            kv_layer_index = self.kv_layer_index(layer_idx)
-            with profiler.record("quest_prefix_cache_h2d_layer_wait"):
-                for operation in self._prefix_offload_step_h2d_operations.values():
-                    controller.wait_for_layer(operation, kv_layer_index)
-        return super().before_prefill_layer_attention(layer_idx, selection)
 
     def init_decode_graph_state(
         self,

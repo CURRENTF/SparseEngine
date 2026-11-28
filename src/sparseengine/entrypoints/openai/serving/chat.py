@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
-from fastapi.responses import JSONResponse
-from fastapi.responses import StreamingResponse
 
 from sparseengine.entrypoints.openai.dispatcher import AsyncEngineDispatcher
 from sparseengine.entrypoints.openai.dispatcher import RequestHandle
@@ -19,21 +17,29 @@ from sparseengine.entrypoints.openai.render import resolve_chat_tools
 from sparseengine.entrypoints.openai.sampling import _field_was_set
 from sparseengine.entrypoints.openai.sampling import _normalize_stop
 from sparseengine.entrypoints.openai.sampling import _sampling_params_from_request
-from sparseengine.entrypoints.openai.serving.base import _chat_logprobs
-from sparseengine.entrypoints.openai.serving.base import _model_dump_json
-from sparseengine.entrypoints.openai.serving.base import _sse
-from sparseengine.entrypoints.openai.serving.base import _tokens_per_second
-from sparseengine.entrypoints.openai.serving.base import DisconnectChecker
-from sparseengine.entrypoints.openai.serving.base import _queue_get_or_disconnect
-from sparseengine.entrypoints.openai.serving.base import _wait_final
-from sparseengine.entrypoints.openai.serving.base import _write_request_log
-from sparseengine.entrypoints.openai.serving.base import _chain_http_exception
+from sparseengine.entrypoints.openai.serving.base import (
+    DisconnectChecker,
+    _cancel_requests,
+    _chain_headers,
+    _chain_http_exception,
+    _chat_logprobs,
+    _json_response,
+    _log_request_cancel,
+    _log_request_finish,
+    _log_request_payload,
+    _prepare_parser_prompt,
+    _queue_get_or_disconnect,
+    _request_submitter,
+    _sse,
+    _stream_response,
+    _submit_request,
+    _wait_final,
+)
 from sparseengine.engine.chain_cache import ChainCacheError
 from sparseengine.entrypoints.openai.serving.response_parsing import ParsedModelResponse
 from sparseengine.entrypoints.openai.serving.response_parsing import ModelOutputParseError
 from sparseengine.entrypoints.openai.serving.response_parsing import ResponseParseError
 from sparseengine.entrypoints.openai.serving.response_parsing import TransformersResponseParser
-from sparseengine.entrypoints.openai.serving.response_parsing import response_parser_prefix
 from sparseengine.utils.log import logger
 
 
@@ -60,6 +66,7 @@ async def serve_chat_completion(
     request_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
     started = time.perf_counter()
+    endpoint = "/v1/chat/completions"
     try:
         sampling_params = _sampling_params_from_request(request)
         if sampling_params.benchmark_forced_token_ids is not None:
@@ -90,61 +97,29 @@ async def serve_chat_completion(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if request.stream:
-        _write_request_log(
-            request_log_path,
-            {
-                "status": "stream_started",
-                "endpoint": "/v1/chat/completions",
-                "request_id": request_id,
-                "request": _model_dump_json(request),
-            },
+        _log_request_payload(
+            request_log_path, request, endpoint, request_id, "stream_started"
         )
+
     try:
-        submit = (
-            getattr(dispatcher, "submit_admitted", dispatcher.submit)
-            if bool(getattr(dispatcher, "admission_ack_enabled", False))
-            else dispatcher.submit
+        handle = await _submit_request(
+            _request_submitter(dispatcher), request, prompt, sampling_params, 0, stop,
+            append_only=request.chain_append_start is not None,
         )
-        if request.chain_id is None:
-            handle = await submit(prompt, sampling_params, 0, stop, stream=request.stream)
-        else:
-            submit_kwargs = {"chain_id": request.chain_id}
-            if request.chain_append_start is not None:
-                submit_kwargs["chain_append_only"] = True
-            handle = await submit(
-                prompt,
-                sampling_params,
-                0,
-                stop,
-                stream=request.stream,
-                **submit_kwargs,
-            )
     except ChainCacheError as exc:
         raise _chain_http_exception(exc) from exc
     except (ValueError, TypeError, NotImplementedError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     handles = [handle]
-    should_parse = reasoning_parser_name is not None or bool(chat_tools)
-    try:
-        parser_prompt = (
-            response_parser_prefix(tokenizer, prompt, handle)
-            if should_parse
-            else ""
-        )
-    except ResponseParseError as exc:
-        dispatcher.cancel(handle)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Chat Completions parser setup failed: {exc}",
-        ) from exc
-    headers = (
-        {"X-SparseVLLM-Chain-ID": getattr(handle, "chain_id", None)}
-        if getattr(handle, "chain_id", None) is not None
-        else None
+    parser_prompt = _prepare_parser_prompt(
+        dispatcher, tokenizer, prompt, handle,
+        enabled=reasoning_parser_name is not None or bool(chat_tools),
+        endpoint="Chat Completions",
     )
+    headers = _chain_headers(handles)
 
     if request.stream:
-        return StreamingResponse(
+        return _stream_response(
             _chat_completion_stream(
                 dispatcher,
                 request_id,
@@ -160,12 +135,11 @@ async def serve_chat_completion(
                 response_parser=response_parser,
                 is_disconnected=is_disconnected,
             ),
-            media_type="text/event-stream",
-            headers=headers,
+            headers,
         )
 
-    try:
-        response = await _chat_completion_response(
+    return await _json_response(
+        _chat_completion_response(
             request_id,
             created,
             request.model,
@@ -176,44 +150,9 @@ async def serve_chat_completion(
             parse_tools=bool(chat_tools),
             response_parser=response_parser,
             is_disconnected=is_disconnected,
-        )
-    except asyncio.CancelledError:
-        dispatcher.cancel(handle)
-        logger.info(
-            "request_cancel id={} model={} stream=false elapsed_s={:.3f}",
-            request_id,
-            request.model,
-            time.perf_counter() - started,
-        )
-        raise
-    except Exception:
-        dispatcher.cancel(handle)
-        raise
-    usage = response["usage"]
-    elapsed_s = time.perf_counter() - started
-    logger.info(
-        "request_finish id={} model={} stream=false prompt_tokens={} completion_tokens={} total_tokens={} elapsed_s={:.3f} completion_tps={:.2f} total_tps={:.2f}",
-        request_id,
-        request.model,
-        usage["prompt_tokens"],
-        usage["completion_tokens"],
-        usage["total_tokens"],
-        elapsed_s,
-        _tokens_per_second(usage["completion_tokens"], elapsed_s),
-        _tokens_per_second(usage["total_tokens"], elapsed_s),
+        ),
+        dispatcher, handles, request, request_log_path, endpoint, request_id, started, headers,
     )
-    _write_request_log(
-        request_log_path,
-        {
-            "status": "success",
-            "endpoint": "/v1/chat/completions",
-            "request_id": request_id,
-            "elapsed_s": elapsed_s,
-            "request": _model_dump_json(request),
-            "response": response,
-        },
-    )
-    return JSONResponse(response, headers=headers)
 
 
 def _validate_chat_request(
@@ -545,33 +484,19 @@ async def _chat_completion_stream(
             yield _sse(usage_chunk)
         yield "data: [DONE]\n\n"
         if started is not None:
-            elapsed_s = time.perf_counter() - started
-            total_tokens = prompt_tokens + completion_tokens
-            logger.info(
-                "request_finish id={} model={} stream=true prompt_tokens={} completion_tokens={} total_tokens={} elapsed_s={:.3f} completion_tps={:.2f} total_tps={:.2f}",
-                request_id,
-                model,
-                prompt_tokens,
-                completion_tokens,
-                total_tokens,
-                elapsed_s,
-                _tokens_per_second(completion_tokens, elapsed_s),
-                _tokens_per_second(total_tokens, elapsed_s),
+            _log_request_finish(
+                request_id, model, time.perf_counter() - started,
+                prompt_tokens, completion_tokens, prompt_tokens + completion_tokens, stream=True,
             )
     except asyncio.CancelledError:
-        for handle in pending.values():
-            dispatcher.cancel(handle)
-        logger.info(
-            "request_cancel id={} model={} stream=true completion_tokens={} elapsed_s={:.3f}",
-            request_id,
-            model,
-            completion_tokens,
-            time.perf_counter() - started if started is not None else 0.0,
+        _cancel_requests(dispatcher, pending.values())
+        _log_request_cancel(
+            request_id, model, time.perf_counter() - started if started is not None else 0.0,
+            completion_tokens=completion_tokens,
         )
         raise
     except ResponseParseError as exc:
-        for handle in pending.values():
-            dispatcher.cancel(handle)
+        _cancel_requests(dispatcher, pending.values())
         message = f"Chat Completions parse failed: {exc}"
         yield _sse({"object": "error", "message": message})
         yield "data: [DONE]\n\n"

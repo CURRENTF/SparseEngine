@@ -10,8 +10,6 @@ pytest.importorskip(
 
 from sparseengine.engine.cache_manager.prefix_offload import (
     PinnedPrefixKVPool,
-    PinnedQuestPrefixPool,
-    QuestPrefixOffloadController,
     StandardPrefixOffloadController,
 )
 from sparseengine.engine.cache_manager.methods.quest import QuestPrefixBlockPayload
@@ -19,9 +17,7 @@ from sparseengine.engine.cache_manager.standard import StandardPrefixBlockPayloa
 from sparseengine.engine.prefix_cache import PrefixCacheBlock, RadixPrefixIndex
 from sparseengine.engine.mixed_prefix_offload import (
     MixedPrefixOffloadController,
-    MixedQuestPrefixOffloadController,
     PinnedMixedPrefixPool,
-    PinnedMixedQuestPrefixPool,
 )
 from sparseengine.engine.prefix_cache_coordinator import MixedPrefixBlockPayload
 from sparseengine.engine.recurrent_state_manager import (
@@ -186,15 +182,16 @@ def test_quest_prefix_offload_round_trips_kv_and_metadata_per_layer():
     )
     expected_kv = kv_cache[:, :, source_token_indices].cpu()
     expected_metadata = metadata_cache[:, :, source_pages].cpu()
-    host_pool = PinnedQuestPrefixPool(
+    host_pool = PinnedPrefixKVPool(
         capacity_blocks=4,
         num_layers=num_layers,
         block_size=page_size,
+        page_size=page_size,
         num_kv_heads=num_heads,
         head_dim=head_dim,
         dtype=torch.float16,
     )
-    controller = QuestPrefixOffloadController(
+    controller = StandardPrefixOffloadController(
         prefix_cache=prefix_cache,
         kv_cache=kv_cache,
         device_metadata_cache=metadata_cache,
@@ -523,7 +520,7 @@ def test_mixed_quest_offload_round_trips_kv_metadata_and_recurrent():
         layer: {name: tensor.cpu().clone() for name, tensor in states.items()}
         for layer, states in recurrent.layer_states.items()
     }
-    host_pool = PinnedMixedQuestPrefixPool(
+    host_pool = PinnedMixedPrefixPool(
         capacity_blocks=2,
         num_layers=num_layers,
         block_size=block_size,
@@ -534,7 +531,7 @@ def test_mixed_quest_offload_round_trips_kv_metadata_and_recurrent():
         state_spec=_mixed_state_spec(),
         recurrent_layer_indices=(1, 3),
     )
-    controller = MixedQuestPrefixOffloadController(
+    controller = MixedPrefixOffloadController(
         prefix_cache=prefix_cache,
         kv_cache=kv_cache,
         device_metadata_cache=metadata,

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import torch
 
 from sparseengine.platforms import device_runtime
+from sparseengine.utils.profiler import profiler
 
 from .offload.host_pool import HostTensorPool
 
@@ -281,3 +283,66 @@ class RawKVOffloadBuffer:
         for key in list(self._entries):
             if key[1] == row_idx:
                 del self._entries[key]
+
+
+class LongPrefillOffloadPrefetcher:
+    """Track the one in-flight restore into a shared prefill staging buffer."""
+
+    def __init__(self, device: torch.device, method: str):
+        self.device = device
+        self.method = method
+        self.profile_prefix = f"{method.lower()}_long_prefill_offload"
+        self.stream = None
+        self.pending: tuple[tuple[int, int, str, int], Any, Any] | None = None
+
+    def clear(self) -> None:
+        if self.pending is not None:
+            device_runtime.wait_event(self.pending[2], device=self.device)
+            self.pending = None
+
+    def consume(self, layer_idx: int, row_idx: int, kind: str, end: int) -> bool:
+        if self.pending is None or self.pending[0] != (layer_idx, row_idx, kind, end):
+            return False
+        with profiler.record(f"{self.profile_prefix}_prefetch_wait"):
+            self.clear()
+        return True
+
+    def schedule(
+        self,
+        buffer: RawKVOffloadBuffer,
+        key: tuple[int, int, str, int],
+        staging_views: Callable[[], tuple[torch.Tensor, torch.Tensor]],
+    ) -> None:
+        if self.pending is not None and self.pending[0] == key:
+            return
+        self.clear()
+        if self.stream is None:
+            self.stream = device_runtime.new_stream(device=self.device)
+            if self.stream is None:
+                raise RuntimeError(
+                    f"{self.method} long-prefill offload prefetch is enabled, but the active platform "
+                    f"does not support streams for device={self.device}."
+                )
+
+        layer_idx, row_idx, kind, end = key
+        with profiler.record(f"{self.profile_prefix}_prefetch_schedule"):
+            staging_event = self._event("staging")
+            with device_runtime.stream_context(self.stream):
+                device_runtime.stream_wait_event(self.stream, staging_event)
+                k_dst, v_dst = staging_views()
+                buffer.copy_prefix_to(
+                    layer_idx=layer_idx, row_idx=row_idx, kind=kind, end=end,
+                    k_out=k_dst, v_out=v_dst,
+                )
+                completion_event = self._event("completion")
+        self.pending = (key, staging_event, completion_event)
+
+    def _event(self, name: str):
+        event = device_runtime.new_event(device=self.device)
+        if event is None:
+            raise RuntimeError(
+                f"{self.method} long-prefill offload prefetch could not create a {name} event "
+                f"for device={self.device}."
+            )
+        device_runtime.record_event(event, device=self.device)
+        return event
